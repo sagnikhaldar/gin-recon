@@ -2,7 +2,7 @@
 
 Offline-first route inventory, authentication audit, and OpenAPI documentation for Gin. It parses Go source without executing the target application, and gives developers, CI jobs, and AI agents the same versioned evidence contract.
 
-> `public` means no authentication middleware recognized by the supplied configuration. It does not prove a route is internet-reachable. `proven` is also configuration-relative: it means a known guard is present, not that the guard's implementation is correct.
+> A `public` route just means gin-recon couldn't match it to anything in your `authMiddleware` config, not that it's safe to expose. A `proven` route means a guard you named is actually there in the code, not that the guard itself works correctly. Both labels are only as good as the configuration behind them.
 
 ## Install
 
@@ -62,14 +62,14 @@ Full reference: [docs/reference.md](docs/reference.md) for every flag and the co
 
 ## The evidence model
 
-gin-recon separates facts from decisions:
+gin-recon keeps what it observed and what it concludes in two different places, on purpose:
 
 - `inventory` records observed routes, middleware chains, source locations, and coverage. It makes no security judgment.
 - `audit` applies a reviewed `authMiddleware` allowlist and optional policies to that inventory, producing `proven`, `public`, or `unknown` per route.
 - A route is never treated as authenticated just because analysis is incomplete, a middleware name sounds security-related, or evidence is missing. This conservative-classification stance is deliberate: a silently-optimistic guess is worse than a route reported `unknown`.
 - Configured authentication evidence is a reviewer-backed assertion, not formal verification.
 
-Every JSON report is deterministic and versioned. Run `gin-recon schema` for its JSON Schema.
+Two runs against unchanged source always produce byte-identical JSON, and the schema version travels with every report. Run `gin-recon schema` to get that schema directly.
 
 ## OpenAPI documentation
 
@@ -90,17 +90,17 @@ See [docs/openapi.md](docs/openapi.md) for the full precedence rules and the swa
 ## Pull-request gates
 
 ```sh
-# Produce a baseline from the base revision.
+# Audit the base branch first, so there's something to diff against.
 gin-recon audit --src ./base --config gin-recon.json --format json --out ./base-results
 
-# Compare the full PR inventory and gate only new findings/regressions.
+# Audit the PR branch against that baseline; only the delta trips the gate.
 gin-recon audit --src ./current --config gin-recon.json \
   --baseline ./base-results/routes.json \
   --format json,md --out ./current-results \
   --fail-on new,regression
 ```
 
-Baseline comparison fails when the two reports carry different scan-scope fingerprints; scan both revisions with the same policy.
+If the two reports were produced under different scan-scope fingerprints, the comparison refuses to run rather than guess. Keep the config and ignore rules identical across the two revisions you're comparing.
 
 ## Known boundaries
 
@@ -108,7 +108,7 @@ Baseline comparison fails when the two reports carry different scan-scope finger
 - Registrar-following never crosses into a dependency module unless that module is explicitly named in `analysis.followModules`. An unresolved cross-module registrar is reported (`gin-unresolved-registrar`), not silently skipped. See [docs/reference.md](docs/reference.md#top-level-shape) for how to opt specific modules in.
 - Auth classification is only as sound as the reviewed `authMiddleware` configuration.
 - OpenAPI request/response schemas stay as generic placeholders until grounded by one of the evidence sources above.
-- Static analysis cannot fully recover data-driven route registration or every dynamic dispatch pattern. It retains partial evidence and diagnostics instead of silently dropping it.
+- Static analysis cannot fully recover data-driven route registration or every dynamic dispatch pattern. When it can't, the incomplete finding stays in the report with a diagnostic explaining why, rather than being quietly left out.
 
 ## Documentation
 
@@ -120,4 +120,4 @@ Baseline comparison fails when the two reports carry different scan-scope finger
 
 Pre-release, with no distributed binary yet. Both the `typed` and `syntax-only` analysis profiles and the commands above are implemented and tested. Source tags precede binary distribution, since signed binaries with provenance aren't operational yet, which is why `go install` builds from source above.
 
-MIT licensed. Security issues should be reported privately as described in [SECURITY.md](SECURITY.md).
+Licensed under MIT. Found a security issue? Please report it privately per [SECURITY.md](SECURITY.md) rather than opening a public issue.
