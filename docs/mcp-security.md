@@ -1,7 +1,7 @@
 # MCP Security Contract
 
 **Status: not yet implemented.** `cmd/gin-recon-mcp` is a reserved path with
-no code behind it yet — per [PLAN.md](../PLAN.md#delivery-phases), MCP work
+no code behind it yet — MCP work
 begins after the core report contract stabilizes. This document specifies
 the security contract the server must satisfy once built; nothing below
 describes current, callable behavior. Do not tell a user an MCP server is
@@ -34,4 +34,4 @@ The stdio channel must carry protocol messages only. Human logs go to stderr and
 
 ## Typed Analysis
 
-MCP typed analysis must be offline-only, use the same sanitized environment as the CLI, and must not expose `--allow-downloads`. Syntax-only (already implemented in the CLI — see [PLAN.md](../PLAN.md)) must remain available for hostile checkouts once the MCP server itself exists. Configuration must never be able to widen server roots, environment access, concurrency, time, or output caps.
+MCP typed analysis must be offline-only, use the same sanitized environment as the CLI, and must not expose `--allow-downloads`. Syntax-only (already implemented in the CLI) must remain available for hostile checkouts once the MCP server itself exists. Configuration must never be able to widen server roots, environment access, concurrency, time, or output caps.
