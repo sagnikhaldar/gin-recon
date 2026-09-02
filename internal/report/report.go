@@ -385,15 +385,12 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 // toolVersion and classifierRulesetVersion are placeholders until phase 5
 // wires them to build-time version injection (see PLAN.md#versioning).
 //
-// toolVersion moved to 0.2.0 for the v0.2.0-alpha.1 tag: every change since
-// the prior 0.1.0 placeholder (swag evidence, the render command) is
-// additive/backward-compatible per PLAN.md's MINOR definition — none of it
-// changed schemaVersion or altered any existing route's classification
-// result. classifierRulesetVersion stays at 0.1.0 because it specifically
-// tracks classification behavior (proven/public/unknown), which none of that
-// work touched.
+// toolVersion is 0.1.0 for the v0.1.0 tag — the project's first tagged
+// release, not a bump from anything: no earlier version was ever actually
+// tagged, so there is nothing to be MINOR relative to yet (see
+// PLAN.md#versioning). Future changes bump from here per that policy.
 const (
-	toolVersion              = "0.2.0"
+	toolVersion              = "0.1.0"
 	classifierRulesetVersion = "0.1.0"
 )
 
