@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "1.0",
+  "tool": "gin-recon",
+  "toolVersion": "0.1.0",
+  "classifierRulesetVersion": "0.1.0",
+  "command": "inventory",
+  "analysisProfile": "typed",
+  "target": {
+    "module": "example.com/demo",
+    "workspace": null,
+    "buildContext": {
+      "goos": "linux",
+      "goarch": "amd64",
+      "tags": [],
+      "workspaceMode": "off",
+      "moduleMode": "readonly",
+      "profile": "typed"
+    }
+  },
+  "routes": [
+    {
+      "method": "GET",
+      "ginPath": "/users/:id",
+      "normalizedPath": "/users/{id}",
+      "surfaceKind": "route",
+      "registrationKind": "verb",
+      "middleware": [],
+      "finalHandler": {
+        "displayName": "handlers.GetUser",
+        "canonicalSymbol": "example.com/demo/internal/handlers.GetUser",
+        "callableKind": "identifier",
+        "source": { "file": "internal/handlers/user.go", "line": 12 },
+        "registrationScope": "route",
+        "orderingIndex": 0,
+        "resolutionStatus": "resolved"
+      },
+      "source": { "file": "internal/router/router.go", "line": 8 },
+      "pathConfidence": "high",
+      "analysisConfidence": "high",
+      "buildContext": {
+        "goos": "linux",
+        "goarch": "amd64",
+        "tags": [],
+        "workspaceMode": "off",
+        "moduleMode": "readonly",
+        "profile": "typed"
+      },
+      "evidenceOrigins": ["ast", "types"]
+    }
+  ],
+  "globalMiddleware": [],
+  "fallbackSurfaces": [],
+  "scanCoverage": {
+    "discoveredPackages": 3,
+    "analyzedPackages": 3,
+    "failedPackages": 0,
+    "discoveredFiles": 5,
+    "analyzedFiles": 5,
+    "failedFiles": 0,
+    "unresolvedRegistrations": 0,
+    "reachedLimits": [],
+    "buildContext": {
+      "goos": "linux",
+      "goarch": "amd64",
+      "tags": [],
+      "workspaceMode": "off",
+      "moduleMode": "readonly",
+      "profile": "typed"
+    },
+    "profile": "typed",
+    "complete": true
+  },
+  "diagnostics": []
+}

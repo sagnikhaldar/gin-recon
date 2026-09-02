@@ -1,0 +1,25 @@
+{
+  "fixture": "handler-slices",
+  "purpose": "Proves a route registered via a \"...handlers\" spread argument resolves its individual handlers when the spread slice is a literal this analyzer can see in full (inline or a same-function local variable bound to one), and stays honestly unresolved — never silently dropped, never fabricated — for anything else (a function-call result, a keyed/sparse composite).",
+  "expectedRoutes": [
+    {
+      "method": "GET",
+      "normalizedPath": "/inline",
+      "middleware": ["A"],
+      "finalHandler": "B",
+      "note": "Inline []gin.HandlerFunc{A, B}... resolves both handlers in order; B is the final handler."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/named",
+      "middleware": ["A"],
+      "finalHandler": "B",
+      "note": "named := []gin.HandlerFunc{A, B}; r.GET(path, named...) resolves identically to the inline case."
+    }
+  ],
+  "expectedUnresolved": [
+    { "normalizedPath": "/dynamic", "note": "dynamicHandlers()'s return value is not a literal; route not inventoried." },
+    { "normalizedPath": "/keyed", "note": "A keyed composite literal is not resolved; route not inventoried." }
+  ],
+  "expectedDiagnosticCode": "gin-unresolved-handlers"
+}

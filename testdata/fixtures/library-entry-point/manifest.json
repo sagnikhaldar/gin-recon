@@ -1,0 +1,11 @@
+{
+  "fixture": "library-entry-point",
+  "purpose": "Proves gin.DetectLibraryEntryPoint's exact boundary: a function that registers routes on a router-typed parameter and is NEVER called anywhere in the module produces a gin-library-entry-point diagnostic (routes genuinely unresolvable from this module alone), while an identically-shaped function that IS called from a real entry point within the same module does not — that case is already correctly resolved via ordinary registrar-following.",
+  "expectedRoutes": [
+    { "method": "POST", "normalizedPath": "/api/called", "note": "CalledInit is reached via WiredUp's gin.New(); fully resolved." }
+  ],
+  "expectedUnresolved": [
+    { "function": "UncalledInit", "note": "Registers POST /webhooks/uncalled but is never called anywhere in this module." }
+  ],
+  "expectedDiagnosticCode": "gin-library-entry-point"
+}

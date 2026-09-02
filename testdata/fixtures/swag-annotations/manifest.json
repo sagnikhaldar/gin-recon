@@ -1,0 +1,24 @@
+{
+  "fixture": "swag-annotations",
+  "purpose": "Exercises swaggo/swag-style doc-comment annotation parsing (docs/adr/0012-swag-annotation-evidence.md): a fully-annotated handler, a handler with a deliberately stale @Router line, and a handler with an ordinary prose-only doc comment that must not misfire.",
+  "expectedRoutes": [
+    {
+      "method": "GET",
+      "normalizedPath": "/users/:id",
+      "note": "GetUser: swag Summary/Description/Tags/Deprecated all populated; @Router agrees with the discovered route, no diagnostic"
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/users",
+      "note": "ListUsers: swag Summary populated; @Router claims POST /users, a stale annotation vs the discovered GET /users — must produce swag-router-mismatch without suppressing Summary"
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/plain",
+      "note": "PlainHandler: ordinary prose doc comment, no swag directive at all; route.Swag must be nil"
+    }
+  ],
+  "expectedDiagnostics": [
+    { "code": "swag-router-mismatch", "note": "ListUsers' @Router [post] disagrees with the discovered GET method" }
+  ]
+}

@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gin-recon.dev/schema/config-1.json",
+  "title": "Gin Recon Configuration",
+  "description": "Configuration schema version 1. See docs/configuration-contract.md for prose semantics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": { "const": 1 },
+    "authMiddleware": {
+      "type": "object",
+      "propertyNames": { "type": "string", "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/authMiddlewareEntry" }
+    },
+    "authWrappers": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "acceptedPublic": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[A-Z]+ /" },
+      "uniqueItems": true
+    },
+    "policies": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/policy" }
+    },
+    "scan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } },
+        "ignoreFile": { "type": ["string", "null"] }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": { "enum": ["syntax-only", "typed"] },
+        "allowDownloads": { "type": "boolean" },
+        "workspace": { "type": "string" },
+        "moduleMode": { "enum": ["readonly", "vendor"] },
+        "goos": { "type": "string" },
+        "goarch": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "followModules": { "type": "array", "items": { "type": "string" } },
+        "existingOpenAPIDocument": { "type": "string" },
+        "disableExistingOpenAPIAutoDetect": { "type": "boolean" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeout": { "type": "string", "pattern": "^[0-9]+(ns|us|µs|ms|s|m|h)$" },
+        "maxFiles": { "type": "integer", "minimum": 1, "maximum": 200000 },
+        "maxPackages": { "type": "integer", "minimum": 1, "maximum": 20000 },
+        "maxFileBytes": { "type": "integer", "minimum": 1, "maximum": 20971520 },
+        "maxDiagnostics": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1, "maximum": 104857600 },
+        "maxCallDepth": { "type": "integer", "minimum": 1, "maximum": 128 }
+      }
+    },
+    "openapi": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "version": { "type": "string" },
+        "securitySchemes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/securityScheme" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "authMiddlewareEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "assurance": { "enum": ["analyze", "attested"], "default": "analyze" },
+        "tags": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true, "minItems": 1 },
+        "roles": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true, "minItems": 1 },
+        "scopes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true, "minItems": 1 },
+        "openapiScheme": { "type": "string" }
+      }
+    },
+    "policySelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "array", "items": { "type": "string" } },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "array", "items": { "enum": ["proven", "public", "unknown"] } },
+        "tag": { "type": "array", "items": { "type": "string" } },
+        "role": { "type": "array", "items": { "type": "string" } },
+        "scope": { "type": "array", "items": { "type": "string" } },
+        "package": { "type": "array", "items": { "type": "string" } },
+        "surfaceKind": { "type": "array", "items": { "enum": ["route", "static", "no-route", "no-method"] } }
+      }
+    },
+    "policyRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "auth": { "enum": ["proven", "public", "unknown"] },
+        "middlewareAny": { "type": "array", "items": { "type": "string" } },
+        "middlewarePresent": { "type": "array", "items": { "type": "string" } },
+        "middlewareAbsent": { "type": "array", "items": { "type": "string" } },
+        "middlewareOrder": { "type": "array", "items": { "type": "string" } },
+        "anyTag": { "type": "array", "items": { "type": "string" } },
+        "allTags": { "type": "array", "items": { "type": "string" } },
+        "anyRole": { "type": "array", "items": { "type": "string" } },
+        "anyScope": { "type": "array", "items": { "type": "string" } },
+        "all": { "type": "array", "items": { "$ref": "#/$defs/policyRequirement" } },
+        "any": { "type": "array", "items": { "$ref": "#/$defs/policyRequirement" } },
+        "not": { "$ref": "#/$defs/policyRequirement" }
+      }
+    },
+    "exception": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "reason", "selector", "expires"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "selector": { "$ref": "#/$defs/policySelector" },
+        "expires": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "selector", "require"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "selector": { "$ref": "#/$defs/policySelector" },
+        "require": { "$ref": "#/$defs/policyRequirement" },
+        "exceptions": { "type": "array", "items": { "$ref": "#/$defs/exception" } }
+      }
+    },
+    "securityScheme": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["http", "apiKey", "oauth2", "openIdConnect"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "http" } } },
+          "then": {
+            "required": ["scheme"],
+            "properties": {
+              "type": {},
+              "scheme": { "type": "string" },
+              "bearerFormat": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "apiKey" } } },
+          "then": {
+            "required": ["name", "in"],
+            "properties": {
+              "type": {},
+              "name": { "type": "string" },
+              "in": { "enum": ["header", "query", "cookie"] }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "openIdConnect" } } },
+          "then": {
+            "required": ["openIdConnectUrl"],
+            "properties": {
+              "type": {},
+              "openIdConnectUrl": { "type": "string", "format": "uri", "pattern": "^https://" }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "oauth2" } } },
+          "then": {
+            "required": ["flows"],
+            "properties": {
+              "type": {},
+              "flows": { "type": "object" }
+            },
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  }
+}

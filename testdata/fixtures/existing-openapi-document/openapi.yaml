@@ -1,0 +1,30 @@
+openapi: 3.1.0
+info:
+  title: Existing Document Fixture
+  version: "1.0"
+paths:
+  /users/{id}:
+    get:
+      summary: Fetch a user by ID from the existing document
+      description: Existing-document description for GetUser.
+      tags: [users, legacy-doc]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The user's ID, per the existing document.
+  /orders/{id}:
+    get:
+      summary: Fetch an order from the existing document
+      description: The document names this path parameter "id"; the code names it "orderId".
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+  /legacy/{id}:
+    delete:
+      summary: Deprecated legacy delete operation no longer present in code

@@ -1,0 +1,27 @@
+{
+  "fixture": "middleware-order",
+  "purpose": "Proves middleware ordering (global before group before route-level), non-retroactive attribution, and nested-group combination.",
+  "expectedRoutes": [
+    {
+      "method": "GET",
+      "normalizedPath": "/health",
+      "middleware": [],
+      "finalHandler": "Health",
+      "note": "Registered before engine.Use(RequestID); must carry no middleware at all."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/admin/users",
+      "middleware": ["RequestID", "RequireAuth"],
+      "finalHandler": "ListUsers",
+      "note": "Global RequestID (registered before the group was created) then the group's own inline middleware."
+    },
+    {
+      "method": "DELETE",
+      "normalizedPath": "/admin/users/:id",
+      "middleware": ["RequestID", "RequireAuth", "RequireAdmin", "RateLimit"],
+      "finalHandler": "DeleteUser",
+      "note": "Two nested groups deep, plus one route-level extra handler argument, all in registration order."
+    }
+  ]
+}

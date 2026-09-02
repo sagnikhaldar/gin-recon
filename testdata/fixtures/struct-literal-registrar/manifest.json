@@ -1,0 +1,14 @@
+{
+  "fixture": "struct-literal-registrar",
+  "purpose": "Proves three related resolveStringExpr fallbacks found scanning production services: struct-literal-parameter propagation for a generic data-driven registrar helper (keyed and positional literal forms), package-level pseudo-const var resolution (never trusting a var that is reassigned anywhere in its package), and string-concatenation resolution combining both.",
+  "expectedRoutes": [
+    { "method": "GET", "normalizedPath": "/api/keyed" },
+    { "method": "POST", "normalizedPath": "/api/positional" },
+    { "method": "GET", "normalizedPath": "/api/pseudo-const" },
+    { "method": "POST", "normalizedPath": "/api/concat/GET" }
+  ],
+  "expectedUnresolved": [
+    { "normalizedPath": "/api/never-inventoried", "note": "Method: Mutable, a package-level var that IS reassigned elsewhere in its package (Reassign) — must never be trusted." }
+  ],
+  "expectedDiagnosticCode": "gin-unresolved-method"
+}

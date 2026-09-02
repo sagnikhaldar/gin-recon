@@ -1,0 +1,13 @@
+{
+  "fixture": "untracked-factory",
+  "purpose": "Proves resolveEngineFactoryCall's exact boundary: a wrapping factory function whose return statements agree on which tracked engine they return is resolved (including middleware/routes applied inside it before returning), while one whose return statements disagree is still, correctly, left untracked with a gin-untracked-router-value diagnostic rather than an arbitrary guess.",
+  "expectedRoutes": [
+    { "method": "GET", "normalizedPath": "/resolved-factory", "note": "r := newEngine() resolves; newEngine's single return statement returns gin.New() directly." },
+    { "method": "GET", "normalizedPath": "/factory-internal", "middleware": ["RequestLogger"], "note": "Registered inside newLoggedEngine itself, before it returns — must not be lost." },
+    { "method": "GET", "normalizedPath": "/via-logged-factory", "middleware": ["RequestLogger"], "note": "Registered at the caller on the resolved factory result; carries the Use() middleware the factory already applied." }
+  ],
+  "expectedUnresolved": [
+    { "normalizedPath": "/never-inventoried", "note": "newAmbiguousEngine(true) returns a DIFFERENT engine depending on its argument; ambiguous, so left untracked." }
+  ],
+  "expectedDiagnosticCode": "gin-untracked-router-value"
+}

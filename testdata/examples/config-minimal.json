@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "authMiddleware": {
+    "example.com/demo/internal/auth.RequireUser": {
+      "assurance": "analyze",
+      "tags": ["authenticated"]
+    }
+  },
+  "authWrappers": [],
+  "acceptedPublic": ["GET /health"],
+  "policies": [
+    {
+      "id": "admin-routes-need-role",
+      "selector": { "path": ["/admin/**"] },
+      "require": { "auth": "proven", "anyRole": ["admin"] }
+    }
+  ]
+}

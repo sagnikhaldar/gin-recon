@@ -1,0 +1,106 @@
+{
+  "fixture": "enforcement-shapes",
+  "purpose": "Exercises every boundary case fixed by docs/adr/0008-bounded-enforcement-shape-analysis.md.",
+  "config": {
+    "version": 1,
+    "authMiddleware": {
+      "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthDirect": { "assurance": "analyze" },
+      "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthOneLevel": { "assurance": "analyze" },
+      "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthTwoLevel": { "assurance": "analyze" },
+      "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthCrossPackage": { "assurance": "analyze" },
+      "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthDeferRecover": { "assurance": "analyze" },
+      "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthGoroutine": { "assurance": "analyze" },
+      "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthAlwaysPasses": { "assurance": "analyze" }
+    }
+  },
+  "expectedRoutes": [
+    {
+      "method": "GET",
+      "normalizedPath": "/confirmed/direct",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthDirect",
+      "enforcementAnalysis": "confirmed-shape",
+      "authStatus": "proven",
+      "note": "Direct if-abort-return in the middleware's own body."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/confirmed/delegated-one-level",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthOneLevel",
+      "enforcementAnalysis": "confirmed-shape",
+      "authStatus": "proven",
+      "note": "One same-package call hop to a direct-abort helper; within the ADR-0008 boundary."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/unresolved/delegated-two-level",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthTwoLevel",
+      "enforcementAnalysis": "unresolved",
+      "authStatus": "unknown",
+      "note": "Two same-package call hops; outside the ADR-0008 boundary even though resolvable in principle. Proves the boundary does not silently widen."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/unresolved/cross-package",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthCrossPackage",
+      "enforcementAnalysis": "unresolved",
+      "authStatus": "unknown",
+      "note": "Single hop, but crosses a package boundary; ADR-0008 permits only same-package delegation."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/unresolved/defer-recover",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthDeferRecover",
+      "enforcementAnalysis": "unresolved",
+      "authStatus": "unknown",
+      "note": "Deny path is a panic/recover, not straight-line if-abort-return."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/unresolved/goroutine",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthGoroutine",
+      "enforcementAnalysis": "unresolved",
+      "authStatus": "unknown",
+      "note": "Deny decision crosses a goroutine/channel boundary."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/contradicted/passthrough",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthAlwaysPasses",
+      "enforcementAnalysis": "contradicted",
+      "authStatus": "unknown",
+      "note": "Matches by canonical symbol but its fully-visible body never aborts; matched-but-unenforced."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/factory/direct",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireRoleFactory",
+      "enforcementAnalysis": "confirmed-shape",
+      "authStatus": "proven",
+      "note": "Factory function (no *gin.Context param) directly returning a literal matching the direct-abort shape; zero delegation hops."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/factory/one-hop",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthFactory",
+      "enforcementAnalysis": "confirmed-shape",
+      "authStatus": "proven",
+      "note": "Mirrors the real-world JWTMiddleware/jwtMiddleware pattern: exported factory delegates one same-package hop to an unexported factory that returns the literal."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/factory/too-deep",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthFactoryTooDeep",
+      "enforcementAnalysis": "unresolved",
+      "authStatus": "unknown",
+      "note": "Two function-to-function delegation hops before the literal; exceeds maxFactoryHops=1."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/factory/cross-package",
+      "matchedMiddleware": "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthFactoryCrossPackage",
+      "enforcementAnalysis": "unresolved",
+      "authStatus": "unknown",
+      "note": "Factory delegates to another package; ADR-0008 permits only same-package delegation, for factories exactly as for direct middleware."
+    }
+  ]
+}

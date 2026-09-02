@@ -1,0 +1,15 @@
+{
+  "fixture": "engine-security",
+  "purpose": "Exercises both docs/gin-security-rules.md rules and their negative/unresolved counterparts.",
+  "expectedFindings": [
+    { "function": "TrustAllProxiesIPv4", "rule": "gin-explicit-trust-all-proxies" },
+    { "function": "TrustAllProxiesIPv6", "rule": "gin-explicit-trust-all-proxies" },
+    { "function": "ExplicitDebugModeConst", "rule": "gin-explicit-debug-mode" },
+    { "function": "ExplicitDebugModeLiteral", "rule": "gin-explicit-debug-mode" }
+  ],
+  "expectedNoFinding": ["TrustSafeProxies", "ExplicitReleaseMode"],
+  "expectedDiagnostics": [
+    { "function": "TrustUnresolvedProxies", "code": "gin-unresolved-trusted-proxies" },
+    { "function": "UnresolvedMode", "code": "gin-unresolved-mode" }
+  ]
+}

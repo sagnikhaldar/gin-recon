@@ -1,0 +1,10 @@
+{
+  "fixture": "func-literal-registrars",
+  "purpose": "Proves registrar-following works through a function literal (anonymous func), not only a named function/method value: a local variable bound to a func literal and called by name, an inline immediately-invoked function expression, and a two-level chain of function-literal registrars.",
+  "expectedRoutes": [
+    { "method": "GET", "normalizedPath": "/named", "finalHandler": "A" },
+    { "method": "GET", "normalizedPath": "/inline", "finalHandler": "A" },
+    { "method": "GET", "normalizedPath": "/chained", "finalHandler": "A" }
+  ],
+  "expectedDiagnostics": []
+}

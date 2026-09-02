@@ -1,0 +1,21 @@
+{
+  "fixture": "registrar-functions",
+  "purpose": "Proves bounded interprocedural registrar-following: same-package function, cross-package function, method-value registrar, the idiomatic if-err/plain-assign/return-delegation control-flow shapes for an error-returning registrar, and one genuinely unresolvable case (callback held in a function-typed parameter) that must diagnose rather than silently drop.",
+  "expectedRoutes": [
+    { "method": "GET", "normalizedPath": "/health", "note": "via same-package registerHealthRoutes(r)" },
+    { "method": "GET", "normalizedPath": "/api/users", "note": "via cross-package routes.RegisterAPIRoutes(r)" },
+    { "method": "GET", "normalizedPath": "/users/:id", "note": "via method-value handler.RegisterRoutes(r)" }
+  ],
+  "excludedRoutes": [
+    { "method": "GET", "normalizedPath": "/never-inventoried", "note": "registered inside a callback passed as a function-typed parameter; not followed" }
+  ],
+  "expectedDiagnostics": [
+    { "code": "gin-unresolved-registrar", "note": "cb(r) inside registerViaCallback — cb is a parameter, not a resolvable function/method reference" }
+  ],
+  "controlFlowRegistrarEntry": "NewRouterWithControlFlowRegistrars",
+  "controlFlowExpectedRoutes": [
+    { "method": "GET", "normalizedPath": "/if-err-registrar", "note": "via if err := registerViaIfErr(r); err != nil { ... } — found silently missed on a real production service (120 routes hidden) because walkStmt never visited IfStmt.Init" },
+    { "method": "GET", "normalizedPath": "/plain-assign-registrar", "note": "via err := registerViaPlainAssign(r) — found silently missed because handleAssign never fell through to tryFollowRegistrarCall for a non-engine/group RHS call" },
+    { "method": "GET", "normalizedPath": "/return-registrar", "note": "via return registerViaReturn(r) inside wrapReturnedRegistrar — found silently missed because walkStmt never visited ReturnStmt" }
+  ]
+}

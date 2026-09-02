@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.25", "1.26"]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: gofmt -l . | tee /tmp/gofmt.out && test ! -s /tmp/gofmt.out
+      - run: go test -race ./...
+      - if: matrix.go == '1.26'
+        run: go test -run '^$' -bench . -benchtime 1x ./... || true
+      - name: staticcheck
+        if: matrix.go == '1.26'
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+      - name: govulncheck
+        if: matrix.go == '1.26'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+
+  schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Validate JSON Schema documents are well-formed
+        run: |
+          for f in schema/*.json testdata/examples/*.json; do
+            python3 -c "import json,sys; json.load(open('$f'))" || exit 1
+          done

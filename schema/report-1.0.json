@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gin-recon.dev/schema/report-1.0.json",
+  "title": "Gin Recon Report",
+  "description": "Report contract 1.0. See docs/report-contract.md for prose semantics; this schema is the normative structural definition.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "tool", "toolVersion", "classifierRulesetVersion", "command", "analysisProfile", "target", "routes", "globalMiddleware", "fallbackSurfaces", "scanCoverage", "diagnostics"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "tool": { "const": "gin-recon" },
+    "toolVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$" },
+    "classifierRulesetVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "command": { "enum": ["inventory", "audit"] },
+    "analysisProfile": { "enum": ["syntax-only", "typed"] },
+    "target": { "$ref": "#/$defs/target" },
+    "routes": { "type": "array", "items": { "$ref": "#/$defs/route" } },
+    "globalMiddleware": { "type": "array", "items": { "$ref": "#/$defs/middleware" } },
+    "fallbackSurfaces": { "type": "array", "items": { "$ref": "#/$defs/fallbackSurface" } },
+    "scanCoverage": { "$ref": "#/$defs/scanCoverage" },
+    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+    "summary": { "$ref": "#/$defs/summary" },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "policyEvaluation": { "$ref": "#/$defs/policyEvaluation" },
+    "activeExceptions": { "type": "array", "items": { "$ref": "#/$defs/exceptionRef" } },
+    "delta": { "$ref": "#/$defs/delta" },
+    "existingDocumentReconciliation": { "$ref": "#/$defs/existingDocumentReconciliation" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "command": { "const": "inventory" } } },
+      "then": {
+        "properties": {
+          "summary": false,
+          "findings": false,
+          "policyEvaluation": false,
+          "activeExceptions": false
+        }
+      }
+    },
+    {
+      "if": { "properties": { "command": { "const": "audit" } } },
+      "then": { "required": ["summary", "findings", "policyEvaluation", "activeExceptions"] }
+    }
+  ],
+  "$defs": {
+    "buildContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["goos", "goarch", "tags", "workspaceMode", "moduleMode", "profile"],
+      "properties": {
+        "goos": { "type": "string" },
+        "goarch": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "workspaceMode": { "enum": ["off", "workspace"] },
+        "moduleMode": { "enum": ["readonly", "vendor"] },
+        "profile": { "enum": ["syntax-only", "typed"] }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "buildContext"],
+      "properties": {
+        "module": { "type": "string" },
+        "workspace": { "type": ["string", "null"] },
+        "buildContext": { "$ref": "#/$defs/buildContext" }
+      }
+    },
+    "source": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "line"],
+          "properties": {
+            "file": { "type": "string" },
+            "line": { "type": ["integer", "null"], "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "middleware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["displayName", "canonicalSymbol", "callableKind", "source", "registrationScope", "orderingIndex", "resolutionStatus"],
+      "properties": {
+        "displayName": { "type": "string" },
+        "canonicalSymbol": { "type": ["string", "null"] },
+        "callableKind": { "enum": ["identifier", "call", "anonymous", "unknown"] },
+        "source": { "$ref": "#/$defs/source" },
+        "registrationScope": { "enum": ["global", "group", "route"] },
+        "orderingIndex": { "type": "integer", "minimum": 0 },
+        "resolutionStatus": { "enum": ["resolved", "unresolved"] },
+        "wrappedSymbols": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "ioEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "body": { "type": "array", "items": { "type": "string" } },
+            "query": { "type": "array", "items": { "type": "string" } },
+            "params": { "type": "array", "items": { "type": "string" } },
+            "headers": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "responses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "resolved"],
+            "properties": {
+              "status": { "type": ["integer", "string"] },
+              "type": { "type": ["string", "null"] },
+              "resolved": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "swag": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "deprecated": { "type": "boolean" },
+        "routerPath": { "type": "string" },
+        "routerMethod": { "type": "string" }
+      }
+    },
+    "existingDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "deprecated": { "type": "boolean" },
+        "paramDescriptions": { "type": "object", "additionalProperties": { "type": "string" } },
+        "paramConflict": { "type": "boolean" }
+      }
+    },
+    "orphanedOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": { "type": "string" },
+        "path": { "type": "string" },
+        "summary": { "type": "string" }
+      }
+    },
+    "existingDocumentReconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["orphanedOperations"],
+      "properties": {
+        "orphanedOperations": { "type": "array", "items": { "$ref": "#/$defs/orphanedOperation" } }
+      }
+    },
+    "authClassification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authStatus", "classificationBasis", "confidence", "tags", "roles", "scopes", "accepted"],
+      "properties": {
+        "authStatus": { "enum": ["proven", "public", "unknown"] },
+        "classificationBasis": { "type": "string" },
+        "assurance": { "enum": ["analyze", "attested"] },
+        "enforcementAnalysis": { "enum": ["confirmed-shape", "unresolved", "contradicted"] },
+        "matchedEvidence": { "type": ["string", "null"] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "scopes": { "type": "array", "items": { "type": "string" } },
+        "accepted": { "type": "boolean" }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "ginPath", "normalizedPath", "surfaceKind", "middleware", "finalHandler", "source", "pathConfidence", "analysisConfidence", "buildContext", "evidenceOrigins"],
+      "properties": {
+        "method": { "type": "string" },
+        "ginPath": { "type": "string" },
+        "normalizedPath": { "type": "string" },
+        "surfaceKind": { "enum": ["route", "static"] },
+        "registrationKind": { "enum": ["verb", "handle", "any", "match", "static"] },
+        "middleware": { "type": "array", "items": { "$ref": "#/$defs/middleware" } },
+        "finalHandler": { "$ref": "#/$defs/middleware" },
+        "source": { "$ref": "#/$defs/source" },
+        "pathConfidence": { "enum": ["high", "medium", "low"] },
+        "analysisConfidence": { "enum": ["high", "medium", "low"] },
+        "buildContext": { "$ref": "#/$defs/buildContext" },
+        "evidenceOrigins": { "type": "array", "items": { "type": "string" } },
+        "io": { "$ref": "#/$defs/ioEvidence" },
+        "auth": { "$ref": "#/$defs/authClassification" },
+        "swag": { "$ref": "#/$defs/swag" },
+        "existingDocument": { "$ref": "#/$defs/existingDocument" }
+      }
+    },
+    "fallbackSurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "middleware", "finalHandler", "source"],
+      "properties": {
+        "kind": { "enum": ["no-route", "no-method"] },
+        "middleware": { "type": "array", "items": { "$ref": "#/$defs/middleware" } },
+        "finalHandler": { "$ref": "#/$defs/middleware" },
+        "source": { "$ref": "#/$defs/source" }
+      }
+    },
+    "scanCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["discoveredPackages", "analyzedPackages", "failedPackages", "discoveredFiles", "analyzedFiles", "failedFiles", "unresolvedRegistrations", "reachedLimits", "buildContext", "profile", "complete"],
+      "properties": {
+        "discoveredPackages": { "type": "integer", "minimum": 0 },
+        "analyzedPackages": { "type": "integer", "minimum": 0 },
+        "failedPackages": { "type": "integer", "minimum": 0 },
+        "discoveredFiles": { "type": "integer", "minimum": 0 },
+        "analyzedFiles": { "type": "integer", "minimum": 0 },
+        "failedFiles": { "type": "integer", "minimum": 0 },
+        "unresolvedRegistrations": { "type": "integer", "minimum": 0 },
+        "reachedLimits": { "type": "array", "items": { "type": "string" } },
+        "buildContext": { "$ref": "#/$defs/buildContext" },
+        "profile": { "enum": ["syntax-only", "typed"] },
+        "complete": { "type": "boolean" }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "severity": { "enum": ["error", "warning", "info"] },
+        "message": { "type": "string" },
+        "source": { "$ref": "#/$defs/source" },
+        "route": { "type": ["string", "null"] },
+        "package": { "type": ["string", "null"] }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["totalRoutes", "provenByConfirmedShape", "provenByAttestedUnresolved", "public", "unknown", "findingsBySeverity"],
+      "properties": {
+        "totalRoutes": { "type": "integer", "minimum": 0 },
+        "provenByConfirmedShape": { "type": "integer", "minimum": 0 },
+        "provenByAttestedUnresolved": { "type": "integer", "minimum": 0 },
+        "public": { "type": "integer", "minimum": 0 },
+        "unknown": { "type": "integer", "minimum": 0 },
+        "findingsBySeverity": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "ruleId", "fingerprint", "severity", "confidence", "detail"],
+      "properties": {
+        "id": { "type": "string" },
+        "ruleId": {
+          "enum": [
+            "public-route",
+            "opaque-middleware",
+            "matched-but-unenforced",
+            "stale-auth-config",
+            "per-verb-gap",
+            "stale-baseline",
+            "incomplete-analysis",
+            "gin-explicit-trust-all-proxies",
+            "gin-explicit-debug-mode",
+            "policy-violation"
+          ]
+        },
+        "fingerprint": { "type": "string" },
+        "severity": { "enum": ["critical", "high", "medium", "low", "info"] },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "route": { "type": ["string", "null"] },
+        "source": { "$ref": "#/$defs/source" },
+        "detail": { "type": "string" },
+        "recommendation": { "type": ["string", "null"] },
+        "evidence": { "type": "object" }
+      }
+    },
+    "policyEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evaluatedPolicies"],
+      "properties": {
+        "evaluatedPolicies": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "exceptionRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "reason", "expires"],
+      "properties": {
+        "id": { "type": "string" },
+        "reason": { "type": "string" },
+        "expires": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+      }
+    },
+    "delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["addedRoutes", "removedRoutes", "authRegressions", "authImprovements", "newFindings", "resolvedFindings"],
+      "properties": {
+        "addedRoutes": { "type": "array", "items": { "type": "string" } },
+        "removedRoutes": { "type": "array", "items": { "type": "string" } },
+        "authRegressions": { "type": "array", "items": { "$ref": "#/$defs/authChange" } },
+        "authImprovements": { "type": "array", "items": { "$ref": "#/$defs/authChange" } },
+        "newFindings": { "type": "array", "items": { "type": "string" } },
+        "resolvedFindings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "authChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "from", "to", "explanation"],
+      "properties": {
+        "method": { "type": "string" },
+        "path": { "type": "string" },
+        "from": { "enum": ["proven", "public", "unknown"] },
+        "to": { "enum": ["proven", "public", "unknown"] },
+        "explanation": { "type": "string" }
+      }
+    }
+  }
+}

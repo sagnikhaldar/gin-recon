@@ -1,0 +1,60 @@
+{
+  "fixture": "auth-wrappers",
+  "purpose": "Proves authWrappers classification: only an explicitly configured canonical wrapper that always invokes its argument may expose that argument as authentication evidence — never an arbitrary, unconfigured call, regardless of what it actually does at runtime. Also proves wrapping never changes what is required of the discovered guard (confirmed-shape/unresolved/contradicted, assurance modes).",
+  "config": {
+    "version": 1,
+    "authMiddleware": {
+      "gin-recon-fixtures/auth-wrappers.RequireAuth": { "assurance": "analyze" },
+      "gin-recon-fixtures/auth-wrappers.RequireAuthContradicted": { "assurance": "analyze" },
+      "gin-recon-fixtures/auth-wrappers.RequireRoleFactory": { "assurance": "analyze" }
+    },
+    "authWrappers": [
+      "gin-recon-fixtures/auth-wrappers.LoggedAuth"
+    ]
+  },
+  "expectedRoutes": [
+    {
+      "method": "GET",
+      "normalizedPath": "/wrapped/positive",
+      "authStatus": "proven",
+      "enforcementAnalysis": "confirmed-shape",
+      "note": "LoggedAuth (configured wrapper) wraps RequireAuth (confirmed-shape guard)."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/wrapped/negative",
+      "authStatus": "public",
+      "note": "LoggedAuth wraps Handler, which is not a configured authMiddleware entry."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/wrapped/opaque",
+      "authStatus": "public",
+      "note": "ConditionalWrapper is not a configured authWrapper, so RequireAuth inside it is never exposed as evidence."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/wrapped/nested",
+      "authStatus": "proven",
+      "enforcementAnalysis": "confirmed-shape",
+      "note": "LoggedAuth(LoggedAuth(RequireAuth)): two literal hops of the same configured wrapper."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/wrapped/factory",
+      "authStatus": "proven",
+      "enforcementAnalysis": "confirmed-shape",
+      "note": "LoggedAuth wraps RequireRoleFactory(\"admin\"); the factory's own canonical symbol resolves, \"admin\" is discarded."
+    },
+    {
+      "method": "GET",
+      "normalizedPath": "/wrapped/contradicted",
+      "authStatus": "unknown",
+      "enforcementAnalysis": "contradicted",
+      "note": "LoggedAuth wraps RequireAuthContradicted, whose own control flow provably never denies — wrapping never promotes a contradicted guard to proven."
+    }
+  ],
+  "expectedFindings": [
+    { "normalizedPath": "/wrapped/contradicted", "ruleId": "matched-but-unenforced" }
+  ]
+}

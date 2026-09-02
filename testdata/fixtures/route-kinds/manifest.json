@@ -1,0 +1,30 @@
+{
+  "fixture": "route-kinds",
+  "purpose": "Exercises Handle/Any/Match/Static family/NoRoute/NoMethod and confirms a non-literal path produces a diagnostic instead of a silently dropped route.",
+  "expectedRoutes": [
+    { "method": "POST", "normalizedPath": "/webhook" },
+    { "method": "GET", "normalizedPath": "/wildcard" },
+    { "method": "POST", "normalizedPath": "/wildcard" },
+    { "method": "PUT", "normalizedPath": "/wildcard" },
+    { "method": "PATCH", "normalizedPath": "/wildcard" },
+    { "method": "DELETE", "normalizedPath": "/wildcard" },
+    { "method": "HEAD", "normalizedPath": "/wildcard" },
+    { "method": "OPTIONS", "normalizedPath": "/wildcard" },
+    { "method": "GET", "normalizedPath": "/matched" },
+    { "method": "POST", "normalizedPath": "/matched" },
+    { "method": "GET", "normalizedPath": "/assets/*filepath" },
+    { "method": "HEAD", "normalizedPath": "/assets/*filepath" },
+    { "method": "GET", "normalizedPath": "/favicon.ico" },
+    { "method": "HEAD", "normalizedPath": "/favicon.ico" },
+    { "method": "GET", "normalizedPath": "/files/*filepath" },
+    { "method": "HEAD", "normalizedPath": "/files/*filepath" },
+    { "method": "POST", "normalizedPath": "/generic", "note": "middleware canonical symbol must be BindAndValidate, not BindAndValidate[ExampleDTO]" }
+  ],
+  "expectedFallbackSurfaces": [
+    { "kind": "no-route" },
+    { "kind": "no-method" }
+  ],
+  "expectedDiagnostics": [
+    { "code": "gin-unresolved-path", "note": "dynamicPrefix+\"/dynamic\" is not a string literal" }
+  ]
+}

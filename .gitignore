@@ -1,0 +1,27 @@
+# Build artifacts
+/bin/
+/dist/
+*.test
+*.out
+
+# Go
+/go.work
+/go.work.sum
+
+# Coverage
+coverage.txt
+coverage.html
+
+# Local scan output
+/recon-out/
+*.tmp-*/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local Claude Code settings
+.claude/settings.local.json
+scratchpad/
