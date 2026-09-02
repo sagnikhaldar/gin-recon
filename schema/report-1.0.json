@@ -23,8 +23,7 @@
     "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
     "policyEvaluation": { "$ref": "#/$defs/policyEvaluation" },
     "activeExceptions": { "type": "array", "items": { "$ref": "#/$defs/exceptionRef" } },
-    "delta": { "$ref": "#/$defs/delta" },
-    "existingDocumentReconciliation": { "$ref": "#/$defs/existingDocumentReconciliation" }
+    "delta": { "$ref": "#/$defs/delta" }
   },
   "allOf": [
     {
@@ -140,36 +139,6 @@
         "routerMethod": { "type": "string" }
       }
     },
-    "existingDocument": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "summary": { "type": "string" },
-        "description": { "type": "string" },
-        "tags": { "type": "array", "items": { "type": "string" } },
-        "deprecated": { "type": "boolean" },
-        "paramDescriptions": { "type": "object", "additionalProperties": { "type": "string" } },
-        "paramConflict": { "type": "boolean" }
-      }
-    },
-    "orphanedOperation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["method", "path"],
-      "properties": {
-        "method": { "type": "string" },
-        "path": { "type": "string" },
-        "summary": { "type": "string" }
-      }
-    },
-    "existingDocumentReconciliation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["orphanedOperations"],
-      "properties": {
-        "orphanedOperations": { "type": "array", "items": { "$ref": "#/$defs/orphanedOperation" } }
-      }
-    },
     "authClassification": {
       "type": "object",
       "additionalProperties": false,
@@ -206,8 +175,7 @@
         "evidenceOrigins": { "type": "array", "items": { "type": "string" } },
         "io": { "$ref": "#/$defs/ioEvidence" },
         "auth": { "$ref": "#/$defs/authClassification" },
-        "swag": { "$ref": "#/$defs/swag" },
-        "existingDocument": { "$ref": "#/$defs/existingDocument" }
+        "swag": { "$ref": "#/$defs/swag" }
       }
     },
     "fallbackSurface": {

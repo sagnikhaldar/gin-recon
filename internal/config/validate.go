@@ -290,17 +290,6 @@ func validateAnalysis(a *AnalysisConfig) []error {
 			errs = append(errs, fmt.Errorf("analysis.followModules: pattern must not be empty"))
 		}
 	}
-	// A non-empty-but-all-whitespace value is rejected the same way other
-	// optional string fields reject a blank-but-present value elsewhere in
-	// this file (see validateUniqueNonEmptyMinOne's reasoning): "" is the
-	// documented off switch, and anything else must be a real path, not a
-	// misconfiguration artifact (e.g. a template that left the value blank).
-	// Filesystem existence/parseability are deliberately NOT checked here —
-	// per ADR 0013, a missing or unparsable document degrades the scan with a
-	// diagnostic, it never fails configuration validation.
-	if a.ExistingOpenAPIDocument != "" && strings.TrimSpace(a.ExistingOpenAPIDocument) == "" {
-		errs = append(errs, fmt.Errorf("analysis.existingOpenAPIDocument: if present must be non-blank"))
-	}
 	return errs
 }
 

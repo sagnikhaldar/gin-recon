@@ -114,40 +114,6 @@ type AnalysisConfig struct {
 	// and docs/threat-model.md for what it does and does not change about
 	// which code's evidence gin-recon trusts.
 	FollowModules []string `json:"followModules,omitempty" yaml:"followModules,omitempty"`
-
-	// ExistingOpenAPIDocument is a path, relative to --src unless already
-	// absolute, to a pre-existing OpenAPI/Swagger document to reconcile
-	// against gin-recon's own discovered routes (docs/adr/0013-existing-openapi-document-reconciliation.md).
-	// Empty by default: no file is read, and the report's
-	// existingDocumentReconciliation section is entirely absent, unless a
-	// reviewer names one explicitly. This follows FollowModules' own
-	// opt-in/explicit-value reasoning immediately above — an implicitly
-	// discovered document (globbing for "openapi.yaml", "swagger.json", etc.)
-	// is exactly the kind of unreviewed guess ADR 0002/0003 already reject
-	// for configuration in general, and here a wrong guess would silently
-	// feed unrelated or stale content into the generated report as if it
-	// were reviewed evidence. Config-only: there is no CLI flag, matching the
-	// same deliberate pattern FollowModules/authMiddleware/authWrappers/
-	// policies already use for settings that must come from a reviewed
-	// config file, not a one-off command-line argument. A missing or
-	// unparsable file is never a validation error — see Validate's doc
-	// comment and ADR 0013's "fail soft" decision; existence/parseability are
-	// checked only when the scan actually runs, producing
-	// "openapi-spec-not-found"/"openapi-spec-invalid" diagnostics rather than
-	// rejecting the configuration itself.
-	ExistingOpenAPIDocument string `json:"existingOpenAPIDocument,omitempty" yaml:"existingOpenAPIDocument,omitempty"`
-
-	// DisableExistingOpenAPIAutoDetect turns off auto-detection of an
-	// existing OpenAPI/Swagger document at one of the fixed conventional
-	// paths listed in docs/adr/0014-auto-detect-existing-openapi-document.md
-	// when ExistingOpenAPIDocument is not itself set. False by default:
-	// auto-detection is on unless a reviewer opts out, the inverse default
-	// from ExistingOpenAPIDocument/FollowModules above, because ADR 0014
-	// re-derived (rather than copied) the caution level warranted here — see
-	// that ADR's Context section for why this feature's blast radius does
-	// not warrant FollowModules' opt-in stance. Setting this true restores
-	// ADR 0013's original opt-in-only behavior exactly.
-	DisableExistingOpenAPIAutoDetect bool `json:"disableExistingOpenAPIAutoDetect,omitempty" yaml:"disableExistingOpenAPIAutoDetect,omitempty"`
 }
 
 // LimitsConfig overrides resource defaults, bounded by hard caps that

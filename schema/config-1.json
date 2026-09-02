@@ -47,9 +47,7 @@
         "goos": { "type": "string" },
         "goarch": { "type": "string" },
         "tags": { "type": "array", "items": { "type": "string" } },
-        "followModules": { "type": "array", "items": { "type": "string" } },
-        "existingOpenAPIDocument": { "type": "string" },
-        "disableExistingOpenAPIAutoDetect": { "type": "boolean" }
+        "followModules": { "type": "array", "items": { "type": "string" } }
       }
     },
     "limits": {

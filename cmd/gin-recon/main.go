@@ -53,17 +53,9 @@ const implementedFormatsMessage = `"json", "pretty", "openapi", "md", and "sarif
 // whenever there is a directory to put it in.
 const htmlCompanionFilename = "api.html"
 
-// auditHTMLCompanionFilename is audit.html's fixed name — the "json" format's
-// companion file, per docs/adr/0015-audit-html-report-viewer.md, exactly
-// mirroring htmlCompanionFilename's relationship to "openapi" above: not a
-// selectable --format value, always regenerated from the same rep that
-// produced routes.json in the same writeReport call, so the two can never
-// drift out of sync or be only partially regenerated.
-const auditHTMLCompanionFilename = "audit.html"
-
 // formatFilename returns the --out filename for one format, per
 // docs/cli-contract.md: "Files are routes.json, routes.md, openapi.json,
-// api.html, audit.html, results.sarif, and routes.txt."
+// api.html, results.sarif, and routes.txt."
 func formatFilename(f cli.OutputFormat) string {
 	switch f {
 	case cli.FormatJSON:
@@ -195,19 +187,6 @@ func writeReport(rep *report.Report, opts *cli.Options, cfg *config.Config, stdo
 			}
 			files = append(files, renderedFile{htmlCompanionFilename, htmlData})
 		}
-
-		if f == cli.FormatJSON {
-			// audit.html renders the exact same rep just marshaled above for
-			// routes.json (format.AuditHTML re-marshals it itself rather than
-			// reusing data, but from the identical rep — see AuditHTML's doc
-			// comment), so there is nothing new to diagnose here either.
-			auditHTMLData, err := format.AuditHTML(rep, cfg)
-			if err != nil {
-				fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-				return cli.ExitOperationalError
-			}
-			files = append(files, renderedFile{auditHTMLCompanionFilename, auditHTMLData})
-		}
 	}
 	if !opts.Force {
 		for _, rf := range files {
@@ -334,7 +313,6 @@ func runInventory(opts *cli.Options, stdout, stderr io.Writer) int {
 		rep.FallbackSurfaces = result.FallbackSurfaces
 		rep.Diagnostics = result.Diagnostics
 		rep.ScanCoverage = result.ScanCoverage
-		applyExistingDocumentReconciliation(rep, opts, cfg)
 		return writeReport(rep, opts, cfg, stdout, stderr, cli.ExitSuccess)
 	}
 
@@ -370,7 +348,6 @@ func runInventory(opts *cli.Options, stdout, stderr io.Writer) int {
 	rep.FallbackSurfaces = result.FallbackSurfaces
 	rep.Diagnostics = result.Diagnostics
 	rep.ScanCoverage = result.ScanCoverage
-	applyExistingDocumentReconciliation(rep, opts, cfg)
 
 	return writeReport(rep, opts, cfg, stdout, stderr, cli.ExitSuccess)
 }
@@ -498,7 +475,6 @@ func runAudit(opts *cli.Options, stdout, stderr io.Writer) int {
 	rep.FallbackSurfaces = result.FallbackSurfaces
 	rep.Diagnostics = result.Diagnostics
 	rep.ScanCoverage = result.ScanCoverage
-	applyExistingDocumentReconciliation(rep, opts, cfg)
 
 	var delta *report.Delta
 	if baselineReport != nil {
@@ -705,57 +681,6 @@ func followModulesFrom(cfg *config.Config) []string {
 	return cfg.Analysis.FollowModules
 }
 
-// existingOpenAPIDocumentFrom returns cfg's configured
-// analysis.existingOpenAPIDocument, or "" when cfg.Analysis is unset — the
-// same config-only, no-CLI-flag pattern followModulesFrom uses immediately
-// above, for the same reason (docs/adr/0013-existing-openapi-document-reconciliation.md:
-// a reviewed, versioned config file, not a one-off command-line argument).
-func existingOpenAPIDocumentFrom(cfg *config.Config) string {
-	if cfg == nil || cfg.Analysis == nil {
-		return ""
-	}
-	return cfg.Analysis.ExistingOpenAPIDocument
-}
-
-// disableExistingOpenAPIAutoDetectFrom returns cfg's configured
-// analysis.disableExistingOpenAPIAutoDetect, or false when cfg.Analysis is
-// unset — false is auto-detection's documented default per
-// docs/adr/0014-auto-detect-existing-openapi-document.md, the same "missing
-// config means the default" pattern existingOpenAPIDocumentFrom uses
-// immediately above.
-func disableExistingOpenAPIAutoDetectFrom(cfg *config.Config) bool {
-	if cfg == nil || cfg.Analysis == nil {
-		return false
-	}
-	return cfg.Analysis.DisableExistingOpenAPIAutoDetect
-}
-
-// applyExistingDocumentReconciliation runs
-// docs/adr/0013-existing-openapi-document-reconciliation.md's reconciliation,
-// as resolved by docs/adr/0014-auto-detect-existing-openapi-document.md's
-// three-way precedence (explicit analysis.existingOpenAPIDocument > first
-// matching auto-detection candidate > feature off), against rep.Routes
-// (already the same backing array analyzer.Inventory/Audit produced,
-// mutated in place — see analyzer.ReconcileExistingDocument's doc comment)
-// and folds its diagnostics and orphan list into rep. It is a no-op,
-// indistinguishable from every scan that predates ADR 0013, when neither an
-// explicit path nor an auto-detected candidate resolves. Called identically
-// from every inventory/audit, typed/syntax-only code path so the feature
-// behaves the same regardless of profile or command.
-func applyExistingDocumentReconciliation(rep *report.Report, opts *cli.Options, cfg *config.Config) {
-	result := analyzer.ResolveAndReconcileExistingDocument(
-		rep.Routes,
-		opts.Src,
-		existingOpenAPIDocumentFrom(cfg),
-		disableExistingOpenAPIAutoDetectFrom(cfg),
-	)
-	if result == nil {
-		return
-	}
-	rep.Diagnostics = append(rep.Diagnostics, result.Diagnostics...)
-	rep.ExistingDocumentReconciliation = result.Reconciled
-}
-
 // scopeExclude returns opts.Exclude with --ignore-file's patterns folded
 // in — the one piece of scan scoping that is a filesystem path rather than
 // a value already resolved by Parse/applyConfigDefaults, so it is resolved
@@ -907,7 +832,7 @@ func runSuggestAuth(opts *cli.Options, stdout, stderr io.Writer) int {
 // gin-recon's own formatting layer over that document via renderReport/
 // writeReport, the same functions runInventory/runAudit already use to turn
 // a report.Report into routes.json/routes.md/openapi.json/api.html/
-// audit.html/results.sarif. Nothing in this function calls into
+// results.sarif. Nothing in this function calls into
 // internal/analyzer or golang.org/x/tools/go/packages, and none of
 // cli.Options' scan/analysis fields (Src, Profile, Include, ...) are read —
 // render has no source tree to point them at.

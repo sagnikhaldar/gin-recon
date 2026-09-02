@@ -148,41 +148,6 @@ type AuthChange struct {
 	Explanation string           `json:"explanation"`
 }
 
-// OrphanedOperation is one operation from a reviewer-named pre-existing
-// OpenAPI document (analysis.existingOpenAPIDocument) that did not match any
-// route gin-recon itself discovered, per
-// docs/adr/0013-existing-openapi-document-reconciliation.md. It is never
-// synthesized into Routes — an undiscovered, unverified route would
-// undermine the report's evidentiary basis — and Path is the document's own
-// declared path, in its own {name}-parameter form, not a Gin path.
-type OrphanedOperation struct {
-	Method  string `json:"method"`
-	Path    string `json:"path"`
-	Summary string `json:"summary,omitempty"`
-}
-
-// ExistingDocumentReconciliation summarizes reconciling
-// analysis.existingOpenAPIDocument against discovered routes. Present on a
-// Report only when that config field was set; a matched document operation's
-// evidence is attached directly to the corresponding model.Route's
-// ExistingDocument field instead of appearing here, per ADR 0013 — this
-// section exists solely to surface the one outcome that has nowhere else to
-// go: operations the document names that no discovered route matched.
-type ExistingDocumentReconciliation struct {
-	OrphanedOperations []OrphanedOperation `json:"orphanedOperations"`
-}
-
-// MarshalJSON defaults a nil OrphanedOperations to []; see Summary.MarshalJSON
-// above for why this guard lives on the type rather than every call site.
-func (e ExistingDocumentReconciliation) MarshalJSON() ([]byte, error) {
-	type alias ExistingDocumentReconciliation
-	x := alias(e)
-	if x.OrphanedOperations == nil {
-		x.OrphanedOperations = []OrphanedOperation{}
-	}
-	return json.Marshal(x)
-}
-
 // Delta is present only when a baseline was supplied. Baseline comparison
 // requires the same schema major, analysis profile, normalized build
 // context, and route-normalization version; a mismatch is an operational
@@ -257,11 +222,6 @@ type Report struct {
 	ActiveExceptions []ExceptionRef    `json:"-"`
 
 	Delta *Delta `json:"delta,omitempty"`
-
-	// ExistingDocumentReconciliation is present only when
-	// analysis.existingOpenAPIDocument was configured (regardless of
-	// command or profile) — see cmd/gin-recon's applyExistingDocumentReconciliation.
-	ExistingDocumentReconciliation *ExistingDocumentReconciliation `json:"existingDocumentReconciliation,omitempty"`
 }
 
 // reportEnvelope is the always-present portion of a Report, shared by
@@ -269,20 +229,19 @@ type Report struct {
 // delegate the common fields to encoding/json and hand-splice the
 // conditional audit-only fields around it.
 type reportEnvelope struct {
-	SchemaVersion                  string                          `json:"schemaVersion"`
-	ToolName                       string                          `json:"tool"`
-	ToolVersion                    string                          `json:"toolVersion"`
-	ClassifierRulesetVersion       string                          `json:"classifierRulesetVersion"`
-	Command                        Command                         `json:"command"`
-	AnalysisProfile                model.AnalysisProfile           `json:"analysisProfile"`
-	Target                         Target                          `json:"target"`
-	Routes                         []model.Route                   `json:"routes"`
-	GlobalMiddleware               []model.Middleware              `json:"globalMiddleware"`
-	FallbackSurfaces               []model.FallbackSurface         `json:"fallbackSurfaces"`
-	ScanCoverage                   model.ScanCoverage              `json:"scanCoverage"`
-	Diagnostics                    []model.Diagnostic              `json:"diagnostics"`
-	Delta                          *Delta                          `json:"delta,omitempty"`
-	ExistingDocumentReconciliation *ExistingDocumentReconciliation `json:"existingDocumentReconciliation,omitempty"`
+	SchemaVersion            string                  `json:"schemaVersion"`
+	ToolName                 string                  `json:"tool"`
+	ToolVersion              string                  `json:"toolVersion"`
+	ClassifierRulesetVersion string                  `json:"classifierRulesetVersion"`
+	Command                  Command                 `json:"command"`
+	AnalysisProfile          model.AnalysisProfile   `json:"analysisProfile"`
+	Target                   Target                  `json:"target"`
+	Routes                   []model.Route           `json:"routes"`
+	GlobalMiddleware         []model.Middleware      `json:"globalMiddleware"`
+	FallbackSurfaces         []model.FallbackSurface `json:"fallbackSurfaces"`
+	ScanCoverage             model.ScanCoverage      `json:"scanCoverage"`
+	Diagnostics              []model.Diagnostic      `json:"diagnostics"`
+	Delta                    *Delta                  `json:"delta,omitempty"`
 }
 
 // envelope defaults every nil top-level slice to empty. schema/report-1.0.json
@@ -314,20 +273,19 @@ func (r Report) envelope() reportEnvelope {
 		diagnostics = []model.Diagnostic{}
 	}
 	return reportEnvelope{
-		SchemaVersion:                  r.SchemaVersion,
-		ToolName:                       r.ToolName,
-		ToolVersion:                    r.ToolVersion,
-		ClassifierRulesetVersion:       r.ClassifierRulesetVersion,
-		Command:                        r.Command,
-		AnalysisProfile:                r.AnalysisProfile,
-		Target:                         r.Target,
-		Routes:                         routes,
-		GlobalMiddleware:               globalMiddleware,
-		FallbackSurfaces:               fallbackSurfaces,
-		ScanCoverage:                   r.ScanCoverage,
-		Diagnostics:                    diagnostics,
-		Delta:                          r.Delta,
-		ExistingDocumentReconciliation: r.ExistingDocumentReconciliation,
+		SchemaVersion:            r.SchemaVersion,
+		ToolName:                 r.ToolName,
+		ToolVersion:              r.ToolVersion,
+		ClassifierRulesetVersion: r.ClassifierRulesetVersion,
+		Command:                  r.Command,
+		AnalysisProfile:          r.AnalysisProfile,
+		Target:                   r.Target,
+		Routes:                   routes,
+		GlobalMiddleware:         globalMiddleware,
+		FallbackSurfaces:         fallbackSurfaces,
+		ScanCoverage:             r.ScanCoverage,
+		Diagnostics:              diagnostics,
+		Delta:                    r.Delta,
 	}
 }
 
@@ -393,20 +351,19 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = Report{
-		SchemaVersion:                  env.SchemaVersion,
-		ToolName:                       env.ToolName,
-		ToolVersion:                    env.ToolVersion,
-		ClassifierRulesetVersion:       env.ClassifierRulesetVersion,
-		Command:                        env.Command,
-		AnalysisProfile:                env.AnalysisProfile,
-		Target:                         env.Target,
-		Routes:                         env.Routes,
-		GlobalMiddleware:               env.GlobalMiddleware,
-		FallbackSurfaces:               env.FallbackSurfaces,
-		ScanCoverage:                   env.ScanCoverage,
-		Diagnostics:                    env.Diagnostics,
-		Delta:                          env.Delta,
-		ExistingDocumentReconciliation: env.ExistingDocumentReconciliation,
+		SchemaVersion:            env.SchemaVersion,
+		ToolName:                 env.ToolName,
+		ToolVersion:              env.ToolVersion,
+		ClassifierRulesetVersion: env.ClassifierRulesetVersion,
+		Command:                  env.Command,
+		AnalysisProfile:          env.AnalysisProfile,
+		Target:                   env.Target,
+		Routes:                   env.Routes,
+		GlobalMiddleware:         env.GlobalMiddleware,
+		FallbackSurfaces:         env.FallbackSurfaces,
+		ScanCoverage:             env.ScanCoverage,
+		Diagnostics:              env.Diagnostics,
+		Delta:                    env.Delta,
 	}
 
 	var audit struct {
@@ -429,13 +386,12 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 // wires them to build-time version injection (see PLAN.md#versioning).
 //
 // toolVersion moved to 0.2.0 for the v0.2.0-alpha.1 tag: every change since
-// the prior 0.1.0 placeholder (swag evidence, existing-document
-// reconciliation and auto-detection, Swagger 2.0 support, audit.html, the
-// render command) is additive/backward-compatible per PLAN.md's MINOR
-// definition — none of it changed schemaVersion or altered any existing
-// route's classification result. classifierRulesetVersion stays at 0.1.0
-// because it specifically tracks classification behavior
-// (proven/public/unknown), which none of that work touched.
+// the prior 0.1.0 placeholder (swag evidence, the render command) is
+// additive/backward-compatible per PLAN.md's MINOR definition — none of it
+// changed schemaVersion or altered any existing route's classification
+// result. classifierRulesetVersion stays at 0.1.0 because it specifically
+// tracks classification behavior (proven/public/unknown), which none of that
+// work touched.
 const (
 	toolVersion              = "0.2.0"
 	classifierRulesetVersion = "0.1.0"

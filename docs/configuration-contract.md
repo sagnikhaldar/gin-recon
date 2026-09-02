@@ -50,8 +50,6 @@ analysis:
   goarch: amd64
   tags: []
   followModules: []
-  existingOpenAPIDocument: ""
-  disableExistingOpenAPIAutoDetect: false
 limits:
   timeout: 30s
   maxFiles: 20000
@@ -73,10 +71,6 @@ openapi:
 `scan`, `analysis`, `limits`, and `openapi` are optional. CLI-only write controls such as `--out` and `--force` are never accepted in configuration.
 
 `analysis.followModules` is a list of Go module import-path glob patterns (matched against a dependency's own module path, e.g. `github.com/myorg/**`) that registrar-following is explicitly permitted to cross into, beyond the target module's own source. Empty by default — no module boundary is ever crossed unless named here. Config-only: there is no `--follow-modules` CLI flag, the same deliberate pattern `authMiddleware`/`authWrappers`/`policies` already use for settings that widen trust and must come from a reviewed config file, not a one-off command-line argument. Rejected together with `analysis.profile: syntax-only`, which never resolves canonical symbols at all. See [docs/adr/0010-opt-in-cross-module-registrar-following.md](adr/0010-opt-in-cross-module-registrar-following.md) for the full rationale, including how a resolved cross-module route's `source.file` is represented (`<module path>@<version>/<path within the module>`, never an absolute filesystem path).
-
-`analysis.existingOpenAPIDocument` is a path, relative to `--src` unless already absolute, to a pre-existing OpenAPI/Swagger document (OpenAPI 3.0 or 3.1) to reconcile against gin-recon's own discovered routes. Empty by default — no file is read, and the report's `existingDocumentReconciliation` section is entirely absent, unless a reviewer names one explicitly or auto-detection (below) finds one. Config-only, following the same reasoning as `followModules` immediately above: there is no `--existing-openapi-document` CLI flag. A configured path that does not exist or fails to parse is never a validation error — it produces an `openapi-spec-not-found` or `openapi-spec-invalid` diagnostic at scan time and the scan proceeds exactly as if the field were unset. See [docs/adr/0013-existing-openapi-document-reconciliation.md](adr/0013-existing-openapi-document-reconciliation.md) for the full matching/merge rules and [docs/openapi-strategy.md](openapi-strategy.md#existing-openapi-document-reconciliation) for how its evidence is applied.
-
-When `analysis.existingOpenAPIDocument` is *not* set, gin-recon auto-detects a document at one of 16 fixed, conventional paths relative to `--src` (`openapi.yaml`, `openapi.yml`, `openapi.json`, `swagger.yaml`, `swagger.yml`, `swagger.json`, `docs/openapi.yaml`, `docs/openapi.yml`, `docs/openapi.json`, `docs/swagger.yaml`, `docs/swagger.yml`, `docs/swagger.json`, `openapi/openapi.yaml`, `openapi/openapi.yml`, `api/openapi.yaml`, `api/openapi.json`, checked in that order) — the first one that both exists and parses into a document with at least one path item is used exactly as if it had been configured explicitly. This is never a recursive or broad glob: files under `.gin-recon/` (gin-recon's own output) and any filename containing `.base.` (swaggo's partial-template convention) are never candidates, by simply never appearing on the fixed list. `analysis.disableExistingOpenAPIAutoDetect` (bool, default `false`) restores ADR 0013's original opt-in-only behavior exactly — set it `true` to require `analysis.existingOpenAPIDocument` be set explicitly, with no fallback to convention. Precedence is explicit `existingOpenAPIDocument` (if set) > first matching auto-detected candidate (if not disabled) > feature off; auto-detection never runs at all once an explicit value is set. See [docs/adr/0014-auto-detect-existing-openapi-document.md](adr/0014-auto-detect-existing-openapi-document.md) for the full rationale.
 
 ## Policies and Baselines
 

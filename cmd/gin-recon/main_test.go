@@ -430,67 +430,6 @@ func TestRunOpenAPIFormatAlsoWritesHTMLCompanion(t *testing.T) {
 	}
 }
 
-// TestRunJSONFormatAlsoWritesAuditHTMLCompanion is the regression for
-// docs/adr/0015-audit-html-report-viewer.md's trigger rule: requesting
-// --format json with --out must produce audit.html alongside routes.json
-// with no separate opt-in, mirroring TestRunOpenAPIFormatAlsoWritesHTMLCompanion's
-// coverage of api.html/openapi above. Both companions can be requested
-// together in one run since they read disjoint source documents.
-func TestRunJSONFormatAlsoWritesAuditHTMLCompanion(t *testing.T) {
-	dir := t.TempDir() // no Gin usage — a valid, empty target
-	writeMinimalGoModule(t, dir)
-	outDir := t.TempDir()
-
-	var stdout, stderr bytes.Buffer
-	code := run([]string{"inventory", "--src", dir, "--format", "json", "--out", outDir, "--allow-downloads"}, &stdout, &stderr)
-	if code != cli.ExitSuccess {
-		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
-	}
-
-	jsonPath := filepath.Join(outDir, "routes.json")
-	htmlPath := filepath.Join(outDir, "audit.html")
-	if _, err := os.Stat(jsonPath); err != nil {
-		t.Errorf("routes.json was not written: %v", err)
-	}
-	htmlData, err := os.ReadFile(htmlPath)
-	if err != nil {
-		t.Fatalf("audit.html was not written alongside routes.json: %v", err)
-	}
-	if !strings.Contains(string(htmlData), "<!doctype html>") {
-		t.Errorf("audit.html = %q, want an HTML document", htmlData)
-	}
-	if !strings.Contains(string(htmlData), `"tool": "gin-recon"`) {
-		t.Errorf("audit.html does not embed the report: %s", htmlData)
-	}
-
-	// Requesting a format other than json must not produce audit.html.
-	outDir2 := t.TempDir()
-	stdout.Reset()
-	stderr.Reset()
-	code = run([]string{"inventory", "--src", dir, "--format", "openapi", "--out", outDir2, "--allow-downloads"}, &stdout, &stderr)
-	if code != cli.ExitSuccess {
-		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
-	}
-	if _, err := os.Stat(filepath.Join(outDir2, "audit.html")); err == nil {
-		t.Error("audit.html was written even though json was not a requested format")
-	}
-
-	// Both companions together, since they read disjoint source documents
-	// with no ordering dependency (ADR 0015).
-	outDir3 := t.TempDir()
-	stdout.Reset()
-	stderr.Reset()
-	code = run([]string{"inventory", "--src", dir, "--format", "json,openapi", "--out", outDir3, "--allow-downloads"}, &stdout, &stderr)
-	if code != cli.ExitSuccess {
-		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
-	}
-	for _, name := range []string{"routes.json", "openapi.json", "api.html", "audit.html"} {
-		if _, err := os.Stat(filepath.Join(outDir3, name)); err != nil {
-			t.Errorf("%s was not written when both json and openapi were requested: %v", name, err)
-		}
-	}
-}
-
 // TestRunExcludeFlagScopesTheScan and the two tests following it are the
 // regression for a real gap: --include/--exclude/--ignore-file were parsed
 // and schema-validated but analyzer.LoadOptions had no corresponding fields
@@ -845,11 +784,10 @@ func TestRunNonexistentSrcFailsBeforeDispatch(t *testing.T) {
 // integration test for docs/adr/0016-render-command-decouples-formatting-from-analysis.md's
 // central claim: render, over a routes.json a prior audit run already
 // produced, reproduces byte-for-byte what that same audit run's own
-// --format json,openapi --out would have written — routes.json, its
-// audit.html companion, openapi.json, and its api.html companion — without
-// ever rescanning dir. report.Report carries no timestamp field (grepped:
-// no generatedAt/time.Now output), so there is nothing non-deterministic to
-// account for.
+// --format json,openapi --out would have written — routes.json, openapi.json,
+// and its api.html companion — without ever rescanning dir. report.Report
+// carries no timestamp field (grepped: no generatedAt/time.Now output), so
+// there is nothing non-deterministic to account for.
 func TestRunRenderReproducesAuditOutputFromSavedReport(t *testing.T) {
 	dir := fixtureDir(t, "auth-wrappers")
 	outDir := t.TempDir()
@@ -868,7 +806,7 @@ func TestRunRenderReproducesAuditOutputFromSavedReport(t *testing.T) {
 		t.Fatalf("render exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, rstderr.String())
 	}
 
-	for _, name := range []string{"routes.json", "openapi.json", "api.html", "audit.html"} {
+	for _, name := range []string{"routes.json", "openapi.json", "api.html"} {
 		want, err := os.ReadFile(filepath.Join(outDir, name))
 		if err != nil {
 			t.Fatalf("reading original audit run's %s: %v", name, err)

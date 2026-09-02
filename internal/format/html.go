@@ -131,12 +131,6 @@ li.schema-field { margin: 5px 0; }
 .schema-desc { color: var(--muted); font-size: 12px; margin: 1px 0 0; }
 pre.example { background: var(--code-bg); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 6px 0 0; }
 pre.example code { background: none; padding: 0; font-size: 12px; }
-.existing-doc-section { border: 1px solid var(--border); border-radius: 8px; margin: 20px 0 10px; padding: 12px 14px; background: var(--card); }
-.existing-doc-section h2 { margin: 0 0 4px; font-size: 15px; }
-.existing-doc-section .meta { margin-bottom: 8px; }
-.existing-doc-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); }
-.existing-doc-row:first-child { border-top: none; }
-.existing-doc-row .op-summary { margin: 0; font-size: 13px; font-weight: 400; color: var(--muted); }
 `
 
 // htmlViewerJS is intentionally framework-free vanilla JS. Every value that
@@ -453,32 +447,6 @@ const htmlViewerJS = `
     return details;
   }
 
-  // existingDocumentSection renders the document-level
-  // "x-gin-recon-existing-document-reconciliation" extension (see
-  // internal/format/openapi.go's document.ExistingDocumentReconciliation) as
-  // a distinct page section listing every operation a reviewer's
-  // pre-existing OpenAPI document names that gin-recon never discovered in
-  // code. Returns null — rendering nothing at all — when the extension key
-  // is absent or carries no orphans, so a spec with no existing-document
-  // evidence degrades to exactly the page this viewer already rendered
-  // before this feature existed.
-  function existingDocumentSection(ext) {
-    if (!ext || !ext.orphanedOperations || !ext.orphanedOperations.length) return null;
-    var section = el("section", { class: "existing-doc-section" });
-    section.appendChild(el("h2", null, "Existing Document: Orphaned Operations"));
-    section.appendChild(el("div", { class: "meta" },
-      ext.orphanedOperations.length + " operation(s) documented in the existing OpenAPI document but not discovered in code"));
-    ext.orphanedOperations.forEach(function (o) {
-      var row = el("div", { class: "existing-doc-row" });
-      var method = (o.method || "").toLowerCase();
-      row.appendChild(el("span", { class: "method " + (["get","post","put","patch","delete"].indexOf(method) >= 0 ? method : "other") }, (o.method || "").toUpperCase()));
-      row.appendChild(el("span", { class: "path" }, o.path || ""));
-      if (o.summary) row.appendChild(el("span", { class: "op-summary" }, o.summary));
-      section.appendChild(row);
-    });
-    return section;
-  }
-
   function render() {
     app.textContent = "";
     var header = el("header");
@@ -521,9 +489,6 @@ const htmlViewerJS = `
       rows.forEach(function (row) { details.appendChild(row); allRows.push(row); });
       app.appendChild(details);
     });
-
-    var existingDocSection = existingDocumentSection(spec["x-gin-recon-existing-document-reconciliation"]);
-    if (existingDocSection) app.appendChild(existingDocSection);
 
     // Read the caveat from the spec's own info.description rather than
     // keeping a second hardcoded copy here — internal/format/openapi.go's

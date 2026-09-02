@@ -30,31 +30,6 @@ type document struct {
 	Info       oaInfo              `json:"info"`
 	Paths      map[string]pathItem `json:"paths"`
 	Components *oaComponents       `json:"components,omitempty"`
-
-	// ExistingDocumentReconciliation mirrors report.ExistingDocumentReconciliation
-	// (already computed by analyzer.ReconcileExistingDocument/
-	// ResolveAndReconcileExistingDocument and threaded into rep before OpenAPI
-	// runs, per cmd/gin-recon's applyExistingDocumentReconciliation) as a
-	// document-root OpenAPI extension, so a reader of openapi.json/api.html
-	// alone — not just routes.json/routes.md/results.sarif — can see which
-	// operations a reviewer's pre-existing document names that gin-recon
-	// never discovered in code. This is pure plumbing: no matching/merge/
-	// precedence logic lives here, only exposing already-computed data one
-	// layer further. Deliberately a pointer with omitempty, and only ever
-	// assigned when there is at least one orphan (see OpenAPI below) — an
-	// absent key, not an empty object, is how this document says
-	// "reconciliation did not run, or found nothing to report," matching
-	// report.ExistingDocumentReconciliation's own "present only when
-	// configured" discipline.
-	ExistingDocumentReconciliation *existingDocReconciliationExt `json:"x-gin-recon-existing-document-reconciliation,omitempty"`
-}
-
-// existingDocReconciliationExt is the document-level extension's shape.
-// OrphanedOperations reuses report.OrphanedOperation directly (already
-// carries the exact json tags — method/path/summary — this extension wants)
-// rather than declaring a parallel type for identical content.
-type existingDocReconciliationExt struct {
-	OrphanedOperations []report.OrphanedOperation `json:"orphanedOperations"`
 }
 
 type oaInfo struct {
@@ -272,18 +247,15 @@ type ginReconExt struct {
 
 	// EvidenceSource records which non-analyzer source, if any, actually
 	// supplied this operation's Summary/Description/Tags/Deprecated —
-	// "swag" (docs/adr/0012-swag-annotation-evidence.md) or
-	// "existingDocument" (docs/adr/0013-existing-openapi-document-reconciliation.md).
-	// It is set by applySwagEvidence/applyExistingDocEvidence only when one of
-	// those sources actually replaced this formatter's own generic
-	// placeholder for at least one of those fields — never for analyzer-typed
-	// evidence (there is none for these prose fields today) and never merely
-	// because Route.Swag/Route.ExistingDocument is present with nothing to
-	// contribute. Absent entirely (the common case) when neither source won
-	// anything, so a reader can tell "gin-recon's own generic text" from
-	// "prose that came from somewhere outside static analysis" — the one
-	// piece of provenance the merged Summary/Description strings alone no
-	// longer carry.
+	// currently only "swag" (docs/adr/0012-swag-annotation-evidence.md). It is
+	// set by applySwagEvidence only when that source actually replaced this
+	// formatter's own generic placeholder for at least one of those fields —
+	// never for analyzer-typed evidence (there is none for these prose fields
+	// today) and never merely because Route.Swag is present with nothing to
+	// contribute. Absent entirely (the common case) when swag won nothing, so
+	// a reader can tell "gin-recon's own generic text" from "prose that came
+	// from somewhere outside static analysis" — the one piece of provenance
+	// the merged Summary/Description strings alone no longer carry.
 	EvidenceSource string `json:"evidenceSource,omitempty"`
 }
 
@@ -314,18 +286,6 @@ func OpenAPI(rep *report.Report, cfg *config.Config) ([]byte, []model.Diagnostic
 
 	if schemes := securitySchemesFrom(cfg); len(schemes) > 0 {
 		doc.Components = &oaComponents{SecuritySchemes: schemes}
-	}
-
-	// rep.ExistingDocumentReconciliation is already populated by the time
-	// OpenAPI runs (cmd/gin-recon's applyExistingDocumentReconciliation sets
-	// it on rep before any format.* call), so this is a direct read, not a
-	// new reconciliation pass. Omitted entirely — not an empty object — when
-	// reconciliation never ran or found zero orphans, per document's own
-	// field doc comment.
-	if rep.ExistingDocumentReconciliation != nil && len(rep.ExistingDocumentReconciliation.OrphanedOperations) > 0 {
-		doc.ExistingDocumentReconciliation = &existingDocReconciliationExt{
-			OrphanedOperations: rep.ExistingDocumentReconciliation.OrphanedOperations,
-		}
 	}
 
 	data, err := json.MarshalIndent(doc, "", "  ")
@@ -417,7 +377,6 @@ func buildOperation(doc *document, route model.Route, rep *report.Report, cfg *c
 		Extensions:  map[string]ginReconExt{"x-gin-recon": ginReconExtensionFor(route, rep, cfg, catchAll)},
 	}
 	applySwagEvidence(op, route)
-	applyExistingDocEvidence(op, route)
 	applySecurity(op, route, cfg)
 
 	if existing := item.get(route.Method); existing != nil {
@@ -465,83 +424,12 @@ func applySwagEvidence(op *operation, route model.Route) {
 	}
 	// evidenceSource is a whole-operation marker, not per-field — see
 	// ginReconExt.EvidenceSource's doc comment — so it is set once here
-	// whenever swag actually replaced anything, ahead of
-	// applyExistingDocEvidence which only overwrites it if swag replaced
-	// nothing at all.
+	// whenever swag actually replaced anything.
 	if changed {
 		ext := op.Extensions["x-gin-recon"]
 		ext.EvidenceSource = "swag"
 		op.Extensions["x-gin-recon"] = ext
 	}
-}
-
-// applyExistingDocEvidence overlays a route's pre-existing-OpenAPI-document
-// evidence (internal/analyzer.ReconcileExistingDocument, attached to
-// route.ExistingDocument during discovery) onto op, per
-// docs/adr/0013-existing-openapi-document-reconciliation.md. It runs after
-// applySwagEvidence and only ever fills a prose field swag left empty — the
-// precedence order ADR 0013 fixes is analyzer-typed evidence, then swag
-// (ADR 0012), then this document, then gin-recon's own generic placeholder,
-// and a lower-precedence source must never overwrite one that already has
-// content. Unlike swag, a path parameter's description is gated by the
-// structural-compatibility check already performed at attach time
-// (route.ExistingDocument.ParamConflict): a disagreement marks the operation
-// unrefined for "parameters" via the same x-gin-recon.unrefined mechanism
-// applySecurity already uses for "security," rather than applying any
-// parameter content from the document.
-func applyExistingDocEvidence(op *operation, route model.Route) {
-	if route.ExistingDocument == nil {
-		return
-	}
-	doc := route.ExistingDocument
-
-	swagSummary, swagDescription, swagDeprecated := "", "", false
-	var swagTags []string
-	if route.Swag != nil {
-		swagSummary = route.Swag.Summary
-		swagDescription = route.Swag.Description
-		swagTags = route.Swag.Tags
-		swagDeprecated = route.Swag.Deprecated
-	}
-
-	proseChanged := false
-	if swagSummary == "" && doc.Summary != "" {
-		op.Summary = doc.Summary
-		proseChanged = true
-	}
-	if swagDescription == "" && doc.Description != "" {
-		op.Description = doc.Description
-		proseChanged = true
-	}
-	if len(swagTags) == 0 && len(doc.Tags) > 0 {
-		op.Tags = doc.Tags
-		proseChanged = true
-	}
-	if !swagDeprecated && doc.Deprecated {
-		op.Deprecated = true
-		proseChanged = true
-	}
-
-	ext := op.Extensions["x-gin-recon"]
-	// Only claim evidenceSource when this document actually replaced a
-	// prose field AND swag hasn't already claimed it — swag's own marker
-	// (set in applySwagEvidence, which always runs first) always wins per
-	// ADR 0013's precedence, matching the per-field precedence already
-	// enforced above.
-	if proseChanged && ext.EvidenceSource == "" {
-		ext.EvidenceSource = "existingDocument"
-	}
-	switch {
-	case doc.ParamConflict:
-		ext.Unrefined = append(ext.Unrefined, "parameters")
-	case len(doc.ParamDescriptions) > 0:
-		for i := range op.Parameters {
-			if desc, ok := doc.ParamDescriptions[op.Parameters[i].Name]; ok && desc != "" {
-				op.Parameters[i].Description = desc
-			}
-		}
-	}
-	op.Extensions["x-gin-recon"] = ext
 }
 
 // mergeRegistration folds incoming's x-gin-recon evidence into existing's

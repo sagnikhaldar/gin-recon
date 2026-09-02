@@ -96,21 +96,15 @@ Read the skeleton. Each operation has:
 
 An operation's `summary`/`description`/`tags`/`deprecated` may already carry
 real, human- or code-derived content gin-recon merged into the skeleton
-itself, from two evidence sources both ranked above this skill's own AI
-enrichment pass in gin-recon's evidence precedence (analyzer-typed evidence >
-`swag` > `existingDocument` > this skill fills whatever is still a
-placeholder — see
+itself, from an evidence source ranked above this skill's own AI enrichment
+pass in gin-recon's evidence precedence (analyzer-typed evidence > `swag` >
+this skill fills whatever is still a placeholder — see
 [docs/adr/0007-openapi-evidence-precedence.md](../../docs/adr/0007-openapi-evidence-precedence.md)):
 `swag` is a handler's own swaggo/swag-style Go doc comment
 (`@Summary`/`@Description`/`@Tags`/`@Deprecated`,
-[docs/adr/0012-swag-annotation-evidence.md](../../docs/adr/0012-swag-annotation-evidence.md));
-`existingDocument` is a pre-existing OpenAPI/Swagger document reconciled
-against this route, either explicitly configured or auto-detected at a
-conventional path
-([docs/adr/0013](../../docs/adr/0013-existing-openapi-document-reconciliation.md),
-[docs/adr/0014](../../docs/adr/0014-auto-detect-existing-openapi-document.md)).
-Both are already applied to the fields above before you ever open the
-skeleton — you're reading their result, not a raw evidence blob you still
+[docs/adr/0012-swag-annotation-evidence.md](../../docs/adr/0012-swag-annotation-evidence.md)).
+It is already applied to the fields above before you ever open the
+skeleton — you're reading its result, not a raw evidence blob you still
 need to merge yourself.
 
 ## 2. Document each operation (the AI pass)
@@ -138,8 +132,8 @@ Then produce:
   own generic filler: the mechanical `"METHOD /path -> handler"` summary
   (`internal/format/openapi.go`'s own placeholder), an unset/empty
   `description`, and the path-derived `tags` are the only gin-recon-authored
-  defaults; anything else already got there via `swag` or `existingDocument`
-  evidence per the note above step 1. Treat that as already-authored and
+  defaults; anything else already got there via `swag` evidence per the note
+  above step 1. Treat that as already-authored and
   leave it alone — overwriting it with AI-generated text would regress
   reviewed or code-colocated content back down to placeholder quality and
   invert gin-recon's own evidence precedence. Only fill in what is genuinely

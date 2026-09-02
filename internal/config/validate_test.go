@@ -48,40 +48,6 @@ func TestValidateRejectsEmptyFollowModulesPattern(t *testing.T) {
 	}`, "must not be empty")
 }
 
-func TestValidateAcceptsExistingOpenAPIDocument(t *testing.T) {
-	cfg := mustDecode(t, FormatJSON, `{
-		"version": 1,
-		"analysis": {"existingOpenAPIDocument": "docs/openapi.yaml"}
-	}`)
-	if cfg.Analysis.ExistingOpenAPIDocument != "docs/openapi.yaml" {
-		t.Errorf("Analysis.ExistingOpenAPIDocument = %q, want %q", cfg.Analysis.ExistingOpenAPIDocument, "docs/openapi.yaml")
-	}
-}
-
-func TestValidateRejectsBlankExistingOpenAPIDocument(t *testing.T) {
-	expectDecodeError(t, FormatJSON, `{
-		"version": 1,
-		"analysis": {"existingOpenAPIDocument": "   "}
-	}`, "existingOpenAPIDocument")
-}
-
-func TestValidateAcceptsDisableExistingOpenAPIAutoDetect(t *testing.T) {
-	cfg := mustDecode(t, FormatJSON, `{
-		"version": 1,
-		"analysis": {"disableExistingOpenAPIAutoDetect": true}
-	}`)
-	if !cfg.Analysis.DisableExistingOpenAPIAutoDetect {
-		t.Errorf("Analysis.DisableExistingOpenAPIAutoDetect = false, want true")
-	}
-}
-
-func TestValidateDisableExistingOpenAPIAutoDetectDefaultsFalse(t *testing.T) {
-	cfg := mustDecode(t, FormatJSON, `{"version": 1}`)
-	if cfg.Analysis != nil && cfg.Analysis.DisableExistingOpenAPIAutoDetect {
-		t.Errorf("Analysis.DisableExistingOpenAPIAutoDetect = true, want false (default)")
-	}
-}
-
 func TestValidateRejectsEmptyAuthMiddlewareKey(t *testing.T) {
 	expectDecodeError(t, FormatJSON, `{"version": 1, "authMiddleware": {"": {}}}`, "must not be empty")
 }

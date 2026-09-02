@@ -175,43 +175,6 @@ type SwagInfo struct {
 	RouterMethod string   `json:"routerMethod,omitempty"`
 }
 
-// ExistingDocumentInfo is best-effort evidence matched from a pre-existing
-// OpenAPI document a reviewer named via config's
-// analysis.existingOpenAPIDocument, per
-// docs/adr/0013-existing-openapi-document-reconciliation.md. It is the
-// lowest-precedence prose/schema source gin-recon's OpenAPI formatter
-// applies — analyzer-typed evidence and swag annotations (ADR 0012, Route.Swag)
-// both take priority over it — and, like SwagInfo, it never affects route
-// identity, method, path, handler, middleware, or auth classification.
-// Nil when analysis.existingOpenAPIDocument is unset, the document could not
-// be read/parsed, or no document operation matched this route by normalized
-// (method, path).
-type ExistingDocumentInfo struct {
-	Summary     string   `json:"summary,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Deprecated  bool     `json:"deprecated,omitempty"`
-
-	// ParamDescriptions maps a path parameter name to the document's own
-	// description for it. Populated only when the document's path parameter
-	// names agree, in order, with this route's own discovered Gin path
-	// parameter names — the structural-compatibility check ADR 0007/0013
-	// require before accepting schema-shaped document content. Never used to
-	// add, rename, or reorder a parameter: only to enrich one gin-recon's own
-	// path-parameter derivation (from GinPath) already produced.
-	ParamDescriptions map[string]string `json:"paramDescriptions,omitempty"`
-
-	// ParamConflict is true when the document's path parameter names
-	// disagreed with this route's own discovered ones. When true,
-	// ParamDescriptions is never populated, and
-	// internal/format/openapi.go's applyExistingDocEvidence marks the
-	// generated operation unrefined for "parameters" via the existing
-	// x-gin-recon.unrefined mechanism rather than applying any parameter
-	// content from the document. See the "openapi-spec-conflict" diagnostic
-	// emitted alongside this at match time.
-	ParamConflict bool `json:"paramConflict,omitempty"`
-}
-
 // IOEvidence is optional, static/hybrid-only request/response shape evidence
 // for a route. See docs/report-contract.md#route-evidence.
 type IOEvidence struct {
@@ -310,22 +273,21 @@ const (
 // NormalizedPath (docs/report-contract.md#route-evidence); Auth is present
 // only in audit reports.
 type Route struct {
-	Method             string                `json:"method"`
-	GinPath            string                `json:"ginPath"`
-	NormalizedPath     string                `json:"normalizedPath"`
-	SurfaceKind        SurfaceKind           `json:"surfaceKind"`
-	RegistrationKind   *RegistrationKind     `json:"registrationKind,omitempty"`
-	Middleware         []Middleware          `json:"middleware"`
-	FinalHandler       Middleware            `json:"finalHandler"`
-	Source             *Source               `json:"source"`
-	PathConfidence     Confidence            `json:"pathConfidence"`
-	AnalysisConfidence Confidence            `json:"analysisConfidence"`
-	BuildContext       BuildContext          `json:"buildContext"`
-	EvidenceOrigins    []string              `json:"evidenceOrigins"`
-	IO                 *IOEvidence           `json:"io,omitempty"`
-	Auth               *AuthClassification   `json:"auth,omitempty"`
-	Swag               *SwagInfo             `json:"swag,omitempty"`
-	ExistingDocument   *ExistingDocumentInfo `json:"existingDocument,omitempty"`
+	Method             string              `json:"method"`
+	GinPath            string              `json:"ginPath"`
+	NormalizedPath     string              `json:"normalizedPath"`
+	SurfaceKind        SurfaceKind         `json:"surfaceKind"`
+	RegistrationKind   *RegistrationKind   `json:"registrationKind,omitempty"`
+	Middleware         []Middleware        `json:"middleware"`
+	FinalHandler       Middleware          `json:"finalHandler"`
+	Source             *Source             `json:"source"`
+	PathConfidence     Confidence          `json:"pathConfidence"`
+	AnalysisConfidence Confidence          `json:"analysisConfidence"`
+	BuildContext       BuildContext        `json:"buildContext"`
+	EvidenceOrigins    []string            `json:"evidenceOrigins"`
+	IO                 *IOEvidence         `json:"io,omitempty"`
+	Auth               *AuthClassification `json:"auth,omitempty"`
+	Swag               *SwagInfo           `json:"swag,omitempty"`
 }
 
 // MarshalJSON defaults nil Middleware/EvidenceOrigins to []; see the package
