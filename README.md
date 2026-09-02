@@ -6,7 +6,15 @@ Version 1 is static-first, so it never executes the target application. See [PLA
 
 ## Status
 
-Pre-release, with no stable binary yet. See [PLAN.md](PLAN.md#delivery-phases) for the current phase and [PLAN.md](PLAN.md#release-criteria) for what "stable" means at each stage. Both the `typed` and `syntax-only` analysis profiles and the commands below are implemented and tested. The MCP server (`cmd/gin-recon-mcp`) is planned but not yet built; see [docs/mcp-security.md](docs/mcp-security.md) and [PLAN.md](PLAN.md#delivery-phases).
+Pre-release, with no distributed binary yet. See [PLAN.md](PLAN.md#delivery-phases) for the current phase and [PLAN.md](PLAN.md#release-criteria) for what "stable" means at each stage. Both the `typed` and `syntax-only` analysis profiles and the commands below are implemented and tested. The MCP server (`cmd/gin-recon-mcp`) is planned but not yet built; see [docs/mcp-security.md](docs/mcp-security.md) and [PLAN.md](PLAN.md#delivery-phases).
+
+## Install
+
+```sh
+go install github.com/sagnikhaldar/gin-recon/cmd/gin-recon@latest
+```
+
+This builds from source locally rather than downloading a pre-built binary, which matches where the project actually is: PLAN.md's Alpha stage calls for source tags only, since signed binaries with provenance aren't operational yet. Requires Go 1.25 or newer.
 
 ## Commands
 
