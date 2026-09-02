@@ -99,10 +99,10 @@ real, human- or code-derived content gin-recon merged into the skeleton
 itself, from an evidence source ranked above this skill's own AI enrichment
 pass in gin-recon's evidence precedence (analyzer-typed evidence > `swag` >
 this skill fills whatever is still a placeholder — see
-[docs/adr/0007-openapi-evidence-precedence.md](../../docs/adr/0007-openapi-evidence-precedence.md)):
+[docs/openapi.md](../../docs/openapi.md#evidence-precedence)):
 `swag` is a handler's own swaggo/swag-style Go doc comment
 (`@Summary`/`@Description`/`@Tags`/`@Deprecated`,
-[docs/adr/0012-swag-annotation-evidence.md](../../docs/adr/0012-swag-annotation-evidence.md)).
+see [docs/openapi.md](../../docs/openapi.md#swaggoswag-doc-comment-annotations)).
 It is already applied to the fields above before you ever open the
 skeleton — you're reading its result, not a raw evidence blob you still
 need to merge yourself.
@@ -235,7 +235,7 @@ Schema guidance:
      Subresource Integrity hash so a compromised CDN can't inject code. This
      is a deliberate, one-off human choice, not something gin-recon itself
      ever does by default — see
-     [docs/adr/0009-self-contained-html-viewer.md](../../docs/adr/0009-self-contained-html-viewer.md)
+     [docs/openapi.md](../../docs/openapi.md#the-self-contained-html-viewer)
      for why `api.html` stays self-contained and offline by default:
 
      ```bash

@@ -26,7 +26,7 @@ The syntax-only profile reads files beneath an explicitly resolved root using th
 
 ### Typed
 
-The typed profile uses `go/packages` and therefore invokes Go package-loading machinery. It still never runs the application, but it has a larger trust boundary than syntax-only mode. Registrar-following stays within the target module's own source unless `analysis.followModules` explicitly opts specific dependency modules in — see [ADR 0010](adr/0010-opt-in-cross-module-registrar-following.md); a resolved cross-module route's source is a stable `<module path>@<version>/<path>` label, never an absolute filesystem path.
+The typed profile uses `go/packages` and therefore invokes Go package-loading machinery. It still never runs the application, but it has a larger trust boundary than syntax-only mode. Registrar-following stays within the target module's own source unless `analysis.followModules` explicitly opts specific dependency modules in (see [docs/reference.md](reference.md#top-level-shape)); a resolved cross-module route's source is a stable `<module path>@<version>/<path>` label, never an absolute filesystem path.
 
 Before invocation it must:
 

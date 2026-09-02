@@ -29,3 +29,4 @@ scratchpad/
 # Internal planning/comparison docs, kept locally, not published
 /PLAN.md
 /docs/express-parity-matrix.md
+/docs/adr/

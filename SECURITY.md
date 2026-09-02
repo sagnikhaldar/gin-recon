@@ -13,7 +13,7 @@ Gin Recon is static-only in v1: it never runs the target application. Two analys
 - **`syntax-only`** reads files beneath an explicitly resolved root with the standard parser. It does not invoke the Go toolchain, resolve remote modules, or load plugins, and rejects symlinks that escape the root. This is the appropriate profile for untrusted checkouts.
 - **`typed`** invokes `go/packages` under a sanitized, allowlisted environment with module/toolchain downloads disabled by default (`--allow-downloads` opts in explicitly). It still never runs the target application, but has a larger trust boundary than `syntax-only`. For genuinely hostile code, run typed analysis inside an OS/container sandbox with network disabled and a read-only checkout.
 
-Configuration is strict, non-executable JSON/YAML — see [docs/adr/0003-data-only-configuration.md](docs/adr/0003-data-only-configuration.md). Gin Recon never executes target-provided configuration.
+Configuration is strict, non-executable JSON/YAML. Gin Recon never executes target-provided configuration.
 
 ## Accepted dependency risk
 

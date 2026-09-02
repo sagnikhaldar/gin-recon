@@ -58,7 +58,7 @@ Exit code `2` means the requested gate matched: an expected policy result, not a
 | `render` | Regenerates any output format from an already-saved `routes.json`, with no re-analysis: no source tree, no network, and typically well under a second even on a large repository. |
 | `schema` | Emits the versioned report or configuration JSON Schema. |
 
-Full reference: [docs/cli-contract.md](docs/cli-contract.md) for every flag, [docs/configuration-contract.md](docs/configuration-contract.md) for the config format.
+Full reference: [docs/reference.md](docs/reference.md) for every flag and the config format.
 
 ## The evidence model
 
@@ -66,7 +66,7 @@ gin-recon separates facts from decisions:
 
 - `inventory` records observed routes, middleware chains, source locations, and coverage. It makes no security judgment.
 - `audit` applies a reviewed `authMiddleware` allowlist and optional policies to that inventory, producing `proven`, `public`, or `unknown` per route.
-- A route is never treated as authenticated just because analysis is incomplete, a middleware name sounds security-related, or evidence is missing. See [docs/adr/0005-conservative-classification.md](docs/adr/0005-conservative-classification.md).
+- A route is never treated as authenticated just because analysis is incomplete, a middleware name sounds security-related, or evidence is missing. This conservative-classification stance is deliberate: a silently-optimistic guess is worse than a route reported `unknown`.
 - Configured authentication evidence is a reviewer-backed assertion, not formal verification.
 
 Every JSON report is deterministic and versioned. Run `gin-recon schema` for its JSON Schema.
@@ -77,15 +77,15 @@ Every JSON report is deterministic and versioned. Run `gin-recon schema` for its
 gin-recon audit --src . --format openapi --out .gin-recon
 ```
 
-This writes a versioned OpenAPI 3.1 document (`openapi.json`) alongside a self-contained, dependency-free HTML viewer (`api.html`), generated entirely offline with no CDN and no network access at view time. See [docs/adr/0009-self-contained-html-viewer.md](docs/adr/0009-self-contained-html-viewer.md).
+This writes a versioned OpenAPI 3.1 document (`openapi.json`) alongside a self-contained, dependency-free HTML viewer (`api.html`), generated entirely offline with no CDN and no network access at view time. That's a deliberate choice, not an omission: see [docs/openapi.md](docs/openapi.md#the-self-contained-html-viewer) for why.
 
 Generated documents are never invented. Analyzer-resolved evidence (route identity, method, path, auth) is always authoritative; the following sources can only enrich prose and schemas where code evidence is unresolved, in this order:
 
 1. **Analyzer-typed evidence** - an actually-bound Go request/response struct.
-2. **swag/swaggo doc-comment annotations** (`@Summary`, `@Description`, `@Tags`, `@Router`, `@Deprecated` above a handler) - parsed automatically on every scan, with no configuration required. See [docs/adr/0012-swag-annotation-evidence.md](docs/adr/0012-swag-annotation-evidence.md).
+2. **swag/swaggo doc-comment annotations** (`@Summary`, `@Description`, `@Tags`, `@Router`, `@Deprecated` above a handler) - parsed automatically on every scan, with no configuration required.
 3. **AI-assisted enrichment** - the bundled [`skills/openapi-doc`](skills/openapi-doc/SKILL.md) skill reads real handler code to fill in request/response schemas that gin-recon itself doesn't infer.
 
-See [docs/openapi-strategy.md](docs/openapi-strategy.md) and [docs/adr/0007-openapi-evidence-precedence.md](docs/adr/0007-openapi-evidence-precedence.md) for the full precedence rules.
+See [docs/openapi.md](docs/openapi.md) for the full precedence rules and the swag annotation format.
 
 ## Pull-request gates
 
@@ -104,19 +104,16 @@ Baseline comparison fails when the two reports carry different scan-scope finger
 
 ## Known boundaries
 
-- One `--src` module scan produces one inventory. gin-recon does not detect or partition multiple distinct `*gin.Engine` applications within a single repository, and has no stable per-service identifier beyond the scanned Go module path. Both are deliberate, unbuilt roadmap items, not gaps; see [docs/adr/0011-multi-app-service-identity-and-spec-reconciliation.md](docs/adr/0011-multi-app-service-identity-and-spec-reconciliation.md).
-- Registrar-following never crosses into a dependency module unless that module is explicitly named in `analysis.followModules`. An unresolved cross-module registrar is reported (`gin-unresolved-registrar`), not silently skipped. See [docs/adr/0010-opt-in-cross-module-registrar-following.md](docs/adr/0010-opt-in-cross-module-registrar-following.md).
+- One `--src` module scan produces one inventory. gin-recon does not detect or partition multiple distinct `*gin.Engine` applications within a single repository, and has no stable per-service identifier beyond the scanned Go module path. Both are deliberate, unbuilt roadmap items, not gaps.
+- Registrar-following never crosses into a dependency module unless that module is explicitly named in `analysis.followModules`. An unresolved cross-module registrar is reported (`gin-unresolved-registrar`), not silently skipped. See [docs/reference.md](docs/reference.md#top-level-shape) for how to opt specific modules in.
 - Auth classification is only as sound as the reviewed `authMiddleware` configuration.
 - OpenAPI request/response schemas stay as generic placeholders until grounded by one of the evidence sources above.
 - Static analysis cannot fully recover data-driven route registration or every dynamic dispatch pattern. It retains partial evidence and diagnostics instead of silently dropping it.
 
 ## Documentation
 
-- [CLI and report reference](docs/cli-contract.md)
-- [Configuration format](docs/configuration-contract.md)
-- [OpenAPI generation strategy](docs/openapi-strategy.md)
-- [Report schema contract](docs/report-contract.md)
-- [Architecture decision records](docs/adr/)
+- [CLI, configuration, and report reference](docs/reference.md)
+- [OpenAPI documentation](docs/openapi.md)
 - [Security and threat model](docs/threat-model.md)
 
 ## Status
