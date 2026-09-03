@@ -1,12 +1,15 @@
 ---
 name: gin-recon-audit
 description: >-
-  Audit or inventory a Gin (gin-gonic) codebase's HTTP routes and middleware.
-  Use when asked to find unauthenticated/open endpoints, list all routes and
-  their auth/middleware, check which routes lack an auth guard, or produce a
-  route inventory for a Gin service. Triggers: "audit gin routes", "find open
-  endpoints", "which routes have no auth", "list routes and middleware", "gin
-  attack surface", "unauthenticated API endpoints".
+  Audit or inventory a Gin (gin-gonic) codebase's HTTP routes and middleware,
+  for one repository or many at once. Use when asked to find
+  unauthenticated/open endpoints, list all routes and their auth/middleware,
+  check which routes lack an auth guard, produce a route inventory for a Gin
+  service, or audit multiple repositories/a whole GitHub organization in one
+  pass. Triggers: "audit gin routes", "find open endpoints", "which routes
+  have no auth", "list routes and middleware", "gin attack surface",
+  "unauthenticated API endpoints", "audit all our services", "audit this
+  org's repos".
 ---
 
 # Gin route audit (gin-recon)
@@ -223,6 +226,72 @@ gin-recon audit --src <repoDir> --config <cfg> --format sarif,md \
 commits. `routes.md` is a human-readable PR-comment-ready summary. Both are
 escaped against a hostile scanned repository injecting content into the
 rendered output (docs/threat-model.md).
+
+## Auditing many repos at once (fleet)
+
+Reach for `fleet` instead of a loop of manual `audit` invocations whenever
+the ask spans more than one repository: "audit all our services," "check
+this whole org for open endpoints," or any request naming several repos by
+name. It runs the exact same `audit` you'd run by hand, once per target, in
+its own subprocess, and aggregates the results — nothing about
+classification, findings, or evidence differs from a single-repo `audit`.
+
+For a known, fixed set of local checkouts, write a targets manifest:
+
+```json
+{
+  "version": 1,
+  "targets": [
+    { "name": "svc-a", "src": "/path/to/svc-a" },
+    { "name": "svc-b", "src": "/path/to/svc-b" }
+  ]
+}
+```
+
+```bash
+gin-recon fleet --targets targets.json --config <cfg.json> --out <outDir> \
+  --concurrency 4 --fail-on incomplete
+```
+
+For a whole GitHub organization, skip hand-writing the manifest:
+
+```bash
+gin-recon fleet --org <name> --config <cfg.json> --out <outDir> \
+  --allow-remote-targets --fail-on incomplete
+```
+
+`--org` needs `--allow-remote-targets` plus `api.github.com` **and** the
+repositories' own host (usually `github.com`) both listed in
+`--config`'s `fleet.allowedRemoteHosts` — this is a real, deliberate trust
+boundary (fetching the target's source itself, not just resolving Go module
+dependencies), not a flag to add reflexively. If the user hasn't set this up
+yet, show them the two-entry config shape rather than guessing at scope:
+
+```json
+{ "version": 1, "fleet": { "allowedRemoteHosts": [
+  { "host": "api.github.com", "tokenEnv": "GH_TOKEN" },
+  { "host": "github.com" }
+] } }
+```
+
+Read the results from `<outDir>/fleet.json` (or open `fleet.html` — a
+self-contained summary table linking to every target's own report) rather
+than opening each target individually. Each target lands in exactly one of
+`ok`, `not-go-module` (no `go.mod` — never counted as a failure), or
+`failed` (retried automatically on the next `--resume`, so a long fleet run
+interrupted partway through is safe to re-invoke with `--resume` added
+rather than restarted from scratch).
+
+**One caveat worth surfacing to the user, not just noting silently:** every
+target in a fleet run shares the same `--config`, so the same
+`authMiddleware` entries apply to every repo. A config written for one
+service's real middleware symbols will classify every route in a
+differently-structured service as `public` with zero warning beyond
+`stale-auth-config` findings for the unmatched entries — this is exactly
+gin-recon's conservative-by-design behavior, not a bug, but it means a fleet
+result showing one target at 100% public deserves a second look at whether
+that target actually has its own auth middleware missing from the shared
+config, before reporting it as a real finding.
 
 ## Comparing against a prior run
 
