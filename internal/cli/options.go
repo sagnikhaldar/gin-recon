@@ -103,6 +103,15 @@ type Options struct {
 	Resume             bool
 	AllowRemoteTargets bool
 
+	// fleet --org only (docs/adr/0021-fleet-org-enumeration.md): an
+	// alternative to TargetsPath that populates the same manifest shape by
+	// enumerating a GitHub organization instead of reading a hand-written
+	// file. Exactly one of TargetsPath/Org is required.
+	Org             string
+	MaxRepos        int
+	IncludeArchived bool
+	IncludeForks    bool
+
 	// ExplicitFlags records which flag names the user actually passed on the
 	// command line, as opposed to a field merely holding its default value
 	// (e.g. GOOS defaults to runtime.GOOS, indistinguishable from an

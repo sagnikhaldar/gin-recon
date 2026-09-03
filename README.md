@@ -56,7 +56,7 @@ Exit code `2` means the requested gate matched: an expected policy result, not a
 | `audit` | Authentication classification, policy evaluation, findings, and baseline comparison (`--baseline`, `--fail-on new,regression`). |
 | `suggest-auth` | Ranked canonical middleware candidates to help write configuration. Never affects classification. |
 | `render` | Regenerates any output format from an already-saved `routes.json`, with no re-analysis: no source tree, no network, and typically well under a second even on a large repository. |
-| `fleet` | Runs `audit` once per target listed in a manifest, aggregating results with bounded concurrency and checkpointed resume. See [docs/reference.md](docs/reference.md#fleet-options). |
+| `fleet` | Runs `audit` once per target listed in a manifest (or discovered from a GitHub organization with `--org`), aggregating results with bounded concurrency and checkpointed resume. See [docs/reference.md](docs/reference.md#fleet-options). |
 | `schema` | Emits the versioned report or configuration JSON Schema. |
 
 Full reference: [docs/reference.md](docs/reference.md) for every flag and the config format.

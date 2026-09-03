@@ -139,13 +139,43 @@ func TestValidateRejectsZeroTimeout(t *testing.T) {
 	expectValidateError(t, "must be positive", "inventory", "--src="+dir, "--timeout=0s")
 }
 
-func TestValidateFleetRequiresTargets(t *testing.T) {
+func TestValidateFleetRequiresTargetsOrOrg(t *testing.T) {
 	dir := t.TempDir()
-	expectValidateError(t, "--targets is required", "fleet", "--out="+dir)
+	expectValidateError(t, "exactly one of --targets or --org", "fleet", "--out="+dir)
+}
+
+func TestValidateFleetRejectsBothTargetsAndOrg(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "exactly one of --targets or --org", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--org=myorg", "--allow-remote-targets")
 }
 
 func TestValidateFleetRequiresOut(t *testing.T) {
 	expectValidateError(t, "--out is required", "fleet", "--targets=/tmp/targets.json")
+}
+
+func TestValidateFleetOrgRequiresAllowRemoteTargets(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--org requires --allow-remote-targets", "fleet", "--out="+dir, "--org=myorg")
+}
+
+func TestValidateFleetOrgAcceptsAllowRemoteTargets(t *testing.T) {
+	dir := t.TempDir()
+	mustParseAndValidate(t, "fleet", "--out="+dir, "--org=myorg", "--allow-remote-targets")
+}
+
+func TestValidateFleetRejectsMaxReposWithoutOrg(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--max-repos is --org only", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--max-repos=50")
+}
+
+func TestValidateFleetRejectsIncludeArchivedWithoutOrg(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--org only", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--include-archived")
+}
+
+func TestValidateFleetRejectsMaxReposOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "must be between 1 and", "fleet", "--out="+dir, "--org=myorg", "--allow-remote-targets", "--max-repos=100000")
 }
 
 func TestValidateFleetRejectsOutOfRangeConcurrency(t *testing.T) {

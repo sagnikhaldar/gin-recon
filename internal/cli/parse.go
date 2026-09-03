@@ -193,13 +193,17 @@ func parseFleet(args []string) (*Options, error) {
 	opts := &Options{Command: CommandFleet, Concurrency: 1}
 
 	registerOnceString(fs, "targets", &opts.TargetsPath)
+	registerOnceString(fs, "org", &opts.Org)
 	registerOnceString(fs, "config", &opts.ConfigPath)
 	registerOnceString(fs, "out", &opts.OutDir)
 	registerOnceBool(fs, "force", &opts.Force)
 	registerOnceBool(fs, "resume", &opts.Resume)
 	registerOnceBool(fs, "allow-remote-targets", &opts.AllowRemoteTargets)
-	var concurrency string
+	registerOnceBool(fs, "include-archived", &opts.IncludeArchived)
+	registerOnceBool(fs, "include-forks", &opts.IncludeForks)
+	var concurrency, maxRepos string
 	registerOnceString(fs, "concurrency", &concurrency)
+	registerOnceString(fs, "max-repos", &maxRepos)
 	fs.Var(&repeatableList{&opts.FailOn}, "fail-on", "repeatable or comma-separated gate selector")
 	var formats []string
 	fs.Var(&repeatableList{&formats}, "format", "repeatable or comma-separated output format")
@@ -220,6 +224,13 @@ func parseFleet(args []string) (*Options, error) {
 			return nil, fmt.Errorf("--concurrency: invalid integer %q", concurrency)
 		}
 		opts.Concurrency = n
+	}
+	if maxRepos != "" {
+		n, err := strconv.Atoi(maxRepos)
+		if err != nil {
+			return nil, fmt.Errorf("--max-repos: invalid integer %q", maxRepos)
+		}
+		opts.MaxRepos = n
 	}
 	for _, f := range formats {
 		opts.Formats = append(opts.Formats, OutputFormat(f))

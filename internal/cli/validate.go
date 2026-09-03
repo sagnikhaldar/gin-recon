@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
 )
 
@@ -56,8 +57,21 @@ func Validate(opts *Options) error {
 	// --fail-on is restricted to the one selector meaningful at fleet scope
 	// today (docs/adr/0018-fleet-scanning.md).
 	if opts.Command == CommandFleet {
-		if opts.TargetsPath == "" {
-			return fmt.Errorf("--targets is required")
+		if (opts.TargetsPath == "") == (opts.Org == "") {
+			return fmt.Errorf("exactly one of --targets or --org is required")
+		}
+		if opts.Org != "" && !opts.AllowRemoteTargets {
+			return fmt.Errorf("--org requires --allow-remote-targets: discovering an organization's repositories is itself a network call")
+		}
+		if opts.Org == "" {
+			if opts.MaxRepos != 0 {
+				return fmt.Errorf("--max-repos is --org only")
+			}
+			if opts.IncludeArchived || opts.IncludeForks {
+				return fmt.Errorf("--include-archived/--include-forks are --org only")
+			}
+		} else if opts.MaxRepos != 0 && (opts.MaxRepos < 1 || opts.MaxRepos > fleet.MaxMaxRepos) {
+			return fmt.Errorf("--max-repos: must be between 1 and %d, got %d", fleet.MaxMaxRepos, opts.MaxRepos)
 		}
 		if opts.OutDir == "" {
 			return fmt.Errorf("--out is required")

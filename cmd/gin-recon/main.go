@@ -887,11 +887,112 @@ func runRender(opts *cli.Options, stdout, stderr io.Writer) int {
 // overwrite an existing fleet.json without --force, the same convention
 // writeReport already applies to every other command's output — and
 // resolves the binary fleet re-execs per target.
+// discoveredTargetsFilename is where a --org run's discovered manifest is
+// persisted, per docs/adr/0021-fleet-org-enumeration.md: an auditable,
+// replayable record of exactly what was scanned, independent of the
+// organization's membership possibly changing before the next run.
+const discoveredTargetsFilename = "discovered-targets.json"
+
+// resolveFleetManifest implements cli.Validate's already-enforced "exactly
+// one of --targets or --org" rule: it loads a hand-written manifest, or
+// discovers one from a GitHub organization and persists it, so the rest of
+// runFleet never needs to know which one happened.
+func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, stderr io.Writer) (manifestPath string, manifest *fleet.Manifest, manifestData []byte, exitCode int) {
+	if opts.Org == "" {
+		manifest, manifestData, err := fleet.LoadManifest(opts.TargetsPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return "", nil, nil, cli.ExitOperationalError
+		}
+		return opts.TargetsPath, manifest, manifestData, cli.ExitSuccess
+	}
+
+	// --org's own network call is gated by the identical two-part rule
+	// remote clones already use: --allow-remote-targets (checked by
+	// cli.Validate before this function is ever reached) plus an explicit
+	// api.github.com entry in fleet.allowedRemoteHosts.
+	var token string
+	found := false
+	for _, h := range allowedHosts {
+		if h.Host != "api.github.com" {
+			continue
+		}
+		found = true
+		if h.TokenEnv != "" {
+			var ok bool
+			token, ok = os.LookupEnv(h.TokenEnv)
+			if !ok {
+				fmt.Fprintf(stderr, "gin-recon: --org: environment variable %q named by fleet.allowedRemoteHosts is not set\n", h.TokenEnv)
+				return "", nil, nil, cli.ExitOperationalError
+			}
+		}
+		break
+	}
+	if !found {
+		fmt.Fprintf(stderr, "gin-recon: --org: \"api.github.com\" is not in fleet.allowedRemoteHosts (required to enumerate an organization's repositories)\n")
+		return "", nil, nil, cli.ExitOperationalError
+	}
+
+	result, err := fleet.DiscoverOrgRepos(context.Background(), fleet.DiscoverOptions{
+		Org:             opts.Org,
+		IncludeArchived: opts.IncludeArchived,
+		IncludeForks:    opts.IncludeForks,
+		MaxRepos:        opts.MaxRepos,
+		Token:           token,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return "", nil, nil, cli.ExitOperationalError
+	}
+	if result.Incomplete {
+		fmt.Fprintf(stderr, "gin-recon: --org %s: discovery is incomplete (--max-repos or the page cap was reached); rerun with a higher --max-repos for full coverage\n", opts.Org)
+	}
+	if len(result.Skipped) > 0 {
+		fmt.Fprintf(stderr, "gin-recon: --org %s: skipped %d repositories whose name doesn't fit a fleet target name\n", opts.Org, len(result.Skipped))
+	}
+
+	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return "", nil, nil, cli.ExitOperationalError
+	}
+	data, err := json.MarshalIndent(result.Manifest, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: --org: encoding discovered manifest: %v\n", err)
+		return "", nil, nil, cli.ExitOperationalError
+	}
+	discoveredPath := filepath.Join(opts.OutDir, discoveredTargetsFilename)
+	if err := os.WriteFile(discoveredPath, data, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return "", nil, nil, cli.ExitOperationalError
+	}
+	return discoveredPath, result.Manifest, data, cli.ExitSuccess
+}
+
 func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
-	manifest, manifestData, err := fleet.LoadManifest(opts.TargetsPath)
+	// The shared --config is loaded up front (in addition to being passed
+	// through to each target's own audit subprocess) purely to read
+	// fleet.allowedRemoteHosts — docs/adr/0019-fleet-remote-targets.md's
+	// config-reviewed scope for --allow-remote-targets. No other config
+	// field is read at this layer; everything else still only ever reaches
+	// analysis through the per-target audit subprocess itself. --org needs
+	// this resolved before anything else, since discovering an
+	// organization's repositories is itself a network call authorized the
+	// same way (docs/adr/0021-fleet-org-enumeration.md).
+	cfg, err := loadConfig(opts.ConfigPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
+	}
+	var allowedHosts []fleet.AllowedHost
+	if cfg.Fleet != nil {
+		for _, h := range cfg.Fleet.AllowedRemoteHosts {
+			allowedHosts = append(allowedHosts, fleet.AllowedHost{Host: h.Host, TokenEnv: h.TokenEnv})
+		}
+	}
+
+	manifestPath, manifest, manifestData, exitCode := resolveFleetManifest(opts, allowedHosts, stderr)
+	if exitCode != cli.ExitSuccess {
+		return exitCode
 	}
 
 	aggregatePath := filepath.Join(opts.OutDir, fleetAggregateFilename)
@@ -911,27 +1012,9 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		return cli.ExitOperationalError
 	}
 
-	// The shared --config is loaded here too (in addition to being passed
-	// through to each target's own audit subprocess) purely to read
-	// fleet.allowedRemoteHosts — docs/adr/0019-fleet-remote-targets.md's
-	// config-reviewed scope for --allow-remote-targets. No other config
-	// field is read at this layer; everything else still only ever reaches
-	// analysis through the per-target audit subprocess itself.
-	cfg, err := loadConfig(opts.ConfigPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return cli.ExitOperationalError
-	}
-	var allowedHosts []fleet.AllowedHost
-	if cfg.Fleet != nil {
-		for _, h := range cfg.Fleet.AllowedRemoteHosts {
-			allowedHosts = append(allowedHosts, fleet.AllowedHost{Host: h.Host, TokenEnv: h.TokenEnv})
-		}
-	}
-
 	var stderrBuf bytes.Buffer
 	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
-		ManifestPath: opts.TargetsPath,
+		ManifestPath: manifestPath,
 		Manifest:     manifest,
 		ManifestData: manifestData,
 		ConfigPath:   opts.ConfigPath,

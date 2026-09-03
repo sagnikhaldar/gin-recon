@@ -85,7 +85,7 @@ SARIF is audit-only. Inventory OpenAPI contains no authentication assertions. `a
 
 `fleet` orchestrates one `audit` subprocess per target in a manifest instead of scanning a single `--src`. It accepts none of the scan/analysis options above — each target supplies its own source, resolved from the manifest, not from a flag on this command. Each target's `audit` runs in its own subprocess rather than in-process, so one hostile or resource-exhausting target is contained by the same process boundary an ordinary single-repo scan already has.
 
-- `--targets <file>` (required): a strict JSON manifest, `{"version": 1, "targets": [{"name": "...", "src": "..."}]}`. `name` becomes that target's output subdirectory name and must match `^[A-Za-z0-9._-]+$`. Each target names exactly one of `src` (a local directory, resolved relative to the manifest file's own directory when not absolute) or `git` (a remote to clone — see below); naming both, or neither, fails validation.
+- `--targets <file>` / `--org <name>` (exactly one required): `--targets` is a strict JSON manifest, `{"version": 1, "targets": [{"name": "...", "src": "..."}]}`. `name` becomes that target's output subdirectory name and must match `^[A-Za-z0-9._-]+$`. Each target names exactly one of `src` (a local directory, resolved relative to the manifest file's own directory when not absolute) or `git` (a remote to clone — see below); naming both, or neither, fails validation. `--org` populates the same manifest shape by enumerating a GitHub organization's repositories instead — see below.
 - `--config <file>`: applied identically to every target's own `audit` invocation, and (only for `fleet` itself) read for `fleet.allowedRemoteHosts` — see below.
 - `--out <dir>` (required): `fleet.json` (the aggregate) is written here, alongside each target's full, untouched report under `targets/<name>/`. `fleet.html` — a self-contained, dependency-free summary page linking to every target's own report — is always written alongside it, the same unconditional relationship `api.html` already has with `openapi.json`.
 - `--force`: required to overwrite an existing `fleet.json`, same convention as every other command's output — unless `--resume` is also given.
@@ -113,6 +113,15 @@ Two things must both be true before a `git` target's clone is even attempted, th
    A `git` target whose host isn't listed here is a `failed` result for that one target, not a whole-run abort. `tokenEnv` is optional and names an environment variable — never a credential value — whose contents (required to actually be set, or the target fails clearly) are sent as a scoped HTTP `Authorization` header for that host's clone only, never written to any config or written to disk.
 
 Without both, a `fleet` run's network reach is exactly what it always was: whatever `--allow-downloads` already permits for Go module resolution against already-local code, nothing more.
+
+#### Organization enumeration
+
+`--org <name>` populates the same manifest `--targets` reads, by listing a GitHub organization's repositories instead of reading a hand-written file — every discovered repository becomes a `git` target, so everything above about remote targets applies to it unchanged. `--org` requires `--allow-remote-targets` (enumerating repositories is itself a network call, to `api.github.com`) and requires `api.github.com` to be its own entry in `fleet.allowedRemoteHosts` — separate from whatever host the discovered repositories' own clone URLs use. Its `tokenEnv` authenticates the enumeration call; `github.com`'s own entry (or whichever host the org's repositories actually live on) still separately authorizes the clones that follow.
+
+- `--max-repos <n>`: default `100`, hard cap `1000`. Reaching it with more repositories still available prints a warning and marks the fleet's `coverage.complete` false — never a silent partial list presented as the whole organization.
+- `--include-archived` / `--include-forks`: both default to excluded.
+- The discovered manifest is written to `<outDir>/discovered-targets.json` before the fleet run proceeds, in the exact shape a hand-written `--targets` file would use — an auditable, replayable record of what was actually scanned, independent of the organization's membership possibly changing before the next run.
+- A discovered repository name that doesn't fit a target name (`^[A-Za-z0-9._-]+$`) is skipped with a warning, not a fatal error for the whole discovery.
 
 ### Precedence and validation
 
