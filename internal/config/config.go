@@ -152,6 +152,27 @@ type OpenAPIConfig struct {
 	SecuritySchemes map[string]SecurityScheme `json:"securitySchemes,omitempty" yaml:"securitySchemes,omitempty"`
 }
 
+// RemoteHost is one entry in fleet.allowedRemoteHosts: an exact hostname a
+// `fleet --allow-remote-targets` run is permitted to clone from, and
+// optionally which environment variable holds a token for it
+// (docs/adr/0019-fleet-remote-targets.md). TokenEnv names a variable, never
+// a credential value — the value itself is resolved from the environment at
+// clone time, not stored in this reviewed, shared config file.
+type RemoteHost struct {
+	Host     string `json:"host" yaml:"host"`
+	TokenEnv string `json:"tokenEnv,omitempty" yaml:"tokenEnv,omitempty"`
+}
+
+// FleetConfig scopes what a `fleet` run's remote targets may reach.
+// AllowedRemoteHosts is empty by default: matching every other
+// trust-widening setting in this package (authMiddleware, followModules,
+// securitySchemes), no host is ever reachable unless a reviewer names it
+// here — the `--allow-remote-targets` CLI flag only ever unlocks the
+// capability, never the scope (docs/adr/0019-fleet-remote-targets.md).
+type FleetConfig struct {
+	AllowedRemoteHosts []RemoteHost `json:"allowedRemoteHosts,omitempty" yaml:"allowedRemoteHosts,omitempty"`
+}
+
 // Config is the strict, data-only root object (schema/config-1.json).
 // Construct it only via Decode, never by hand-populating a zero value and
 // skipping validation — see decode.go.
@@ -165,4 +186,5 @@ type Config struct {
 	Analysis       *AnalysisConfig                `json:"analysis,omitempty" yaml:"analysis,omitempty"`
 	Limits         *LimitsConfig                  `json:"limits,omitempty" yaml:"limits,omitempty"`
 	OpenAPI        *OpenAPIConfig                 `json:"openapi,omitempty" yaml:"openapi,omitempty"`
+	Fleet          *FleetConfig                   `json:"fleet,omitempty" yaml:"fleet,omitempty"`
 }

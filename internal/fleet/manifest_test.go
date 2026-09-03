@@ -98,7 +98,64 @@ func TestLoadManifestRejectsEmptySrc(t *testing.T) {
 	dir := t.TempDir()
 	path := writeManifest(t, dir, `{"version":1,"targets":[{"name":"a","src":""}]}`)
 	_, _, err := LoadManifest(path)
-	if err == nil || !strings.Contains(err.Error(), "src is required") {
-		t.Fatalf("err = %v, want a src-required complaint", err)
+	if err == nil || !strings.Contains(err.Error(), `exactly one of "src" or "git"`) {
+		t.Fatalf("err = %v, want an exactly-one-of complaint", err)
+	}
+}
+
+func TestLoadManifestRejectsBothSrcAndGit(t *testing.T) {
+	dir := t.TempDir()
+	path := writeManifest(t, dir, `{"version":1,"targets":[{"name":"a","src":".","git":{"url":"https://example.com/r.git"}}]}`)
+	_, _, err := LoadManifest(path)
+	if err == nil || !strings.Contains(err.Error(), `exactly one of "src" or "git"`) {
+		t.Fatalf("err = %v, want an exactly-one-of complaint", err)
+	}
+}
+
+func TestLoadManifestAcceptsGitTarget(t *testing.T) {
+	dir := t.TempDir()
+	path := writeManifest(t, dir, `{"version":1,"targets":[{"name":"a","git":{"url":"https://github.com/example/repo.git","ref":"main"}}]}`)
+	m, _, err := LoadManifest(path)
+	if err != nil {
+		t.Fatalf("LoadManifest: unexpected error: %v", err)
+	}
+	if m.Targets[0].Git == nil || m.Targets[0].Git.URL != "https://github.com/example/repo.git" {
+		t.Fatalf("Git = %+v", m.Targets[0].Git)
+	}
+	if host := m.Targets[0].Host(); host != "github.com" {
+		t.Errorf("Host() = %q, want github.com", host)
+	}
+}
+
+func TestLoadManifestRejectsNonHTTPSGitURL(t *testing.T) {
+	for _, u := range []string{
+		"git@github.com:example/repo.git",
+		"ssh://git@github.com/example/repo.git",
+		"git://github.com/example/repo.git",
+		"http://github.com/example/repo.git",
+	} {
+		dir := t.TempDir()
+		path := writeManifest(t, dir, `{"version":1,"targets":[{"name":"a","git":{"url":"`+u+`"}}]}`)
+		if _, _, err := LoadManifest(path); err == nil {
+			t.Errorf("url %q: expected an error, got none", u)
+		}
+	}
+}
+
+func TestLoadManifestRejectsGitURLWithEmbeddedCredentials(t *testing.T) {
+	dir := t.TempDir()
+	path := writeManifest(t, dir, `{"version":1,"targets":[{"name":"a","git":{"url":"https://user:token@github.com/example/repo.git"}}]}`)
+	_, _, err := LoadManifest(path)
+	if err == nil || !strings.Contains(err.Error(), "embedded credentials") {
+		t.Fatalf("err = %v, want an embedded-credentials complaint", err)
+	}
+}
+
+func TestLoadManifestRejectsEmptyGitURL(t *testing.T) {
+	dir := t.TempDir()
+	path := writeManifest(t, dir, `{"version":1,"targets":[{"name":"a","git":{"url":""}}]}`)
+	_, _, err := LoadManifest(path)
+	if err == nil || !strings.Contains(err.Error(), "git.url is required") {
+		t.Fatalf("err = %v, want a git.url-required complaint", err)
 	}
 }

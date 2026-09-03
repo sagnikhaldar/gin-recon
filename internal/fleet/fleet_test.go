@@ -3,9 +3,11 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -228,6 +230,167 @@ func TestRunResumeRejectsChangedManifest(t *testing.T) {
 	resumeOpts.ManifestData = []byte("v2")
 	if _, err := Run(context.Background(), resumeOpts); err == nil {
 		t.Fatal("expected Run to refuse resume after the manifest changed")
+	}
+}
+
+func fakeClone(behavior string) CloneFunc {
+	return func(ctx context.Context, gitURL, ref, destDir, token string) error {
+		switch behavior {
+		case "fail":
+			return fmt.Errorf("simulated clone failure")
+		default:
+			if err := os.MkdirAll(destDir, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(destDir, "go.mod"), []byte("module cloned\n"), 0o644)
+		}
+	}
+}
+
+func TestRunRejectsGitTargetWithoutAllowRemote(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "remote", Git: &GitSource{URL: "https://github.com/example/repo.git"}},
+	}}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       t.TempDir(),
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		Clone:        fakeClone("ok"),
+		// AllowRemote left false.
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	if agg.Targets[0].Status != StatusFailed {
+		t.Fatalf("Status = %v, want failed", agg.Targets[0].Status)
+	}
+	if !strings.Contains(agg.Targets[0].Error, "--allow-remote-targets") {
+		t.Errorf("Error = %q, want it to mention --allow-remote-targets", agg.Targets[0].Error)
+	}
+}
+
+func TestRunRejectsGitTargetWithUnlistedHost(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "remote", Git: &GitSource{URL: "https://gitlab.example.com/example/repo.git"}},
+	}}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       t.TempDir(),
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		Clone:        fakeClone("ok"),
+		AllowRemote:  true,
+		AllowedHosts: []AllowedHost{{Host: "github.com"}}, // does not include gitlab.example.com
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	if agg.Targets[0].Status != StatusFailed {
+		t.Fatalf("Status = %v, want failed", agg.Targets[0].Status)
+	}
+	if !strings.Contains(agg.Targets[0].Error, "allowedRemoteHosts") {
+		t.Errorf("Error = %q, want it to mention allowedRemoteHosts", agg.Targets[0].Error)
+	}
+}
+
+func TestRunClonesAllowedGitTarget(t *testing.T) {
+	bin := buildFakeAudit(t)
+	// The fake clone materializes a go.mod but no "behavior" file, so
+	// runOneTarget's own post-clone audit invocation would fail — this test
+	// only needs to prove the clone was attempted and allowed through,
+	// which the resulting "failed" (not "not-go-module", not a
+	// remote-target-policy error) status already demonstrates: policy
+	// checks passed, the clone ran, and only the subsequent audit step
+	// (no behavior file for the fake audit binary to read) failed.
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "remote", Git: &GitSource{URL: "https://github.com/example/repo.git"}},
+	}}
+	outDir := t.TempDir()
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       outDir,
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		Clone:        fakeClone("ok"),
+		AllowRemote:  true,
+		AllowedHosts: []AllowedHost{{Host: "github.com"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	got := agg.Targets[0]
+	if got.Status != StatusFailed || !strings.Contains(got.Error, "fake-audit") {
+		t.Fatalf("target = %+v, want a failed status from the fake audit binary (proving the clone itself was allowed and ran)", got)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, ".clones", "remote")); !os.IsNotExist(err) {
+		t.Error("clone scratch directory should be removed after the target finishes")
+	}
+}
+
+func TestRunPropagatesCloneFailure(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "remote", Git: &GitSource{URL: "https://github.com/example/repo.git"}},
+	}}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       t.TempDir(),
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		Clone:        fakeClone("fail"),
+		AllowRemote:  true,
+		AllowedHosts: []AllowedHost{{Host: "github.com"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	if agg.Targets[0].Status != StatusFailed || !strings.Contains(agg.Targets[0].Error, "simulated clone failure") {
+		t.Fatalf("target = %+v, want a failed status carrying the clone error", agg.Targets[0])
+	}
+}
+
+func TestRunRejectsGitTargetWithMissingTokenEnv(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "remote", Git: &GitSource{URL: "https://github.com/example/repo.git"}},
+	}}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       t.TempDir(),
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		Clone:        fakeClone("ok"),
+		AllowRemote:  true,
+		AllowedHosts: []AllowedHost{{Host: "github.com", TokenEnv: "GIN_RECON_TEST_TOKEN_DOES_NOT_EXIST"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	if agg.Targets[0].Status != StatusFailed || !strings.Contains(agg.Targets[0].Error, "GIN_RECON_TEST_TOKEN_DOES_NOT_EXIST") {
+		t.Fatalf("target = %+v, want a failed status naming the missing token env var", agg.Targets[0])
 	}
 }
 

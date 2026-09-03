@@ -908,6 +908,24 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		return cli.ExitOperationalError
 	}
 
+	// The shared --config is loaded here too (in addition to being passed
+	// through to each target's own audit subprocess) purely to read
+	// fleet.allowedRemoteHosts — docs/adr/0019-fleet-remote-targets.md's
+	// config-reviewed scope for --allow-remote-targets. No other config
+	// field is read at this layer; everything else still only ever reaches
+	// analysis through the per-target audit subprocess itself.
+	cfg, err := loadConfig(opts.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	var allowedHosts []fleet.AllowedHost
+	if cfg.Fleet != nil {
+		for _, h := range cfg.Fleet.AllowedRemoteHosts {
+			allowedHosts = append(allowedHosts, fleet.AllowedHost{Host: h.Host, TokenEnv: h.TokenEnv})
+		}
+	}
+
 	var stderrBuf bytes.Buffer
 	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
 		ManifestPath: opts.TargetsPath,
@@ -921,6 +939,8 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		BinaryPath:   binaryPath,
 		ToolVersion:  report.ToolVersion,
 		Stderr:       &stderrBuf,
+		AllowRemote:  opts.AllowRemoteTargets,
+		AllowedHosts: allowedHosts,
 	})
 	if stderrBuf.Len() > 0 {
 		stderr.Write(stderrBuf.Bytes())

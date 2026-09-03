@@ -197,6 +197,7 @@ func parseFleet(args []string) (*Options, error) {
 	registerOnceString(fs, "out", &opts.OutDir)
 	registerOnceBool(fs, "force", &opts.Force)
 	registerOnceBool(fs, "resume", &opts.Resume)
+	registerOnceBool(fs, "allow-remote-targets", &opts.AllowRemoteTargets)
 	var concurrency string
 	registerOnceString(fs, "concurrency", &concurrency)
 	fs.Var(&repeatableList{&opts.FailOn}, "fail-on", "repeatable or comma-separated gate selector")

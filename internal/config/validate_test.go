@@ -249,6 +249,52 @@ func TestValidateOpenAPISecuritySchemesAccepted(t *testing.T) {
 	}}}`)
 }
 
+func TestValidateFleetAllowedRemoteHosts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		json string
+		want string
+	}{
+		{
+			"scheme in host",
+			`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"https://github.com"}]}}`,
+			"bare hostname",
+		},
+		{
+			"port in host",
+			`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"github.com:443"}]}}`,
+			"bare hostname",
+		},
+		{
+			"path in host",
+			`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"github.com/example"}]}}`,
+			"bare hostname",
+		},
+		{
+			"duplicate host",
+			`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"github.com"},{"host":"github.com"}]}}`,
+			"duplicate host",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expectDecodeError(t, FormatJSON, tc.json, tc.want)
+		})
+	}
+}
+
+func TestValidateFleetAllowedRemoteHostsAccepted(t *testing.T) {
+	cfg := mustDecode(t, FormatJSON, `{"version":1,"fleet":{"allowedRemoteHosts":[
+		{"host":"github.com","tokenEnv":"GIN_RECON_GITHUB_TOKEN"},
+		{"host":"gitlab.example.com"}
+	]}}`)
+	if len(cfg.Fleet.AllowedRemoteHosts) != 2 {
+		t.Fatalf("AllowedRemoteHosts = %+v", cfg.Fleet.AllowedRemoteHosts)
+	}
+	if cfg.Fleet.AllowedRemoteHosts[0].TokenEnv != "GIN_RECON_GITHUB_TOKEN" {
+		t.Errorf("TokenEnv = %q", cfg.Fleet.AllowedRemoteHosts[0].TokenEnv)
+	}
+}
+
 func TestValidateReportsAllErrorsNotJustFirst(t *testing.T) {
 	_, err := Decode(FormatJSON, []byte(`{
 		"version": 2,

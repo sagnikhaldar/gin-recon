@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 )
@@ -21,10 +22,35 @@ import (
 // silently sanitized into something the manifest author didn't write.
 var validTargetName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// Target is one entry in a targets manifest.
+// GitSource names a remote target to shallow-clone before scanning
+// (docs/adr/0019-fleet-remote-targets.md). URL must be an https:// URL with
+// no embedded userinfo; Ref is optional and defaults to the remote's own
+// default branch.
+type GitSource struct {
+	URL string `json:"url"`
+	Ref string `json:"ref,omitempty"`
+}
+
+// Target is one entry in a targets manifest. Exactly one of Src (a local
+// directory, ADR 0018) or Git (a remote to clone, ADR 0019) must be set.
 type Target struct {
-	Name string `json:"name"`
-	Src  string `json:"src"`
+	Name string     `json:"name"`
+	Src  string     `json:"src,omitempty"`
+	Git  *GitSource `json:"git,omitempty"`
+}
+
+// Host returns the target's git remote hostname for allowlist matching. It
+// is only meaningful when Git is non-nil and the manifest already passed
+// LoadManifest's own URL validation.
+func (t Target) Host() string {
+	if t.Git == nil {
+		return ""
+	}
+	u, err := url.Parse(t.Git.URL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // Manifest is the strict, data-only shape of a --targets file.
@@ -68,9 +94,39 @@ func LoadManifest(path string) (*Manifest, []byte, error) {
 			return nil, nil, fmt.Errorf("fleet: duplicate target name %q", t.Name)
 		}
 		seen[t.Name] = true
-		if t.Src == "" {
-			return nil, nil, fmt.Errorf("fleet: target %q: src is required", t.Name)
+
+		if (t.Src == "") == (t.Git == nil) {
+			return nil, nil, fmt.Errorf("fleet: target %q: exactly one of \"src\" or \"git\" is required", t.Name)
+		}
+		if t.Git != nil {
+			if err := validateGitSource(t.Name, t.Git); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	return &m, data, nil
+}
+
+// validateGitSource enforces docs/adr/0019-fleet-remote-targets.md's URL
+// shape up front, at manifest-load time — before any network access is even
+// contemplated, and regardless of whether --allow-remote-targets ends up
+// being set for this invocation.
+func validateGitSource(name string, g *GitSource) error {
+	if g.URL == "" {
+		return fmt.Errorf("fleet: target %q: git.url is required", name)
+	}
+	u, err := url.Parse(g.URL)
+	if err != nil {
+		return fmt.Errorf("fleet: target %q: git.url %q could not be parsed: %w", name, g.URL, err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("fleet: target %q: git.url must be https://, got scheme %q", name, u.Scheme)
+	}
+	if u.User != nil {
+		return fmt.Errorf("fleet: target %q: git.url must not contain embedded credentials; use fleet.allowedRemoteHosts[].tokenEnv instead", name)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("fleet: target %q: git.url has no host", name)
+	}
+	return nil
 }

@@ -85,16 +85,34 @@ SARIF is audit-only. Inventory OpenAPI contains no authentication assertions. `a
 
 `fleet` orchestrates one `audit` subprocess per target in a manifest instead of scanning a single `--src`. It accepts none of the scan/analysis options above — each target supplies its own source, resolved from the manifest, not from a flag on this command. Each target's `audit` runs in its own subprocess rather than in-process, so one hostile or resource-exhausting target is contained by the same process boundary an ordinary single-repo scan already has.
 
-- `--targets <file>` (required): a strict JSON manifest, `{"version": 1, "targets": [{"name": "...", "src": "..."}]}`. `name` becomes that target's output subdirectory name and must match `^[A-Za-z0-9._-]+$`; `src` is a local directory, resolved relative to the manifest file's own directory when not absolute.
-- `--config <file>`: applied identically to every target's own `audit` invocation.
+- `--targets <file>` (required): a strict JSON manifest, `{"version": 1, "targets": [{"name": "...", "src": "..."}]}`. `name` becomes that target's output subdirectory name and must match `^[A-Za-z0-9._-]+$`. Each target names exactly one of `src` (a local directory, resolved relative to the manifest file's own directory when not absolute) or `git` (a remote to clone — see below); naming both, or neither, fails validation.
+- `--config <file>`: applied identically to every target's own `audit` invocation, and (only for `fleet` itself) read for `fleet.allowedRemoteHosts` — see below.
 - `--out <dir>` (required): `fleet.json` (the aggregate) is written here, alongside each target's full, untouched report under `targets/<name>/`.
 - `--force`: required to overwrite an existing `fleet.json`, same convention as every other command's output — unless `--resume` is also given.
 - `--concurrency <n>`: default `1`, must be between `1` and `8`.
 - `--resume`: skip any target already recorded as complete in `--out`'s checkpoint. Refused with an explanation, not silently ignored, if the targets file, `--config`, or `--format` no longer matches what the checkpoint was written under.
+- `--allow-remote-targets`: required before any `git` target is even attempted — see below. Off by default.
 - `--format`: only `json` exists today.
 - `--fail-on incomplete`: exits `2` when the aggregate's `coverage.complete` is false — any target failed, or any target's own `scanCoverage.complete` came back false. No other `--fail-on` selector is supported yet.
 
 A target with no `go.mod` at all is recorded as `not-go-module`, distinct from `failed` — it never counts as a scan failure. A target whose `audit` subprocess actually errors is `failed` and is retried on the next `--resume`; a target that completed (even with incomplete internal coverage) is `ok` and is never retried.
+
+#### Remote targets
+
+A `git` target clones instead of reading a local path: `{"name": "...", "git": {"url": "https://...", "ref": "main"}}`. `url` must be `https://` with no embedded userinfo (`https://user:token@host/...` is rejected outright — a manifest is reviewed, shared, data-only input, not a place for a credential); `ref` is optional and defaults to the remote's own default branch. The clone itself is shallow (`--depth 1 --single-branch`) and removed once that target's `audit` subprocess has produced a result.
+
+Two things must both be true before a `git` target's clone is even attempted, the same two-gate shape `analysis.followModules` already uses for crossing a module boundary:
+
+1. `--allow-remote-targets` on the command line — the capability switch for this invocation. Without it, any manifest containing a `git` target fails validation before any target runs at all.
+2. `fleet.allowedRemoteHosts` in `--config` — the actual scope, an exact-hostname allowlist (no wildcards):
+   ```json
+   { "version": 1, "fleet": { "allowedRemoteHosts": [
+     { "host": "github.com", "tokenEnv": "GIN_RECON_GITHUB_TOKEN" }
+   ] } }
+   ```
+   A `git` target whose host isn't listed here is a `failed` result for that one target, not a whole-run abort. `tokenEnv` is optional and names an environment variable — never a credential value — whose contents (required to actually be set, or the target fails clearly) are sent as a scoped HTTP `Authorization` header for that host's clone only, never written to any config or written to disk.
+
+Without both, a `fleet` run's network reach is exactly what it always was: whatever `--allow-downloads` already permits for Go module resolution against already-local code, nothing more.
 
 ### Precedence and validation
 

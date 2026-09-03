@@ -223,3 +223,17 @@ func TestParseFleetConcurrency(t *testing.T) {
 func TestParseFleetRejectsNonIntegerConcurrency(t *testing.T) {
 	expectParseError(t, "invalid integer", "fleet", "--targets=/tmp/targets.json", "--out=/tmp/out", "--concurrency=many")
 }
+
+func TestParseFleetAllowRemoteTargetsDefaultsFalse(t *testing.T) {
+	opts := mustParse(t, "fleet", "--targets=/tmp/targets.json", "--out=/tmp/out")
+	if opts.AllowRemoteTargets {
+		t.Error("AllowRemoteTargets = true, want false by default")
+	}
+}
+
+func TestParseFleetAllowRemoteTargets(t *testing.T) {
+	opts := mustParse(t, "fleet", "--targets=/tmp/targets.json", "--out=/tmp/out", "--allow-remote-targets")
+	if !opts.AllowRemoteTargets {
+		t.Error("AllowRemoteTargets = false, want true")
+	}
+}

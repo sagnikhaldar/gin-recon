@@ -98,9 +98,10 @@ type Options struct {
 	// and FailOn's "incomplete" selector extends naturally to "the fleet
 	// aggregate isn't complete" rather than needing a fleet-specific gate
 	// vocabulary.
-	TargetsPath string
-	Concurrency int
-	Resume      bool
+	TargetsPath        string
+	Concurrency        int
+	Resume             bool
+	AllowRemoteTargets bool
 
 	// ExplicitFlags records which flag names the user actually passed on the
 	// command line, as opposed to a field merely holding its default value

@@ -46,6 +46,7 @@ func Validate(cfg *Config) error {
 	errs = append(errs, validateLimits(cfg.Limits)...)
 	errs = append(errs, validateOpenAPI(cfg.OpenAPI)...)
 	errs = append(errs, validateAnalysis(cfg.Analysis)...)
+	errs = append(errs, validateFleet(cfg.Fleet)...)
 
 	applyDefaults(cfg)
 
@@ -289,6 +290,33 @@ func validateAnalysis(a *AnalysisConfig) []error {
 		if strings.TrimSpace(pattern) == "" {
 			errs = append(errs, fmt.Errorf("analysis.followModules: pattern must not be empty"))
 		}
+	}
+	return errs
+}
+
+// hostnamePattern is a bare DNS hostname: no scheme, no port, no path.
+// fleet.allowedRemoteHosts entries are matched exactly against a git
+// target's URL host (docs/adr/0019-fleet-remote-targets.md) — accepting
+// anything looser here (a scheme, a wildcard, a trailing slash) would let a
+// reviewer believe they'd scoped the allowlist more narrowly, or more
+// broadly, than the exact-match code actually applies.
+var hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$`)
+
+func validateFleet(f *FleetConfig) []error {
+	if f == nil {
+		return nil
+	}
+	var errs []error
+	seen := map[string]bool{}
+	for i, h := range f.AllowedRemoteHosts {
+		field := fmt.Sprintf("fleet.allowedRemoteHosts[%d]", i)
+		if !hostnamePattern.MatchString(h.Host) {
+			errs = append(errs, fmt.Errorf("%s: %q must be a bare hostname (no scheme, port, or path)", field, h.Host))
+		}
+		if seen[h.Host] {
+			errs = append(errs, fmt.Errorf("%s: duplicate host %q", field, h.Host))
+		}
+		seen[h.Host] = true
 	}
 	return errs
 }
