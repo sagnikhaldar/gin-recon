@@ -1,13 +1,15 @@
 // Package format's fleet HTML formatter (docs/adr/0020-fleet-html-view.md)
 // is a self-contained, dependency-free page over one fleet.Aggregate — the
 // same offline-by-default, no-CDN posture html.go already applies to
-// api.html, not a generated multi-page site. It uses html/template so every
-// field (a target name, an error string carrying another process's
-// stderr) is contextually auto-escaped rather than hand-escaped per call
-// site, since fleet input — a manifest, a target's captured stderr — is
-// exactly the kind of untrusted content docs/threat-model.md already
-// treats scanned repositories and their output as. Shares its visual
-// identity (theme.go) with api.html, so the two read as one tool's output.
+// api.html, not a generated multi-page site (that half of the decision
+// stands regardless of how much richer the one page itself gets). It uses
+// html/template so every field (a target name, an error string carrying
+// another process's stderr) is contextually auto-escaped rather than
+// hand-escaped per call site, since fleet input — a manifest, a target's
+// captured stderr — is exactly the kind of untrusted content
+// docs/threat-model.md already treats scanned repositories and their
+// output as. Shares its visual identity (theme.go) with api.html, so the
+// two read as one tool's output.
 package format
 
 import (
@@ -17,12 +19,25 @@ import (
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 )
 
+// FleetScope is the --org configuration a fleet run used, for the Scope
+// panel — present only for an --org run, never for a hand-written
+// --targets manifest, which has no comparable "scope" to summarize.
+type FleetScope struct {
+	Org             string
+	MaxRepos        int
+	Concurrency     int
+	IncludeArchived bool
+	IncludeForks    bool
+	RepoInclude     []string
+	RepoExclude     []string
+}
+
 var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gin-recon fleet report</title>
+<title>{{if .Scope}}{{.Scope.Org}} · {{end}}gin-recon fleet report</title>
 <style>{{.ThemeCSS}}
 .gr-status-ok { color: var(--gr-good); font-weight: 600; }
 .gr-status-failed { color: var(--gr-bad); font-weight: 600; }
@@ -31,6 +46,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 .gr-table th, .gr-table td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--gr-border); vertical-align: top; font-size: 13px; }
 .gr-table th { background: var(--gr-panel-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--gr-muted); }
 .gr-table tr:last-child td { border-bottom: none; }
+.gr-table tr[hidden] { display: none; }
 .gr-src { color: var(--gr-muted); font-size: 12px; }
 .gr-error { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; color: var(--gr-bad); }
 .gr-shell code { background: var(--gr-panel-muted); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -42,9 +58,15 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <div class="gr-header-meta">Generated offline, no network access at view time<br>gin-recon {{.Agg.ToolVersion}}</div>
 </header>
 <div class="gr-hero">
+{{if .Scope}}
+<p class="gr-eyebrow">{{.GitMark}} GitHub organization inventory</p>
+<h1>{{.Scope.Org}}</h1>
+<p class="gr-lede">{{len .Agg.Targets}} discovered repositor{{if eq (len .Agg.Targets) 1}}y{{else}}ies{{end}}, one audit per target. Each target's own full report is untouched under <code>targets/&lt;name&gt;/</code>.</p>
+{{else}}
 <p class="gr-eyebrow">Fleet report</p>
 <h1>{{len .Agg.Targets}} target{{if ne (len .Agg.Targets) 1}}s{{end}} scanned</h1>
 <p class="gr-lede">One audit per target, aggregated. Each target's own full report is untouched under <code>targets/&lt;name&gt;/</code>.</p>
+{{end}}
 </div>
 <div class="gr-metrics">
 <div class="gr-metric"><span class="gr-metric__value">{{.OKCount}}</span><span class="gr-metric__label">OK</span></div>
@@ -54,13 +76,33 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 </div>
 {{if .Agg.Resume.Requested}}<p class="gr-lede" style="margin:8px 24px 0;">Resumed: {{.Agg.Resume.Reused}} target(s) reused from checkpoint.</p>{{end}}
 {{if .Agg.Resume.Checkpoint}}<p class="gr-lede" style="margin:4px 24px 0;">Checkpoint retained — this run is not yet complete.</p>{{end}}
+{{if .Scope}}
+<div class="gr-panel">
+<h2 class="gr-panel__title">Scope</h2>
+<dl class="gr-key-values">
+<dt>Organization</dt><dd>{{.Scope.Org}}</dd>
+<dt>Concurrency</dt><dd>{{.Scope.Concurrency}}</dd>
+<dt>Repository cap</dt><dd>{{.Scope.MaxRepos}}</dd>
+<dt>Include archived</dt><dd>{{.Scope.IncludeArchived}}</dd>
+<dt>Include forks</dt><dd>{{.Scope.IncludeForks}}</dd>
+{{if .Scope.RepoInclude}}<dt>Repo include</dt><dd>{{range $i, $p := .Scope.RepoInclude}}{{if $i}}, {{end}}{{$p}}{{end}}</dd>{{end}}
+{{if .Scope.RepoExclude}}<dt>Repo exclude</dt><dd>{{range $i, $p := .Scope.RepoExclude}}{{if $i}}, {{end}}{{$p}}{{end}}</dd>{{end}}
+</dl>
+</div>
+{{end}}
 <div class="gr-panel">
 <h2 class="gr-panel__title">Targets</h2>
-<table class="gr-table">
+<div class="gr-filters" data-gr-filter="gr-targets-table">
+<div><label for="gr-target-search">Search</label><input id="gr-target-search" type="search" placeholder="Target, status, error…" data-gr-filter-search></div>
+<div><label for="gr-target-status">Status</label><select id="gr-target-status" data-gr-filter-status><option value="">All statuses</option><option value="ok">ok</option><option value="failed">failed</option><option value="not-go-module">not-go-module</option></select></div>
+<span class="gr-result-count" data-gr-result-count aria-live="polite"></span>
+</div>
+<div class="gr-table-wrap">
+<table class="gr-table" id="gr-targets-table">
 <thead><tr><th>Target</th><th>Status</th><th>Coverage</th><th>Report</th><th>Error</th></tr></thead>
 <tbody>
-{{range .Agg.Targets}}<tr>
-<td><code>{{.Name}}</code><br><span class="gr-src">{{.Src}}</span></td>
+{{range .Agg.Targets}}<tr data-gr-search="{{.Name}} {{.Status}} {{.Error}}" data-gr-status="{{.Status}}">
+<td><code>{{.Name}}</code><br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}</td>
 <td class="gr-status-{{.Status}}">{{.Status}}</td>
 <td>{{.Complete}}</td>
 <td>{{if .Report}}<a href="{{.Report}}">routes.json</a>{{end}}</td>
@@ -68,6 +110,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 </tr>
 {{end}}</tbody>
 </table>
+</div>
 </div>
 {{if .Delta}}
 <div class="gr-hero" style="padding-top:8px;">
@@ -85,6 +128,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 {{if .Delta.Summary.IncomparableTargets}}<p class="gr-lede" style="margin:8px 24px 0;">{{.Delta.Summary.IncomparableTargets}} target(s) could not be compared — see the reason column below.</p>{{end}}
 <div class="gr-panel">
 <h2 class="gr-panel__title">Per-target delta</h2>
+<div class="gr-table-wrap">
 <table class="gr-table">
 <thead><tr><th>Target</th><th>Status</th><th>Added routes</th><th>Removed routes</th><th>Auth regressions</th><th>Reason</th></tr></thead>
 <tbody>
@@ -99,11 +143,52 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 {{end}}</tbody>
 </table>
 </div>
+</div>
 {{end}}
 <p class="gr-footer">gin-recon {{.Agg.ToolVersion}} &middot; static analysis only, no target code was executed</p>
+<script>{{.FilterJS}}</script>
 </body>
 </html>
 `))
+
+// fleetFilterJS is a small, hand-written vanilla-JS live filter for the
+// targets table (search text + status dropdown), the same general
+// data-attribute technique a table filter always uses — no library, no
+// external script, and no target-derived value is ever written back as
+// markup: it only ever reads data-gr-search/data-gr-status attributes
+// html/template already escaped when the page was built, and only ever
+// toggles the standard `hidden` attribute.
+const fleetFilterJS = `
+(function () {
+  "use strict";
+  document.querySelectorAll("[data-gr-filter]").forEach(function (controls) {
+    var table = document.getElementById(controls.dataset.grFilter);
+    if (!table) return;
+    var rows = Array.prototype.slice.call(table.querySelectorAll("tbody tr[data-gr-search]"));
+    var search = controls.querySelector("[data-gr-filter-search]");
+    var status = controls.querySelector("[data-gr-filter-status]");
+    var count = controls.querySelector("[data-gr-result-count]");
+
+    function update() {
+      var query = (search && search.value || "").trim().toLowerCase();
+      var selected = (status && status.value) || "";
+      var visible = 0;
+      rows.forEach(function (row) {
+        var matchesQuery = !query || row.dataset.grSearch.toLowerCase().indexOf(query) !== -1;
+        var matchesStatus = !selected || row.dataset.grStatus === selected;
+        var show = matchesQuery && matchesStatus;
+        row.hidden = !show;
+        if (show) visible++;
+      });
+      if (count) count.textContent = visible + " of " + rows.length;
+    }
+
+    if (search) search.addEventListener("input", update);
+    if (status) status.addEventListener("change", update);
+    update();
+  });
+})();
+`
 
 // fleetHTMLData is the template's input: the aggregate every fleet run
 // produces, plus the delta only a --baseline run also produces, plus
@@ -112,24 +197,30 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 type fleetHTMLData struct {
 	Agg              *fleet.Aggregate
 	Delta            *fleet.FleetDelta
+	Scope            *FleetScope
 	ThemeCSS         template.CSS
 	BrandMark        template.HTML
+	GitMark          template.HTML
+	FilterJS         template.JS
 	OKCount          int
 	FailedCount      int
 	NotGoModuleCount int
 }
 
-// FleetHTML renders agg (and, when a --baseline was given, delta) as the
-// browsable companion fleet.json always gets
-// (docs/adr/0020-fleet-html-view.md, docs/adr/0022-fleet-baseline-delta.md) —
+// FleetHTML renders agg (and, when given, delta/scope) as the browsable
+// companion fleet.json always gets (docs/adr/0020-fleet-html-view.md,
+// docs/adr/0022-fleet-baseline-delta.md, docs/adr/0021-fleet-org-enumeration.md) —
 // generated directly from the same values being marshaled to JSON, nothing
-// re-read from disk.
-func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta) ([]byte, error) {
+// re-read from disk. scope is nil for a --targets run; non-nil for --org.
+func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *FleetScope) ([]byte, error) {
 	data := fleetHTMLData{
 		Agg:       agg,
 		Delta:     delta,
+		Scope:     scope,
 		ThemeCSS:  template.CSS(themeCSS),
 		BrandMark: template.HTML(brandMarkHTML),
+		GitMark:   template.HTML(gitMarkHTML),
+		FilterJS:  template.JS(fleetFilterJS),
 	}
 	for _, t := range agg.Targets {
 		switch t.Status {

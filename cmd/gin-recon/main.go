@@ -1123,7 +1123,22 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	// (docs/adr/0020-fleet-html-view.md) — no separate flag, always
 	// regenerated from the same agg/fleetDelta values already computed
 	// above, nothing re-read from disk.
-	htmlData, err := format.FleetHTML(agg, fleetDelta)
+	var fleetScope *format.FleetScope
+	if opts.Org != "" {
+		fleetScope = &format.FleetScope{
+			Org:             opts.Org,
+			MaxRepos:        opts.MaxRepos,
+			Concurrency:     opts.Concurrency,
+			IncludeArchived: opts.IncludeArchived,
+			IncludeForks:    opts.IncludeForks,
+			RepoInclude:     opts.RepoInclude,
+			RepoExclude:     opts.RepoExclude,
+		}
+		if fleetScope.MaxRepos == 0 {
+			fleetScope.MaxRepos = fleet.DefaultMaxRepos
+		}
+	}
+	htmlData, err := format.FleetHTML(agg, fleetDelta, fleetScope)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
 		return cli.ExitOperationalError

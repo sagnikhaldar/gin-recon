@@ -340,6 +340,12 @@ func TestRunClonesAllowedGitTarget(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outDir, ".clones", "remote")); !os.IsNotExist(err) {
 		t.Error("clone scratch directory should be removed after the target finishes")
 	}
+	// GitURL must survive into the result even though Src ends up pointing
+	// at the (now-removed) ephemeral clone directory — it's the only field
+	// that still means anything to a human reading the report afterward.
+	if got.GitURL != "https://github.com/example/repo.git" {
+		t.Errorf("GitURL = %q, want the manifest's original git.url", got.GitURL)
+	}
 }
 
 func TestRunPropagatesCloneFailure(t *testing.T) {

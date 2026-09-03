@@ -19,7 +19,7 @@ func TestFleetHTMLRendersTargets(t *testing.T) {
 	}
 	agg.Coverage.Complete = false
 
-	out, err := FleetHTML(agg, nil)
+	out, err := FleetHTML(agg, nil, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestFleetHTMLEscapesHostileContent(t *testing.T) {
 		{Name: "<script>evil</script>", Status: fleet.StatusFailed, Error: "<img src=x onerror=alert(1)>"},
 	}}
 
-	out, err := FleetHTML(agg, nil)
+	out, err := FleetHTML(agg, nil, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestFleetHTMLRendersDeltaWhenPresent(t *testing.T) {
 	}}
 	delta.Summary.AddedRoutes = 1
 
-	out, err := FleetHTML(agg, delta)
+	out, err := FleetHTML(agg, delta, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestFleetHTMLRendersDeltaWhenPresent(t *testing.T) {
 
 func TestFleetHTMLOmitsDeltaSectionWhenAbsent(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
-	out, err := FleetHTML(agg, nil)
+	out, err := FleetHTML(agg, nil, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -86,11 +86,54 @@ func TestFleetHTMLOmitsDeltaSectionWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestFleetHTMLRendersScopeForOrgRun(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", GitURL: "https://github.com/myorg/svc-a.git", Status: fleet.StatusOK},
+	}}
+	scope := &FleetScope{Org: "myorg", MaxRepos: 100, Concurrency: 3, RepoInclude: []string{"svc-*"}}
+
+	out, err := FleetHTML(agg, nil, scope)
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	for _, want := range []string{"myorg", "GitHub organization inventory", "Scope", "svc-*", "https://github.com/myorg/svc-a.git"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("output missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestFleetHTMLOmitsScopeForTargetsRun(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	out, err := FleetHTML(agg, nil, nil)
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "GitHub organization inventory") {
+		t.Error("expected no org-scope hero copy for a plain --targets run")
+	}
+}
+
+func TestFleetHTMLIncludesFilterControls(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	out, err := FleetHTML(agg, nil, nil)
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	for _, want := range []string{"data-gr-filter-search", "data-gr-filter-status", "data-gr-search=", "function update"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("output missing %q", want)
+		}
+	}
+}
+
 func TestFleetHTMLOmitsReportLinkWhenAbsent(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
 		{Name: "not-a-module", Status: fleet.StatusNotGoModule, Complete: true},
 	}}
-	out, err := FleetHTML(agg, nil)
+	out, err := FleetHTML(agg, nil, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}

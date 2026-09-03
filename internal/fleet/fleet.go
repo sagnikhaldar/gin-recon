@@ -30,6 +30,7 @@ const (
 type TargetResult struct {
 	Name     string `json:"name"`
 	Src      string `json:"src"`
+	GitURL   string `json:"gitUrl,omitempty"` // the manifest's original git.url, for a remote target only — Src is its (already-removed) clone path, not useful to display
 	Status   Status `json:"status"`
 	Error    string `json:"error,omitempty"`
 	Complete bool   `json:"complete"`
@@ -210,6 +211,9 @@ func sortByManifestOrder(results []TargetResult, targets []Target) {
 // decision.
 func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Target) TargetResult {
 	res := TargetResult{Name: t.Name}
+	if t.Git != nil {
+		res.GitURL = t.Git.URL
+	}
 
 	src, cleanup, err := resolveSource(ctx, opts, manifestDir, t)
 	if err != nil {

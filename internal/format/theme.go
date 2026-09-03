@@ -86,21 +86,33 @@ const themeCSS = `
   position: relative;
   width: 16px;
   height: 16px;
-  border: 3px solid var(--gr-accent);
+  border: 2px solid var(--gr-accent);
   border-radius: 50%;
   flex: none;
+}
+.gr-brand__mark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--gr-accent);
 }
 .gr-brand__mark::after {
   content: "";
   position: absolute;
-  right: -6px;
-  bottom: -3px;
-  width: 8px;
-  height: 3px;
-  border-radius: 2px;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
   background: var(--gr-accent);
-  transform: rotate(45deg);
+  transform-origin: 0 50%;
+  transform: rotate(-40deg);
 }
+.gr-git-mark { flex: none; vertical-align: -2px; color: var(--gr-muted); }
 .gr-header-meta { color: var(--gr-muted); font-size: 13px; text-align: right; }
 .gr-hero { padding: 28px 24px 8px; }
 .gr-eyebrow {
@@ -149,10 +161,36 @@ const themeCSS = `
 .gr-badge--good { color: var(--gr-good); border-color: var(--gr-good); background: var(--gr-good-soft); }
 .gr-badge--warn { color: var(--gr-warn); border-color: var(--gr-warn); background: var(--gr-warn-soft); }
 .gr-badge--bad { color: var(--gr-bad); border-color: var(--gr-bad); background: var(--gr-bad-soft); }
+.gr-badge--neutral { color: var(--gr-muted); }
+.gr-key-values { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; padding: 14px 16px; font-size: 13px; }
+.gr-key-values dt { color: var(--gr-muted); }
+.gr-key-values dd { margin: 0; font-weight: 600; }
+.gr-filters { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--gr-border); flex-wrap: wrap; }
+.gr-filters label { display: block; font-size: 11px; color: var(--gr-muted); margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.03em; }
+.gr-filters input, .gr-filters select {
+  border: 1px solid var(--gr-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--gr-panel);
+  color: var(--gr-ink);
+}
+.gr-result-count { color: var(--gr-muted); font-size: 12px; margin-left: auto; align-self: flex-end; }
+.gr-table-wrap { overflow-x: auto; }
 .gr-footer { margin: 24px 24px 32px; color: var(--gr-muted); font-size: 12px; }
 `
 
 // brandMarkHTML is the inline brand mark markup shared by every page's
-// header — a plain <span>, styled entirely by .gr-brand__mark above, no
-// image or inline SVG payload to keep in sync with the CSS.
+// header — a plain <span>, styled entirely by .gr-brand__mark above (a
+// ringed dot with a short angled sweep, evoking a radar/scan ping — gin-recon's
+// own mark, distinct from any other tool's). No image or inline SVG
+// payload to keep in sync with the CSS.
 const brandMarkHTML = `<span class="gr-brand__mark" aria-hidden="true"></span>`
+
+// gitMarkHTML is an inline SVG marking a target's source as a git remote
+// (used next to a --org-discovered target's clone URL) — an original
+// three-node graph glyph suggestive of a git branch/commit graph, not any
+// specific host's trademarked logo. Sized via its own attributes and
+// colored with currentColor so it follows .gr-git-mark's color in both
+// themes without a second copy for dark mode.
+const gitMarkHTML = `<svg class="gr-git-mark" width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="3" r="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4" cy="13" r="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="12" cy="8" r="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4 4.6V11.4M5.5 8H10.4" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>`
