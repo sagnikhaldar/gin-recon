@@ -1,0 +1,78 @@
+name: Release
+
+# On a published GitHub release, verify the tag matches
+# .claude-plugin/plugin.json, then push that version into the
+# sagnikhaldar/plugins-claude marketplace catalog. `go install
+# github.com/sagnikhaldar/gin-recon/cmd/gin-recon@<tag>` already works off
+# the tag itself, so there is no separate package-publish step.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Verify plugin manifest and release tag agree
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: bash scripts/check-version.sh "$RELEASE_TAG"
+
+  sync-marketplace:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: sagnikhaldar/plugins-claude
+          ssh-key: ${{ secrets.MARKETPLACE_SYNC_KEY }}
+          path: marketplace
+          # Required for the later push; this deploy key is scoped only to
+          # plugins-claude.
+          persist-credentials: true
+
+      - name: Bump gin-recon version in marketplace.json
+        id: update
+        working-directory: marketplace
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          desired="${RELEASE_TAG#v}"
+          current="$(jq -r '.plugins[] | select(.name == "gin-recon") | .version' .claude-plugin/marketplace.json)"
+          if [[ "$current" == "$desired" ]]; then
+            echo "marketplace already at ${desired}; no-op"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tmp="$(mktemp)"
+          jq --arg v "$desired" \
+            '(.plugins[] | select(.name == "gin-recon") | .version) = $v' \
+            .claude-plugin/marketplace.json > "$tmp"
+          mv "$tmp" .claude-plugin/marketplace.json
+          echo "bumped gin-recon to ${desired}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        if: steps.update.outputs.changed == 'true'
+        working-directory: marketplace
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/marketplace.json
+          git commit -m "sync: bump gin-recon to ${RELEASE_TAG}"
+          git push "git@github.com:sagnikhaldar/plugins-claude.git" HEAD:main
