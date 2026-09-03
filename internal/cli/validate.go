@@ -70,6 +70,9 @@ func Validate(opts *Options) error {
 			if opts.IncludeArchived || opts.IncludeForks {
 				return fmt.Errorf("--include-archived/--include-forks are --org only")
 			}
+			if len(opts.RepoInclude) > 0 || len(opts.RepoExclude) > 0 {
+				return fmt.Errorf("--repo-include/--repo-exclude are --org only")
+			}
 		} else if opts.MaxRepos != 0 && (opts.MaxRepos < 1 || opts.MaxRepos > fleet.MaxMaxRepos) {
 			return fmt.Errorf("--max-repos: must be between 1 and %d, got %d", fleet.MaxMaxRepos, opts.MaxRepos)
 		}

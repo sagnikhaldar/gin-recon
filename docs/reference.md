@@ -119,9 +119,11 @@ Without both, a `fleet` run's network reach is exactly what it always was: whate
 `--org <name>` populates the same manifest `--targets` reads, by listing a GitHub organization's repositories instead of reading a hand-written file — every discovered repository becomes a `git` target, so everything above about remote targets applies to it unchanged. `--org` requires `--allow-remote-targets` (enumerating repositories is itself a network call, to `api.github.com`) and requires `api.github.com` to be its own entry in `fleet.allowedRemoteHosts` — separate from whatever host the discovered repositories' own clone URLs use. Its `tokenEnv` authenticates the enumeration call; `github.com`'s own entry (or whichever host the org's repositories actually live on) still separately authorizes the clones that follow.
 
 - `--max-repos <n>`: default `100`, hard cap `1000`. Reaching it with more repositories still available prints a warning and marks the fleet's `coverage.complete` false — never a silent partial list presented as the whole organization.
-- `--include-archived` / `--include-forks`: both default to excluded.
-- The discovered manifest is written to `<outDir>/discovered-targets.json` before the fleet run proceeds, in the exact shape a hand-written `--targets` file would use — an auditable, replayable record of what was actually scanned, independent of the organization's membership possibly changing before the next run.
+- `--include-archived` / `--include-forks`: both default to excluded. A disabled or genuinely empty (zero content) repository is always excluded, regardless of these flags — there is nothing a clone could do with either.
+- `--repo-include <glob>` / `--repo-exclude <glob>`: repeatable or comma-separated, matched against both the bare repository name and its `org/name` form. `--repo-exclude` wins when a repository matches both.
+- The discovered manifest is written to `<outDir>/discovered-targets.json` before the fleet run proceeds, in the exact shape a hand-written `--targets` file would use — an auditable, replayable record of what was actually scanned, independent of the organization's membership possibly changing before the next run. Each discovered target also carries a `github` block (id, full name, visibility, `pushedAt`, archived/fork flags) purely as provenance; nothing reads it back to resolve or scan the target.
 - A discovered repository name that doesn't fit a target name (`^[A-Za-z0-9._-]+$`) is skipped with a warning, not a fatal error for the whole discovery.
+- The GitHub API call itself never follows a redirect — a redirected response is a hard failure, not silently retried against whatever host it names, since that would bypass `fleet.allowedRemoteHosts` entirely.
 
 ### Precedence and validation
 

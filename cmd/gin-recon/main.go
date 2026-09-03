@@ -950,6 +950,8 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 		Org:             opts.Org,
 		IncludeArchived: opts.IncludeArchived,
 		IncludeForks:    opts.IncludeForks,
+		RepoInclude:     opts.RepoInclude,
+		RepoExclude:     opts.RepoExclude,
 		MaxRepos:        opts.MaxRepos,
 		Token:           token,
 		APIBase:         fleetGitHubAPIBaseForTests,
@@ -961,8 +963,14 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 	if result.Incomplete {
 		fmt.Fprintf(stderr, "gin-recon: --org %s: discovery is incomplete (--max-repos or the page cap was reached); rerun with a higher --max-repos for full coverage\n", opts.Org)
 	}
-	if len(result.Skipped) > 0 {
-		fmt.Fprintf(stderr, "gin-recon: --org %s: skipped %d repositories whose name doesn't fit a fleet target name\n", opts.Org, len(result.Skipped))
+	if len(result.SkippedBadName) > 0 {
+		fmt.Fprintf(stderr, "gin-recon: --org %s: skipped %d repositories whose name doesn't fit a fleet target name\n", opts.Org, len(result.SkippedBadName))
+	}
+	if len(result.SkippedDisabled) > 0 {
+		fmt.Fprintf(stderr, "gin-recon: --org %s: skipped %d disabled repositories\n", opts.Org, len(result.SkippedDisabled))
+	}
+	if len(result.SkippedEmpty) > 0 {
+		fmt.Fprintf(stderr, "gin-recon: --org %s: skipped %d empty repositories\n", opts.Org, len(result.SkippedEmpty))
 	}
 
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {

@@ -111,6 +111,8 @@ type Options struct {
 	MaxRepos        int
 	IncludeArchived bool
 	IncludeForks    bool
+	RepoInclude     []string
+	RepoExclude     []string
 
 	// ExplicitFlags records which flag names the user actually passed on the
 	// command line, as opposed to a field merely holding its default value

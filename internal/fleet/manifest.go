@@ -31,12 +31,30 @@ type GitSource struct {
 	Ref string `json:"ref,omitempty"`
 }
 
+// GitHubMeta is discovery provenance a --org run records alongside a
+// discovered target (docs/adr/0021-fleet-org-enumeration.md) — never
+// required, never written by a hand-authored manifest, and never read by
+// anything that resolves or scans the target. It exists purely so
+// discovered-targets.json stays a useful audit record of *why* a repository
+// was or wasn't included, independent of GitHub's own state possibly
+// changing before the next run.
+type GitHubMeta struct {
+	ID         int64  `json:"id,omitempty"`
+	FullName   string `json:"fullName,omitempty"`
+	Private    bool   `json:"private,omitempty"`
+	Visibility string `json:"visibility,omitempty"`
+	PushedAt   string `json:"pushedAt,omitempty"`
+	Archived   bool   `json:"archived,omitempty"`
+	Fork       bool   `json:"fork,omitempty"`
+}
+
 // Target is one entry in a targets manifest. Exactly one of Src (a local
 // directory, ADR 0018) or Git (a remote to clone, ADR 0019) must be set.
 type Target struct {
-	Name string     `json:"name"`
-	Src  string     `json:"src,omitempty"`
-	Git  *GitSource `json:"git,omitempty"`
+	Name   string      `json:"name"`
+	Src    string      `json:"src,omitempty"`
+	Git    *GitSource  `json:"git,omitempty"`
+	GitHub *GitHubMeta `json:"github,omitempty"`
 }
 
 // Host returns the target's git remote hostname for allowlist matching. It

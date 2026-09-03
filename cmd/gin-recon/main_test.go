@@ -965,10 +965,10 @@ func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
 	// isolate the discovery-incompleteness bug, not exercise cloning.
 	const repoURL = "https://repo-host-not-in-any-allowlist.test/x.git"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := json.Marshal([]map[string]string{
-			{"name": "repo-a", "clone_url": repoURL, "default_branch": "main"},
-			{"name": "repo-b", "clone_url": repoURL, "default_branch": "main"},
-			{"name": "repo-c", "clone_url": repoURL, "default_branch": "main"},
+		body, _ := json.Marshal([]map[string]any{
+			{"name": "repo-a", "clone_url": repoURL, "default_branch": "main", "size": 1},
+			{"name": "repo-b", "clone_url": repoURL, "default_branch": "main", "size": 1},
+			{"name": "repo-c", "clone_url": repoURL, "default_branch": "main", "size": 1},
 		})
 		w.Write(body)
 	}))

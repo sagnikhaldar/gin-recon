@@ -201,6 +201,8 @@ func parseFleet(args []string) (*Options, error) {
 	registerOnceBool(fs, "allow-remote-targets", &opts.AllowRemoteTargets)
 	registerOnceBool(fs, "include-archived", &opts.IncludeArchived)
 	registerOnceBool(fs, "include-forks", &opts.IncludeForks)
+	fs.Var(&repeatableList{&opts.RepoInclude}, "repo-include", "repeatable or comma-separated repository name glob")
+	fs.Var(&repeatableList{&opts.RepoExclude}, "repo-exclude", "repeatable or comma-separated repository name glob")
 	var concurrency, maxRepos string
 	registerOnceString(fs, "concurrency", &concurrency)
 	registerOnceString(fs, "max-repos", &maxRepos)
