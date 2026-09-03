@@ -1014,6 +1014,89 @@ func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
 	}
 }
 
+// TestRunFleetOrgWritesConfigSnapshot is the CLI-level integration test for
+// docs/adr/0025-fleet-org-config-snapshot.md: an --org run copies its
+// resolved --config verbatim into --out, alongside discovered-targets.json,
+// so revisiting the run later doesn't depend on the original --config path
+// still existing or being unchanged.
+func TestRunFleetOrgWritesConfigSnapshot(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	// A host deliberately absent from the allowlist below: the clone attempt
+	// fails fast at the authorization check, with no real network access —
+	// this test only needs a discovered repo to exist, not a successful clone.
+	const repoURL = "https://repo-host-not-in-any-allowlist.test/x.git"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal([]map[string]any{
+			{"name": "repo-a", "clone_url": repoURL, "default_branch": "main", "size": 1},
+		})
+		w.Write(body)
+	}))
+	defer srv.Close()
+	fleetGitHubAPIBaseForTests = srv.URL
+	defer func() { fleetGitHubAPIBaseForTests = "" }()
+
+	dir := t.TempDir()
+	const cfgContent = `{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"api.github.com"},{"host":"github.com"}]}}`
+	cfgPath := filepath.Join(dir, "cfg.json")
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"fleet", "--org", "myorg", "--config", cfgPath, "--out", outDir,
+		"--allow-remote-targets",
+	}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(outDir, "config-snapshot.json"))
+	if err != nil {
+		t.Fatalf("config-snapshot.json: %v", err)
+	}
+	if string(got) != cfgContent {
+		t.Errorf("config-snapshot.json = %q, want %q", got, cfgContent)
+	}
+}
+
+// TestRunFleetTargetsDoesNotWriteConfigSnapshot confirms the snapshot is
+// --org-only (docs/adr/0025-fleet-org-config-snapshot.md): a plain
+// --targets run's own manifest and config are expected to already be
+// version-controlled together, so nothing new needs to be written.
+func TestRunFleetTargetsDoesNotWriteConfigSnapshot(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "cfg.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(dir, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--config", cfgPath, "--out", outDir}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "config-snapshot.json")); !os.IsNotExist(err) {
+		t.Errorf("config-snapshot.json should not exist for a --targets run, stat err = %v", err)
+	}
+}
+
 // TestRunFleetRenderAddsFormatWithoutRescanning is the CLI-level
 // integration test for docs/adr/0024-fleet-render.md's central claim:
 // render, over a fleet.json a prior fleet run already produced,

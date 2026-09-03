@@ -274,6 +274,13 @@ yet, show them the two-entry config shape rather than guessing at scope:
 ] } }
 ```
 
+An `--org` run also copies `--config`'s exact bytes to
+`<outDir>/config-snapshot.json`, refreshed every invocation — so revisiting
+`fleet.json` later still shows exactly what auth config produced its
+classifications, even if the original `--config` path has since moved or
+changed. `--targets` runs don't get this (their manifest and config are
+expected to already live together, version-controlled).
+
 Read the results from `<outDir>/fleet.json` (or open `<outDir>-html/fleet.html`
 — a self-contained summary table linking to every target's own report)
 rather than opening each target individually. `<outDir>` holds only raw

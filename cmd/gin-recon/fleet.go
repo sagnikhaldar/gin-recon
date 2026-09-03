@@ -46,6 +46,14 @@ const fleetDeltaFilename = "fleet-delta.json"
 // organization's membership possibly changing before the next run.
 const discoveredTargetsFilename = "discovered-targets.json"
 
+// configSnapshotBasename is the base filename an --org run's resolved
+// --config is copied into --out under (its own extension, .json or
+// .yaml/.yml, is preserved) — docs/adr/0025-fleet-org-config-snapshot.md.
+// Unlike discoveredTargetsFilename this isn't schema data fleet.json ever
+// references, just a plain audit copy for whoever revisits an --org run
+// later, after the original --config path may have moved or changed.
+const configSnapshotBasename = "config-snapshot"
+
 // fleetGitHubAPIBaseForTests overrides the GitHub API base URL --org uses.
 // Empty in every real invocation; tests point it at a local httptest.Server
 // so --org's own logic (pagination, incompleteness, gating) is exercisable
@@ -86,6 +94,9 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	manifestPath, manifest, manifestData, discoveryIncomplete, exitCode := resolveFleetManifest(opts, allowedHosts, stderr)
 	if exitCode != cli.ExitSuccess {
 		return exitCode
+	}
+	if code := writeFleetConfigSnapshot(opts, stderr); code != cli.ExitSuccess {
+		return code
 	}
 
 	// Loaded now, before anything below writes a single byte of this run's
@@ -367,6 +378,34 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 		return "", nil, nil, false, cli.ExitOperationalError
 	}
 	return discoveredPath, result.Manifest, data, result.Incomplete, cli.ExitSuccess
+}
+
+// writeFleetConfigSnapshot copies opts.ConfigPath's exact bytes into --out
+// as configSnapshotBasename, preserving the source's own extension, so an
+// --org run's classification config survives independent of the original
+// --config path later moving or changing — docs/adr/0025-fleet-org-config-snapshot.md.
+// A no-op for a --targets run (its own manifest/config are expected to
+// already be version-controlled together) or when --config wasn't given
+// (--config is optional for fleet; nothing to snapshot).
+func writeFleetConfigSnapshot(opts *cli.Options, stderr io.Writer) int {
+	if opts.Org == "" || opts.ConfigPath == "" {
+		return cli.ExitSuccess
+	}
+	data, err := os.ReadFile(opts.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	ext := filepath.Ext(opts.ConfigPath)
+	if ext == "" {
+		ext = ".json"
+	}
+	dest := filepath.Join(opts.OutDir, configSnapshotBasename+ext)
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	return cli.ExitSuccess
 }
 
 // runFleetRender re-renders every target recorded `ok` in a saved
