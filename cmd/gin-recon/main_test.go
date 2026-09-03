@@ -1097,6 +1097,71 @@ func TestRunFleetTargetsDoesNotWriteConfigSnapshot(t *testing.T) {
 	}
 }
 
+// TestRunFleetOutDotProducesSensibleHTMLSibling is a regression test for a
+// real bug found live-testing against a real org: `fleet --out .` (a
+// realistic invocation — running from inside the directory meant to hold
+// output) turned the naive `opts.OutDir + "-html"` / filepath.Base(".")
+// computation into a nonsense ".-html" directory nested inside --out
+// itself, and fleet.html's own link back to --out became "../." (the
+// parent of --out, not --out) instead of a real sibling and a working
+// link — see fleetHTMLSibling's doc comment.
+func TestRunFleetOutDotProducesSensibleHTMLSibling(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "fleet-out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(outDir, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(outDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWD) }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", "targets.json", "--out", "."}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	wantHTMLDir := outDir + "-html"
+	if _, err := os.Stat(filepath.Join(wantHTMLDir, "fleet.html")); err != nil {
+		t.Fatalf("expected fleet.html under sibling dir %s: %v", wantHTMLDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, ".-html")); !os.IsNotExist(err) {
+		t.Errorf("a bogus %q directory was created inside --out, stat err = %v", filepath.Join(outDir, ".-html"), err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "fleet-out-html")); err != nil {
+		t.Errorf("sibling html dir should be a sibling of fleet-out, not nested: %v", err)
+	}
+
+	htmlData, err := os.ReadFile(filepath.Join(wantHTMLDir, "fleet.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(htmlData), `href="../."`) || strings.Contains(string(htmlData), ".././") {
+		t.Errorf("fleet.html links back to --out's parent instead of --out itself: %s", htmlData)
+	}
+	if !strings.Contains(string(htmlData), "../fleet-out/") {
+		t.Errorf("fleet.html should link back to --out via ../fleet-out/, got: %s", htmlData)
+	}
+}
+
 // TestRunFleetRenderAddsFormatWithoutRescanning is the CLI-level
 // integration test for docs/adr/0024-fleet-render.md's central claim:
 // render, over a fleet.json a prior fleet run already produced,

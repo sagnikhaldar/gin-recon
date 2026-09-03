@@ -54,6 +54,24 @@ const discoveredTargetsFilename = "discovered-targets.json"
 // later, after the original --config path may have moved or changed.
 const configSnapshotBasename = "config-snapshot"
 
+// fleetHTMLSibling resolves --out's sibling rendered-output directory and
+// the relative link back to --out from inside it
+// (docs/adr/0023-fleet-raw-rendered-split.md). Anchored to --out's own
+// absolute path rather than a naive `outDir + "-html"` / filepath.Base(outDir)
+// on the raw string: --out "." is a real, common invocation (scanning from
+// inside the intended output directory), and filepath.Base(".") is itself
+// "." — a naive approach turns it into a nonsense ".-html" sibling nested
+// inside --out and a "../." raw-link that points at --out's own parent
+// instead of --out itself.
+func fleetHTMLSibling(outDir string) (htmlDir, rawLink string, err error) {
+	abs, err := filepath.Abs(outDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving --out: %w", err)
+	}
+	base := filepath.Base(abs)
+	return filepath.Join(filepath.Dir(abs), base+"-html"), "../" + base, nil
+}
+
 // fleetGitHubAPIBaseForTests overrides the GitHub API base URL --org uses.
 // Empty in every real invocation; tests point it at a local httptest.Server
 // so --org's own logic (pagination, incompleteness, gating) is exercisable
@@ -115,7 +133,11 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	// produces lands in the sibling <out>-html directory instead
 	// (docs/adr/0023-fleet-raw-rendered-split.md) — derived automatically,
 	// no separate flag, no separate render step to remember to run.
-	htmlOutDir := opts.OutDir + "-html"
+	htmlOutDir, rawDirLink, err := fleetHTMLSibling(opts.OutDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
 	aggregatePath := filepath.Join(opts.OutDir, fleetAggregateFilename)
 	htmlPath := filepath.Join(htmlOutDir, fleetHTMLFilename)
 	checkExists := []string{aggregatePath, htmlPath}
@@ -227,7 +249,6 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}
-	rawDirLink := "../" + filepath.Base(opts.OutDir)
 	htmlData, err := format.FleetHTML(agg, fleetDelta, agg.Scope, rawDirLink)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
@@ -446,7 +467,11 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 	}
 
 	rawDir := opts.OutDir
-	htmlOutDir := rawDir + "-html"
+	htmlOutDir, rawDirLink, err := fleetHTMLSibling(rawDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
 	if err := os.MkdirAll(htmlOutDir, 0o755); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
@@ -515,7 +540,6 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 		return cli.ExitOperationalError
 	}
 
-	rawDirLink := "../" + filepath.Base(rawDir)
 	htmlData, err := format.FleetHTML(&agg, nil, agg.Scope, rawDirLink)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: fleet render: rendering fleet.html: %v\n", err)
