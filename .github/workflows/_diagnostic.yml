@@ -1,0 +1,16 @@
+name: Diagnostic Tag Push
+
+on:
+  push:
+    tags:
+      - "diag-*"
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "tag-push diagnostic ok"
