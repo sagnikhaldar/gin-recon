@@ -394,6 +394,12 @@ const (
 	classifierRulesetVersion = "0.1.0"
 )
 
+// ToolVersion exports toolVersion for callers outside this package that need
+// to stamp gin-recon's own version onto a non-Report artifact (fleet.json's
+// aggregate, for instance) without duplicating the version string anywhere
+// else it could drift out of sync.
+const ToolVersion = toolVersion
+
 // NewInventoryReport builds a Report with no authentication judgment, policy
 // results, summary, or findings, matching docs/report-contract.md's
 // "Inventory reports omit authentication judgment..." rule.

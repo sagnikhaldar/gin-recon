@@ -20,6 +20,7 @@ const (
 	CommandSuggestAuth Command = "suggest-auth"
 	CommandSchema      Command = "schema"
 	CommandRender      Command = "render"
+	CommandFleet       Command = "fleet"
 )
 
 // OutputFormat is one --format value. This is deliberately a separate type
@@ -89,6 +90,17 @@ type Options struct {
 	// runs analysis — it only ever reads the one file named by --report (and,
 	// if given, --config).
 	ReportPath string
+
+	// fleet only (docs/adr/0018-fleet-scanning.md): orchestrates one `audit`
+	// subprocess per target named in TargetsPath's manifest. Reuses
+	// ConfigPath, Formats, OutDir, Force, and FailOn above — a fleet run's
+	// shared config and format selection apply identically to every target,
+	// and FailOn's "incomplete" selector extends naturally to "the fleet
+	// aggregate isn't complete" rather than needing a fleet-specific gate
+	// vocabulary.
+	TargetsPath string
+	Concurrency int
+	Resume      bool
 
 	// ExplicitFlags records which flag names the user actually passed on the
 	// command line, as opposed to a field merely holding its default value

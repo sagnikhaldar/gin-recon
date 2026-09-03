@@ -50,6 +50,39 @@ func Validate(opts *Options) error {
 		return nil
 	}
 
+	// fleet has no --src/--profile/etc. of its own (see parseFleet) — each
+	// target supplies its own --src via the manifest, resolved later by
+	// internal/fleet, not here. Its --format/--out rules mirror audit's own;
+	// --fail-on is restricted to the one selector meaningful at fleet scope
+	// today (docs/adr/0018-fleet-scanning.md).
+	if opts.Command == CommandFleet {
+		if opts.TargetsPath == "" {
+			return fmt.Errorf("--targets is required")
+		}
+		if opts.OutDir == "" {
+			return fmt.Errorf("--out is required")
+		}
+		if opts.Concurrency < 1 || opts.Concurrency > 8 {
+			return fmt.Errorf("--concurrency: must be between 1 and 8, got %d", opts.Concurrency)
+		}
+		// Only the JSON aggregate exists today; md/openapi/sarif are
+		// per-target formats fleet already writes to each target's own
+		// output directory, not something the fleet.json aggregate itself
+		// renders as (docs/adr/0018-fleet-scanning.md). Rejecting them here
+		// rather than silently ignoring keeps that explicit.
+		for _, f := range opts.Formats {
+			if f != FormatJSON {
+				return fmt.Errorf("--format: fleet only supports \"json\" today, got %q", f)
+			}
+		}
+		for _, selector := range opts.FailOn {
+			if selector != "incomplete" {
+				return fmt.Errorf("--fail-on: fleet only supports \"incomplete\" today, got %q", selector)
+			}
+		}
+		return nil
+	}
+
 	switch opts.Profile {
 	case model.ProfileSyntaxOnly, model.ProfileTyped:
 	default:

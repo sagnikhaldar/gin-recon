@@ -1,4 +1,4 @@
-// Command gin-recon is the CLI entry point (docs/cli-contract.md). main
+// Command gin-recon is the CLI entry point (docs/reference.md). main
 // itself only wires argument parsing, dispatch, and exit codes; all real
 // logic lives in internal packages so it can be unit-tested without
 // spawning a process.
@@ -21,6 +21,7 @@ import (
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
 	"github.com/sagnikhaldar/gin-recon/internal/compare"
 	"github.com/sagnikhaldar/gin-recon/internal/config"
+	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 	"github.com/sagnikhaldar/gin-recon/internal/format"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
 	"github.com/sagnikhaldar/gin-recon/internal/report"
@@ -250,6 +251,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSuggestAuth(opts, stdout, stderr)
 	case cli.CommandRender:
 		return runRender(opts, stdout, stderr)
+	case cli.CommandFleet:
+		return runFleet(opts, stdout, stderr)
 	default:
 		// Unreachable: cli.Parse rejects any other command before returning.
 		fmt.Fprintf(stderr, "gin-recon: internal error: unhandled command %q\n", opts.Command)
@@ -878,6 +881,78 @@ func runRender(opts *cli.Options, stdout, stderr io.Writer) int {
 	return writeReport(rep, opts, cfg, stdout, stderr, cli.ExitSuccess)
 }
 
+// runFleet wires cli.Options through internal/fleet's orchestration, per
+// docs/adr/0018-fleet-scanning.md. It owns the one filesystem decision that
+// belongs at the CLI layer rather than inside internal/fleet — refusing to
+// overwrite an existing fleet.json without --force, the same convention
+// writeReport already applies to every other command's output — and
+// resolves the binary fleet re-execs per target.
+func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
+	manifest, manifestData, err := fleet.LoadManifest(opts.TargetsPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+
+	aggregatePath := filepath.Join(opts.OutDir, fleetAggregateFilename)
+	if !opts.Force && !opts.Resume {
+		if _, err := os.Stat(aggregatePath); err == nil {
+			fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite or --resume to continue\n", aggregatePath)
+			return cli.ExitOperationalError
+		}
+	}
+
+	binaryPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: resolving the gin-recon binary to re-exec per target: %v\n", err)
+		return cli.ExitOperationalError
+	}
+
+	var stderrBuf bytes.Buffer
+	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
+		ManifestPath: opts.TargetsPath,
+		Manifest:     manifest,
+		ManifestData: manifestData,
+		ConfigPath:   opts.ConfigPath,
+		Formats:      []string{string(cli.FormatJSON)},
+		OutDir:       opts.OutDir,
+		Concurrency:  opts.Concurrency,
+		Resume:       opts.Resume,
+		BinaryPath:   binaryPath,
+		ToolVersion:  report.ToolVersion,
+		Stderr:       &stderrBuf,
+	})
+	if stderrBuf.Len() > 0 {
+		stderr.Write(stderrBuf.Bytes())
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+
+	data, err := json.MarshalIndent(agg, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: encoding fleet.json: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if err := os.WriteFile(aggregatePath, data, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+
+	for _, sel := range opts.FailOn {
+		if sel == "incomplete" && !agg.Coverage.Complete {
+			return cli.ExitGate
+		}
+	}
+	return cli.ExitSuccess
+}
+
+// fleetAggregateFilename is fleet's one output file at --out's top level;
+// each target's own full report lives underneath targets/<name>/, untouched
+// (docs/adr/0018-fleet-scanning.md).
+const fleetAggregateFilename = "fleet.json"
+
 // validateRenderedReport rejects a --report document render cannot safely
 // reformat: an unrecognized/incompatible schema major — the same
 // compare.SchemaMajor check --baseline applies via compare.Compatible,
@@ -910,5 +985,6 @@ Usage:
   gin-recon suggest-auth [options]
   gin-recon schema [--kind report|config]
   gin-recon render --report <routes.json> [options]
+  gin-recon fleet --targets <targets.json> --out <dir> [options]
 
-See docs/cli-contract.md for the full option reference.`
+See docs/reference.md for the full option reference.`

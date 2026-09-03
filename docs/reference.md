@@ -40,6 +40,7 @@ The executable is `gin-recon <command> [options]`.
 - `suggest-auth`: emit ranked canonical middleware candidates as JSON; suggestions never change classification.
 - `schema`: emit either the report or configuration JSON Schema.
 - `render`: re-run formatting only, over an already-produced report; never scans a source tree.
+- `fleet`: run `audit` once per target in a manifest, aggregating results with checkpointed resume.
 
 Exit `0` means successful with no requested gate, `1` means argument/configuration/operational failure, and `2` means an audit gate matched. Help and version requests exit `0`.
 
@@ -79,6 +80,21 @@ SARIF is audit-only. Inventory OpenAPI contains no authentication assertions. `a
 - `--report <path>` (required): a `routes.json`-shaped file, loaded with the same load path `--baseline` uses. A missing, malformed, or schema-incompatible file fails with exit `1`.
 - `--format` / `--out` / `--force`: follow the identical rules documented above, including the `api.html` companion file, except `sarif` is valid only when the loaded report's `command` is `audit`, checked against that document once it is loaded, not against `render` itself.
 - `--config`: applies only to what the formatting layer itself reads (`openapi.title`/`openapi.securitySchemes`), not to any `analysis.*` setting, since no analysis runs.
+
+### Fleet options
+
+`fleet` orchestrates one `audit` subprocess per target in a manifest instead of scanning a single `--src`. It accepts none of the scan/analysis options above — each target supplies its own source, resolved from the manifest, not from a flag on this command. Each target's `audit` runs in its own subprocess rather than in-process, so one hostile or resource-exhausting target is contained by the same process boundary an ordinary single-repo scan already has.
+
+- `--targets <file>` (required): a strict JSON manifest, `{"version": 1, "targets": [{"name": "...", "src": "..."}]}`. `name` becomes that target's output subdirectory name and must match `^[A-Za-z0-9._-]+$`; `src` is a local directory, resolved relative to the manifest file's own directory when not absolute.
+- `--config <file>`: applied identically to every target's own `audit` invocation.
+- `--out <dir>` (required): `fleet.json` (the aggregate) is written here, alongside each target's full, untouched report under `targets/<name>/`.
+- `--force`: required to overwrite an existing `fleet.json`, same convention as every other command's output — unless `--resume` is also given.
+- `--concurrency <n>`: default `1`, must be between `1` and `8`.
+- `--resume`: skip any target already recorded as complete in `--out`'s checkpoint. Refused with an explanation, not silently ignored, if the targets file, `--config`, or `--format` no longer matches what the checkpoint was written under.
+- `--format`: only `json` exists today.
+- `--fail-on incomplete`: exits `2` when the aggregate's `coverage.complete` is false — any target failed, or any target's own `scanCoverage.complete` came back false. No other `--fail-on` selector is supported yet.
+
+A target with no `go.mod` at all is recorded as `not-go-module`, distinct from `failed` — it never counts as a scan failure. A target whose `audit` subprocess actually errors is `failed` and is retried on the next `--resume`; a target that completed (even with incomplete internal coverage) is `ok` and is never retried.
 
 ### Precedence and validation
 

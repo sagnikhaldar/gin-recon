@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/sagnikhaldar/gin-recon/internal/model"
@@ -18,7 +19,7 @@ import (
 // checks, which are a separate concern from syntax.
 func Parse(args []string) (*Options, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("missing command: expected one of inventory, audit, suggest-auth, schema, render")
+		return nil, fmt.Errorf("missing command: expected one of inventory, audit, suggest-auth, schema, render, fleet")
 	}
 
 	cmd := Command(args[0])
@@ -31,10 +32,12 @@ func Parse(args []string) (*Options, error) {
 		return parseRender(rest)
 	case CommandSchema:
 		return parseSchema(rest)
+	case CommandFleet:
+		return parseFleet(rest)
 	case "-h", "--help", "-help":
 		return nil, flag.ErrHelp
 	default:
-		return nil, fmt.Errorf("unknown command %q: expected one of inventory, audit, suggest-auth, schema, render", cmd)
+		return nil, fmt.Errorf("unknown command %q: expected one of inventory, audit, suggest-auth, schema, render, fleet", cmd)
 	}
 }
 
@@ -170,6 +173,58 @@ func parseRender(args []string) (*Options, error) {
 	}
 	if len(opts.Formats) == 0 {
 		opts.Formats = []OutputFormat{FormatPretty}
+	}
+
+	return opts, nil
+}
+
+// parseFleet handles fleet, per docs/adr/0018-fleet-scanning.md: its inputs
+// are --targets (the manifest naming each local target), --config (shared
+// across every target's own audit subprocess), --format/--out/--force
+// (identical semantics to audit's own), --fail-on (fleet-level selectors
+// only — Validate restricts this to "incomplete"), --concurrency, and
+// --resume. It registers none of audit's --src/--profile/--include/etc.:
+// each target supplies its own --src, resolved from the manifest, not from
+// a single flag on this command.
+func parseFleet(args []string) (*Options, error) {
+	fs := flag.NewFlagSet(string(CommandFleet), flag.ContinueOnError)
+	fs.SetOutput(discardWriter{})
+
+	opts := &Options{Command: CommandFleet, Concurrency: 1}
+
+	registerOnceString(fs, "targets", &opts.TargetsPath)
+	registerOnceString(fs, "config", &opts.ConfigPath)
+	registerOnceString(fs, "out", &opts.OutDir)
+	registerOnceBool(fs, "force", &opts.Force)
+	registerOnceBool(fs, "resume", &opts.Resume)
+	var concurrency string
+	registerOnceString(fs, "concurrency", &concurrency)
+	fs.Var(&repeatableList{&opts.FailOn}, "fail-on", "repeatable or comma-separated gate selector")
+	var formats []string
+	fs.Var(&repeatableList{&formats}, "format", "repeatable or comma-separated output format")
+
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if fs.NArg() > 0 {
+		return nil, fmt.Errorf("%s: unexpected positional argument %q", CommandFleet, fs.Arg(0))
+	}
+
+	opts.ExplicitFlags = map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { opts.ExplicitFlags[f.Name] = true })
+
+	if concurrency != "" {
+		n, err := strconv.Atoi(concurrency)
+		if err != nil {
+			return nil, fmt.Errorf("--concurrency: invalid integer %q", concurrency)
+		}
+		opts.Concurrency = n
+	}
+	for _, f := range formats {
+		opts.Formats = append(opts.Formats, OutputFormat(f))
+	}
+	if len(opts.Formats) == 0 {
+		opts.Formats = []OutputFormat{FormatJSON}
 	}
 
 	return opts, nil

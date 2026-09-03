@@ -56,6 +56,7 @@ Exit code `2` means the requested gate matched: an expected policy result, not a
 | `audit` | Authentication classification, policy evaluation, findings, and baseline comparison (`--baseline`, `--fail-on new,regression`). |
 | `suggest-auth` | Ranked canonical middleware candidates to help write configuration. Never affects classification. |
 | `render` | Regenerates any output format from an already-saved `routes.json`, with no re-analysis: no source tree, no network, and typically well under a second even on a large repository. |
+| `fleet` | Runs `audit` once per target listed in a manifest, aggregating results with bounded concurrency and checkpointed resume. See [docs/reference.md](docs/reference.md#fleet-options). |
 | `schema` | Emits the versioned report or configuration JSON Schema. |
 
 Full reference: [docs/reference.md](docs/reference.md) for every flag and the config format.
@@ -101,6 +102,8 @@ gin-recon audit --src ./current --config gin-recon.json \
 ```
 
 If the two reports were produced under different scan-scope fingerprints, the comparison refuses to run rather than guess. Keep the config and ignore rules identical across the two revisions you're comparing.
+
+A ready-to-copy GitHub Actions workflow doing exactly this, with SARIF wired into Code Scanning, is at [examples/github-actions](examples/github-actions).
 
 ## Known boundaries
 

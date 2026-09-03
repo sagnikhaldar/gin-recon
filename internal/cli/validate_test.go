@@ -138,3 +138,32 @@ func TestValidateRejectsZeroTimeout(t *testing.T) {
 	dir := t.TempDir()
 	expectValidateError(t, "must be positive", "inventory", "--src="+dir, "--timeout=0s")
 }
+
+func TestValidateFleetRequiresTargets(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--targets is required", "fleet", "--out="+dir)
+}
+
+func TestValidateFleetRequiresOut(t *testing.T) {
+	expectValidateError(t, "--out is required", "fleet", "--targets=/tmp/targets.json")
+}
+
+func TestValidateFleetRejectsOutOfRangeConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "must be between 1 and 8", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--concurrency=9")
+}
+
+func TestValidateFleetRejectsNonJSONFormat(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "only supports \"json\"", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--format=md")
+}
+
+func TestValidateFleetRejectsUnsupportedFailOnSelector(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "only supports \"incomplete\"", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--fail-on=public")
+}
+
+func TestValidateFleetAcceptsIncompleteFailOn(t *testing.T) {
+	dir := t.TempDir()
+	mustParseAndValidate(t, "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--fail-on=incomplete")
+}

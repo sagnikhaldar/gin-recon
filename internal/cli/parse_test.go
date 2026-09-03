@@ -195,3 +195,31 @@ func TestParseTagsSplitsOnComma(t *testing.T) {
 		t.Errorf("Tags = %v, want %v", opts.Tags, want)
 	}
 }
+
+func TestParseFleetDefaults(t *testing.T) {
+	opts := mustParse(t, "fleet", "--targets=/tmp/targets.json", "--out=/tmp/out")
+	if opts.Command != CommandFleet {
+		t.Errorf("Command = %v, want fleet", opts.Command)
+	}
+	if opts.Concurrency != 1 {
+		t.Errorf("Concurrency = %d, want 1", opts.Concurrency)
+	}
+	if len(opts.Formats) != 1 || opts.Formats[0] != FormatJSON {
+		t.Errorf("Formats = %v, want [json]", opts.Formats)
+	}
+}
+
+func TestParseFleetRejectsScanOnlyOption(t *testing.T) {
+	expectParseError(t, "flag provided but not defined", "fleet", "--targets=/tmp/targets.json", "--src=/tmp")
+}
+
+func TestParseFleetConcurrency(t *testing.T) {
+	opts := mustParse(t, "fleet", "--targets=/tmp/targets.json", "--out=/tmp/out", "--concurrency=4")
+	if opts.Concurrency != 4 {
+		t.Errorf("Concurrency = %d, want 4", opts.Concurrency)
+	}
+}
+
+func TestParseFleetRejectsNonIntegerConcurrency(t *testing.T) {
+	expectParseError(t, "invalid integer", "fleet", "--targets=/tmp/targets.json", "--out=/tmp/out", "--concurrency=many")
+}
