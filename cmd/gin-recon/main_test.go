@@ -1014,6 +1014,61 @@ func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
 	}
 }
 
+// TestRunFleetOrgResumeToleratesPushedAtDrift is a regression test for a
+// real bug found live against a real organization
+// (docs/adr/0026-fleet-org-resume-ignores-provenance-drift.md): --resume
+// refused every real re-run because the discovered manifest's GitHubMeta
+// (pushedAt in particular, which changes on every commit anywhere in the
+// org) was part of what got hashed for checkpoint identity. Two --org
+// invocations against a fake GitHub API that returns the identical
+// target set but a different pushed_at each time must both succeed, with
+// the second one actually resuming (not re-scanning) the completed target.
+func TestRunFleetOrgResumeToleratesPushedAtDrift(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	const repoURL = "https://repo-host-not-in-any-allowlist.test/x.git"
+	pushedAt := "2026-01-01T00:00:00Z"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal([]map[string]any{
+			{"name": "repo-a", "clone_url": repoURL, "default_branch": "main", "size": 1, "pushed_at": pushedAt},
+		})
+		w.Write(body)
+	}))
+	defer srv.Close()
+	fleetGitHubAPIBaseForTests = srv.URL
+	defer func() { fleetGitHubAPIBaseForTests = "" }()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "cfg.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"api.github.com"},{"host":"github.com"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+
+	args := []string{"fleet", "--org", "myorg", "--config", cfgPath, "--out", outDir, "--allow-remote-targets"}
+
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != cli.ExitSuccess {
+		t.Fatalf("first run: exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	// The repository received a "commit" between the two runs: same name,
+	// same clone URL, only pushed_at differs — exactly the drift that must
+	// not invalidate the checkpoint.
+	pushedAt = "2026-06-15T12:00:00Z"
+
+	stdout.Reset()
+	stderr.Reset()
+	code := run(append(append([]string{}, args...), "--resume"), &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("resumed run: exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "the targets file has changed") {
+		t.Fatalf("resume refused despite only pushed_at drifting: %s", stderr.String())
+	}
+}
+
 // TestRunFleetOrgWritesConfigSnapshot is the CLI-level integration test for
 // docs/adr/0025-fleet-org-config-snapshot.md: an --org run copies its
 // resolved --config verbatim into --out, alongside discovered-targets.json,

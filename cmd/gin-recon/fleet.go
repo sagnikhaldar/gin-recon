@@ -398,7 +398,28 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return "", nil, nil, false, cli.ExitOperationalError
 	}
-	return discoveredPath, result.Manifest, data, result.Incomplete, cli.ExitSuccess
+	identityData, err := fleetManifestIdentityData(result.Manifest)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: --org: %v\n", err)
+		return "", nil, nil, false, cli.ExitOperationalError
+	}
+	return discoveredPath, result.Manifest, identityData, result.Incomplete, cli.ExitSuccess
+}
+
+// fleetManifestIdentityData returns m's JSON encoding with every target's
+// GitHub provenance block stripped, for use as the fleet checkpoint's
+// ManifestHash input (docs/adr/0026-fleet-org-resume-ignores-provenance-drift.md).
+// GitHubMeta (pushedAt, archived, visibility, ...) drifts on ordinary
+// repository activity between two --org discovery calls with zero effect
+// on what actually gets scanned — hashing the full discovered-targets.json
+// (which keeps GitHubMeta, unaffected by this) made --resume refuse almost
+// any real re-run against an active organization.
+func fleetManifestIdentityData(m *fleet.Manifest) ([]byte, error) {
+	stripped := &fleet.Manifest{Version: m.Version, Targets: make([]fleet.Target, len(m.Targets))}
+	for i, t := range m.Targets {
+		stripped.Targets[i] = fleet.Target{Name: t.Name, Src: t.Src, Git: t.Git}
+	}
+	return json.Marshal(stripped)
 }
 
 // writeFleetConfigSnapshot copies opts.ConfigPath's exact bytes into --out
