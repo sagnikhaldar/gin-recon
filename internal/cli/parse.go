@@ -198,6 +198,7 @@ func parseFleet(args []string) (*Options, error) {
 	registerOnceString(fs, "out", &opts.OutDir)
 	registerOnceBool(fs, "force", &opts.Force)
 	registerOnceBool(fs, "resume", &opts.Resume)
+	registerOnceString(fs, "baseline", &opts.Baseline)
 	registerOnceBool(fs, "allow-remote-targets", &opts.AllowRemoteTargets)
 	registerOnceBool(fs, "include-archived", &opts.IncludeArchived)
 	registerOnceBool(fs, "include-forks", &opts.IncludeForks)

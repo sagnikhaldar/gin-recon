@@ -190,10 +190,25 @@ func TestValidateFleetRejectsNonJSONFormat(t *testing.T) {
 
 func TestValidateFleetRejectsUnsupportedFailOnSelector(t *testing.T) {
 	dir := t.TempDir()
-	expectValidateError(t, "only supports \"incomplete\"", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--fail-on=public")
+	expectValidateError(t, "fleet supports", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--fail-on=public")
 }
 
 func TestValidateFleetAcceptsIncompleteFailOn(t *testing.T) {
 	dir := t.TempDir()
 	mustParseAndValidate(t, "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--fail-on=incomplete")
+}
+
+func TestValidateFleetFailOnNewRequiresBaseline(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--fail-on new requires --baseline", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--fail-on=new")
+}
+
+func TestValidateFleetFailOnRegressionRequiresBaseline(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--fail-on regression requires --baseline", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--fail-on=regression")
+}
+
+func TestValidateFleetAcceptsNewAndRegressionWithBaseline(t *testing.T) {
+	dir := t.TempDir()
+	mustParseAndValidate(t, "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--baseline=/tmp/prior/fleet.json", "--fail-on=new,regression")
 }

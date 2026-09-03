@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
+	"github.com/sagnikhaldar/gin-recon/internal/report"
 )
 
 func TestFleetHTMLRendersTargets(t *testing.T) {
@@ -18,7 +19,7 @@ func TestFleetHTMLRendersTargets(t *testing.T) {
 	}
 	agg.Coverage.Complete = false
 
-	out, err := FleetHTML(agg)
+	out, err := FleetHTML(agg, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -39,7 +40,7 @@ func TestFleetHTMLEscapesHostileContent(t *testing.T) {
 		{Name: "<script>evil</script>", Status: fleet.StatusFailed, Error: "<img src=x onerror=alert(1)>"},
 	}}
 
-	out, err := FleetHTML(agg)
+	out, err := FleetHTML(agg, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -55,11 +56,41 @@ func TestFleetHTMLEscapesHostileContent(t *testing.T) {
 	}
 }
 
+func TestFleetHTMLRendersDeltaWhenPresent(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	delta := &fleet.FleetDelta{Targets: []fleet.TargetDelta{
+		{Name: "svc-a", Status: fleet.TargetUnchanged, Delta: &report.Delta{AddedRoutes: []string{"GET /new"}}},
+	}}
+	delta.Summary.AddedRoutes = 1
+
+	out, err := FleetHTML(agg, delta)
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	for _, want := range []string{"Baseline comparison", "GET /new", "1 added route"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("output missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestFleetHTMLOmitsDeltaSectionWhenAbsent(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	out, err := FleetHTML(agg, nil)
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "Baseline comparison") {
+		t.Error("expected no baseline-comparison section when no delta was given")
+	}
+}
+
 func TestFleetHTMLOmitsReportLinkWhenAbsent(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
 		{Name: "not-a-module", Status: fleet.StatusNotGoModule, Complete: true},
 	}}
-	out, err := FleetHTML(agg)
+	out, err := FleetHTML(agg, nil)
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}

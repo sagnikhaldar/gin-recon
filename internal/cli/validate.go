@@ -93,8 +93,14 @@ func Validate(opts *Options) error {
 			}
 		}
 		for _, selector := range opts.FailOn {
-			if selector != "incomplete" {
-				return fmt.Errorf("--fail-on: fleet only supports \"incomplete\" today, got %q", selector)
+			switch selector {
+			case "incomplete":
+			case "new", "regression":
+				if opts.Baseline == "" {
+					return fmt.Errorf("--fail-on %s requires --baseline", selector)
+				}
+			default:
+				return fmt.Errorf("--fail-on: fleet supports \"incomplete\", \"new\", and \"regression\", got %q", selector)
 			}
 		}
 		return nil

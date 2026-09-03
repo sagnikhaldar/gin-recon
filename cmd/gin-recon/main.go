@@ -1017,10 +1017,27 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		return exitCode
 	}
 
+	// Loaded now, before anything below writes a single byte of this run's
+	// own output — see fleet.LoadBaseline's own doc comment for why reading
+	// it any later would risk comparing a run against itself.
+	var baseline *fleet.Baseline
+	if opts.Baseline != "" {
+		var err error
+		baseline, err = fleet.LoadBaseline(opts.Baseline)
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return cli.ExitOperationalError
+		}
+	}
+
 	aggregatePath := filepath.Join(opts.OutDir, fleetAggregateFilename)
 	htmlPath := filepath.Join(opts.OutDir, fleetHTMLFilename)
+	checkExists := []string{aggregatePath, htmlPath}
+	if opts.Baseline != "" {
+		checkExists = append(checkExists, filepath.Join(opts.OutDir, fleetDeltaFilename))
+	}
 	if !opts.Force && !opts.Resume {
-		for _, p := range []string{aggregatePath, htmlPath} {
+		for _, p := range checkExists {
 			if _, err := os.Stat(p); err == nil {
 				fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite or --resume to continue\n", p)
 				return cli.ExitOperationalError
@@ -1083,11 +1100,30 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		return cli.ExitOperationalError
 	}
 
+	var fleetDelta *fleet.FleetDelta
+	if opts.Baseline != "" {
+		fleetDelta, err = fleet.CompareBaseline(baseline, opts.OutDir, agg.Targets)
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		deltaData, err := json.MarshalIndent(fleetDelta, "", "  ")
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet: encoding fleet-delta.json: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		if err := os.WriteFile(filepath.Join(opts.OutDir, fleetDeltaFilename), deltaData, 0o644); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return cli.ExitOperationalError
+		}
+	}
+
 	// fleet.html is an unconditional companion to fleet.json, the same
 	// relationship api.html already has with openapi.json
 	// (docs/adr/0020-fleet-html-view.md) — no separate flag, always
-	// regenerated from the same agg value just marshaled above.
-	htmlData, err := format.FleetHTML(agg)
+	// regenerated from the same agg/fleetDelta values already computed
+	// above, nothing re-read from disk.
+	htmlData, err := format.FleetHTML(agg, fleetDelta)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
 		return cli.ExitOperationalError
@@ -1098,12 +1134,27 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	}
 
 	for _, sel := range opts.FailOn {
-		if sel == "incomplete" && !agg.Coverage.Complete {
-			return cli.ExitGate
+		switch sel {
+		case "incomplete":
+			if !agg.Coverage.Complete {
+				return cli.ExitGate
+			}
+		case "new":
+			if fleetDelta.HasNew() {
+				return cli.ExitGate
+			}
+		case "regression":
+			if fleetDelta.HasRegression() {
+				return cli.ExitGate
+			}
 		}
 	}
 	return cli.ExitSuccess
 }
+
+// fleetDeltaFilename is fleet's --baseline output, written only when
+// --baseline is given (docs/adr/0022-fleet-baseline-delta.md).
+const fleetDeltaFilename = "fleet-delta.json"
 
 // fleetAggregateFilename is fleet's one output file at --out's top level;
 // each target's own full report lives underneath targets/<name>/, untouched
