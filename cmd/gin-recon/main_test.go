@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -927,5 +930,85 @@ func TestRunRenderNeverTouchesASourceTree(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "gin-recon inventory") {
 		t.Errorf("stdout = %q, want pretty-formatted output over the loaded report", stdout.String())
+	}
+}
+
+// buildRealGinReconBinary compiles this checkout's actual main package to a
+// temp binary, for tests that need fleet to re-exec a real "audit"
+// subcommand rather than the go-test binary os.Executable() would otherwise
+// resolve to under `go test`.
+func buildRealGinReconBinary(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "gin-recon-under-test")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building gin-recon for test: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// TestRunFleetOrgMaxReposIncompleteTriggersFailOn is a regression test for a
+// real bug caught by hand: --max-repos capping a --org discovery (fewer
+// repositories fetched than the organization actually has) must count as
+// "incomplete" for --fail-on incomplete, the same way a target's own
+// scanCoverage.complete: false already does. It didn't — discoveryIncomplete
+// was reported to stderr but never folded into the aggregate's
+// Coverage.Complete, so the gate silently never fired even though every
+// discovered (capped) target finished cleanly.
+func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	// A host deliberately absent from the allowlist below: the clone
+	// attempt fails fast at the authorization check, with no real network
+	// access and no dependency on clone success — this test only needs to
+	// isolate the discovery-incompleteness bug, not exercise cloning.
+	const repoURL = "https://repo-host-not-in-any-allowlist.test/x.git"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal([]map[string]string{
+			{"name": "repo-a", "clone_url": repoURL, "default_branch": "main"},
+			{"name": "repo-b", "clone_url": repoURL, "default_branch": "main"},
+			{"name": "repo-c", "clone_url": repoURL, "default_branch": "main"},
+		})
+		w.Write(body)
+	}))
+	defer srv.Close()
+	fleetGitHubAPIBaseForTests = srv.URL
+	defer func() { fleetGitHubAPIBaseForTests = "" }()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "cfg.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"api.github.com"},{"host":"github.com"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"fleet", "--org", "myorg", "--config", cfgPath, "--out", outDir,
+		"--allow-remote-targets", "--max-repos", "2", "--fail-on", "incomplete",
+	}, &stdout, &stderr)
+
+	if code != cli.ExitGate {
+		t.Fatalf("exit code = %d, want %d (ExitGate); stderr: %s", code, cli.ExitGate, stderr.String())
+	}
+	aggData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agg struct {
+		Targets  []map[string]any `json:"targets"`
+		Coverage struct {
+			Complete bool `json:"complete"`
+		} `json:"coverage"`
+	}
+	if err := json.Unmarshal(aggData, &agg); err != nil {
+		t.Fatal(err)
+	}
+	if agg.Coverage.Complete {
+		t.Error("fleet.json coverage.complete = true, want false: --max-repos capped a larger discovery")
+	}
+	if len(agg.Targets) != 2 {
+		t.Fatalf("Targets = %+v, want exactly 2 (the --max-repos cap)", agg.Targets)
 	}
 }

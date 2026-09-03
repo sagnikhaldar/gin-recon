@@ -893,18 +893,31 @@ func runRender(opts *cli.Options, stdout, stderr io.Writer) int {
 // organization's membership possibly changing before the next run.
 const discoveredTargetsFilename = "discovered-targets.json"
 
+// fleetGitHubAPIBaseForTests overrides the GitHub API base URL --org uses.
+// Empty in every real invocation; tests point it at a local httptest.Server
+// so --org's own logic (pagination, incompleteness, gating) is exercisable
+// without real network access or a real token.
+var fleetGitHubAPIBaseForTests string
+
+// fleetBinaryPathForTests overrides the binary fleet re-execs per target.
+// Empty in every real invocation (os.Executable() resolves it); tests point
+// it at a real gin-recon binary built from this checkout, since
+// os.Executable() under `go test` resolves to the test binary itself, which
+// doesn't understand "audit" as a subcommand.
+var fleetBinaryPathForTests string
+
 // resolveFleetManifest implements cli.Validate's already-enforced "exactly
 // one of --targets or --org" rule: it loads a hand-written manifest, or
 // discovers one from a GitHub organization and persists it, so the rest of
 // runFleet never needs to know which one happened.
-func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, stderr io.Writer) (manifestPath string, manifest *fleet.Manifest, manifestData []byte, exitCode int) {
+func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, stderr io.Writer) (manifestPath string, manifest *fleet.Manifest, manifestData []byte, discoveryIncomplete bool, exitCode int) {
 	if opts.Org == "" {
 		manifest, manifestData, err := fleet.LoadManifest(opts.TargetsPath)
 		if err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-			return "", nil, nil, cli.ExitOperationalError
+			return "", nil, nil, false, cli.ExitOperationalError
 		}
-		return opts.TargetsPath, manifest, manifestData, cli.ExitSuccess
+		return opts.TargetsPath, manifest, manifestData, false, cli.ExitSuccess
 	}
 
 	// --org's own network call is gated by the identical two-part rule
@@ -923,14 +936,14 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 			token, ok = os.LookupEnv(h.TokenEnv)
 			if !ok {
 				fmt.Fprintf(stderr, "gin-recon: --org: environment variable %q named by fleet.allowedRemoteHosts is not set\n", h.TokenEnv)
-				return "", nil, nil, cli.ExitOperationalError
+				return "", nil, nil, false, cli.ExitOperationalError
 			}
 		}
 		break
 	}
 	if !found {
 		fmt.Fprintf(stderr, "gin-recon: --org: \"api.github.com\" is not in fleet.allowedRemoteHosts (required to enumerate an organization's repositories)\n")
-		return "", nil, nil, cli.ExitOperationalError
+		return "", nil, nil, false, cli.ExitOperationalError
 	}
 
 	result, err := fleet.DiscoverOrgRepos(context.Background(), fleet.DiscoverOptions{
@@ -939,10 +952,11 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 		IncludeForks:    opts.IncludeForks,
 		MaxRepos:        opts.MaxRepos,
 		Token:           token,
+		APIBase:         fleetGitHubAPIBaseForTests,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return "", nil, nil, cli.ExitOperationalError
+		return "", nil, nil, false, cli.ExitOperationalError
 	}
 	if result.Incomplete {
 		fmt.Fprintf(stderr, "gin-recon: --org %s: discovery is incomplete (--max-repos or the page cap was reached); rerun with a higher --max-repos for full coverage\n", opts.Org)
@@ -953,19 +967,19 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return "", nil, nil, cli.ExitOperationalError
+		return "", nil, nil, false, cli.ExitOperationalError
 	}
 	data, err := json.MarshalIndent(result.Manifest, "", "  ")
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: --org: encoding discovered manifest: %v\n", err)
-		return "", nil, nil, cli.ExitOperationalError
+		return "", nil, nil, false, cli.ExitOperationalError
 	}
 	discoveredPath := filepath.Join(opts.OutDir, discoveredTargetsFilename)
 	if err := os.WriteFile(discoveredPath, data, 0o644); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return "", nil, nil, cli.ExitOperationalError
+		return "", nil, nil, false, cli.ExitOperationalError
 	}
-	return discoveredPath, result.Manifest, data, cli.ExitSuccess
+	return discoveredPath, result.Manifest, data, result.Incomplete, cli.ExitSuccess
 }
 
 func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
@@ -990,7 +1004,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		}
 	}
 
-	manifestPath, manifest, manifestData, exitCode := resolveFleetManifest(opts, allowedHosts, stderr)
+	manifestPath, manifest, manifestData, discoveryIncomplete, exitCode := resolveFleetManifest(opts, allowedHosts, stderr)
 	if exitCode != cli.ExitSuccess {
 		return exitCode
 	}
@@ -1006,10 +1020,14 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		}
 	}
 
-	binaryPath, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(stderr, "gin-recon: fleet: resolving the gin-recon binary to re-exec per target: %v\n", err)
-		return cli.ExitOperationalError
+	binaryPath := fleetBinaryPathForTests
+	if binaryPath == "" {
+		var err error
+		binaryPath, err = os.Executable()
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet: resolving the gin-recon binary to re-exec per target: %v\n", err)
+			return cli.ExitOperationalError
+		}
 	}
 
 	var stderrBuf bytes.Buffer
@@ -1034,6 +1052,17 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
+	}
+
+	// An --org run that hit --max-repos or the page cap never even
+	// discovered every repository, which is a coarser kind of incompleteness
+	// than any one target's own scanCoverage.complete — every target that
+	// WAS scanned can finish perfectly clean while the fleet as a whole
+	// still doesn't cover the organization. docs/adr/0021-fleet-org-enumeration.md
+	// says this should read as coverage.complete: false; fold it in here so
+	// --fail-on incomplete (and fleet.json/fleet.html) actually reflect it.
+	if discoveryIncomplete {
+		agg.Coverage.Complete = false
 	}
 
 	data, err := json.MarshalIndent(agg, "", "  ")
