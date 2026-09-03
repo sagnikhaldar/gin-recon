@@ -37,7 +37,7 @@ func HTML(rep *report.Report, cfg *config.Config) ([]byte, []model.Diagnostic, e
 		title = cfg.OpenAPI.Title
 	}
 
-	page := fmt.Sprintf(htmlPageTemplate, html.EscapeString(title), htmlViewerCSS, escapeScriptClose(specJSON), htmlViewerJS)
+	page := fmt.Sprintf(htmlPageTemplate, html.EscapeString(title), themeCSS, htmlViewerCSS, brandMarkHTML, html.EscapeString(rep.ToolVersion), escapeScriptClose(specJSON), htmlViewerJS)
 	return []byte(page), diags, nil
 }
 
@@ -61,9 +61,14 @@ const htmlPageTemplate = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>%s</title>
-<style>%s</style>
+<style>%s
+%s</style>
 </head>
-<body>
+<body class="gr-shell">
+<header class="gr-site-header">
+<span class="gr-brand">%s<span>gin-recon</span></span>
+<div class="gr-header-meta">Generated offline, no network access at view time<br>gin-recon %s</div>
+</header>
 <div id="app">Loading…</div>
 <script id="gin-recon-spec" type="application/json">%s</script>
 <script>%s</script>
@@ -85,9 +90,9 @@ const htmlViewerCSS = `
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
 #app { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
-header { margin-bottom: 20px; }
-header h1 { margin: 0 0 4px; font-size: 22px; }
-header .meta { color: var(--muted); font-size: 13px; }
+#app header { margin-bottom: 20px; }
+#app header h1 { margin: 0 0 4px; font-size: 22px; }
+#app header .meta { color: var(--muted); font-size: 13px; }
 input#filter { width: 100%; padding: 8px 10px; margin: 16px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--fg); font-size: 14px; }
 details.tag-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
 details.tag-group > summary { cursor: pointer; padding: 10px 14px; background: var(--card); font-weight: 600; list-style: none; display: flex; justify-content: space-between; }

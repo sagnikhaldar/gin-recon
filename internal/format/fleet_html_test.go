@@ -68,7 +68,7 @@ func TestFleetHTMLRendersDeltaWhenPresent(t *testing.T) {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
 	html := string(out)
-	for _, want := range []string{"Baseline comparison", "GET /new", "1 added route"} {
+	for _, want := range []string{"Baseline comparison", "GET /new", "Added routes"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("output missing %q\n%s", want, html)
 		}
