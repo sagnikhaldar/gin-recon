@@ -200,6 +200,7 @@ func parseFleet(args []string) (*Options, error) {
 	registerOnceBool(fs, "resume", &opts.Resume)
 	registerOnceString(fs, "baseline", &opts.Baseline)
 	registerOnceBool(fs, "allow-remote-targets", &opts.AllowRemoteTargets)
+	registerOnceBool(fs, "allow-downloads", &opts.AllowDownloads)
 	registerOnceBool(fs, "include-archived", &opts.IncludeArchived)
 	registerOnceBool(fs, "include-forks", &opts.IncludeForks)
 	fs.Var(&repeatableList{&opts.RepoInclude}, "repo-include", "repeatable or comma-separated repository name glob")

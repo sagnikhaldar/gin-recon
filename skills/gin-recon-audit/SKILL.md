@@ -297,6 +297,15 @@ result showing one target at 100% public deserves a second look at whether
 that target actually has its own auth middleware missing from the shared
 config, before reporting it as a real finding.
 
+If a target scans an un-vendored module that needs network access to
+resolve, pass `--allow-downloads` on the `fleet` invocation itself — it's
+forwarded to every target's own `audit` subprocess exactly like `--config`.
+
+Point `render --report <outDir>/fleet.json --out <outDir> --force` at a
+fleet's own output to add a format (e.g. `--format json,openapi`) or
+regenerate `fleet.html` afterward, without re-running any target's `audit` —
+each target's own `routes.json` is re-rendered from what's already on disk.
+
 ## Comparing against a prior run
 
 ```bash

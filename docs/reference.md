@@ -77,9 +77,18 @@ SARIF is audit-only. Inventory OpenAPI contains no authentication assertions. `a
 
 `render` re-runs gin-recon's formatting layer over an already-produced report instead of scanning a source tree: it accepts no `--src` and none of the other scan/analysis options above, and never calls `internal/analyzer` or `go/packages`. See [OpenAPI documentation](openapi.md#the-render-command) for the reasoning behind adding it as a separate command instead of a flag on `inventory`/`audit`.
 
-- `--report <path>` (required): a `routes.json`-shaped file, loaded with the same load path `--baseline` uses. A missing, malformed, or schema-incompatible file fails with exit `1`.
+- `--report <path>` (required): a `routes.json`-shaped file, loaded with the same load path `--baseline` uses. A missing, malformed, or schema-incompatible file fails with exit `1`. A `fleet.json` (a `targets` array, no `schemaVersion`) is auto-detected and handled as described below instead.
 - `--format` / `--out` / `--force`: follow the identical rules documented above, including the `api.html` companion file, except `sarif` is valid only when the loaded report's `command` is `audit`, checked against that document once it is loaded, not against `render` itself.
 - `--config`: applies only to what the formatting layer itself reads (`openapi.title`/`openapi.securitySchemes`), not to any `analysis.*` setting, since no analysis runs.
+
+#### Rendering a fleet
+
+Pointing `--report` at a `fleet.json` re-renders every target recorded `ok` in it from that target's own already-written `routes.json`, without re-scanning anything or invoking any `audit` subprocess — a way to add a format (`--format json,openapi`, say) or restyle output after the fact, purely from a fleet run's own raw evidence. Unlike a single-report render, both `--out` and `--force` are required, since a fleet render always overwrites every target's own previously rendered output:
+
+- `--out <dir>`: the raw artifacts root to write into (the same directory a live `fleet` run would use); the sibling `<out>-html` directory is derived the same way. Required — omitting it fails with a clear error rather than guessing a location.
+- `--force`: required for the same reason — refused otherwise, since there is no non-overwriting mode for a fleet render.
+- Each target's `api.html` (when `--format` includes `openapi`) moves into `<out>-html/targets/<name>/`, and `fleet.json` itself is rewritten (not just `fleet.html`) so the `apiHtml` links persist for a later render or inspection.
+- `fleet-delta.json` (a `--baseline` comparison) is not recomputed by a render pass — `--baseline` stays a live-`fleet`-only option.
 
 ### Fleet options
 
@@ -94,6 +103,7 @@ SARIF is audit-only. Inventory OpenAPI contains no authentication assertions. `a
 - `--concurrency <n>`: default `1`, must be between `1` and `8`.
 - `--resume`: skip any target already recorded as complete in `--out`'s checkpoint. Refused with an explanation, not silently ignored, if the targets file, `--config`, or `--format` no longer matches what the checkpoint was written under.
 - `--allow-remote-targets`: required before any `git` target is even attempted — see below. Off by default.
+- `--allow-downloads`: passed through to every target's own `audit` subprocess identically to `--config`/`--format` — a fleet scan against real, un-vendored Go modules needs this the same way a single `audit` invocation would. Off by default.
 - `--baseline <fleet.json>`: compares this run against a previous fleet run's own `fleet.json`. Each target present in both runs is compared the same way `audit --baseline` compares one repository (same `compare.Compatible`/`compare.Compare`); a target added or removed between the two runs is recorded as such rather than diffed. Writes `fleet-delta.json` (raw, in `--out`) and adds a "Baseline comparison" section to `fleet.html`. Loaded into memory before this run writes anything of its own, so pointing `--baseline` at a path inside this run's own `--out` (a realistic setup together with `--force`) still compares against the real prior state, not a version this run just overwrote.
 - `--fail-on incomplete|new|regression`: `incomplete` exits `2` when the aggregate's `coverage.complete` is false — any target failed, or any target's own `scanCoverage.complete` came back false. `new` and `regression` require `--baseline` and mean exactly what they mean for `audit --baseline`, rolled up across the whole fleet: `new` matches an added target, an added route in any compared target, or a new finding anywhere; `regression` matches any route anywhere becoming less safely authenticated.
 

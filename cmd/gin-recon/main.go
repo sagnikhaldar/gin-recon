@@ -838,7 +838,34 @@ func runSuggestAuth(opts *cli.Options, stdout, stderr io.Writer) int {
 // internal/analyzer or golang.org/x/tools/go/packages, and none of
 // cli.Options' scan/analysis fields (Src, Profile, Include, ...) are read —
 // render has no source tree to point them at.
+// isFleetAggregateJSON detects a fleet.json aggregate rather than an
+// ordinary report.Report, per docs/adr/0024-fleet-render.md: a fleet
+// aggregate always has a "targets" array and never a "schemaVersion" field
+// (every report.Report always has the latter). Exactly two report kinds
+// exist to distinguish between — not the open-ended, directory-inferred
+// set a sibling tool's own render auto-detects across, which ADR 0016
+// already declined to build for gin-recon.
+func isFleetAggregateJSON(data []byte) bool {
+	var probe struct {
+		SchemaVersion string          `json:"schemaVersion"`
+		Targets       json.RawMessage `json:"targets"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return false
+	}
+	return probe.SchemaVersion == "" && probe.Targets != nil
+}
+
 func runRender(opts *cli.Options, stdout, stderr io.Writer) int {
+	data, err := os.ReadFile(opts.ReportPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: --report: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if isFleetAggregateJSON(data) {
+		return runFleetRender(opts, data, stdout, stderr)
+	}
+
 	// --config here only ever feeds the formatting layer itself (OpenAPI
 	// title/version/securitySchemes) — see format.OpenAPI's infoFrom, the
 	// only place cfg.OpenAPI is read. Unlike runInventory/runAudit, render

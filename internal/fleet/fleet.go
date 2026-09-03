@@ -39,11 +39,28 @@ type TargetResult struct {
 	APIHTML  string `json:"apiHtml,omitempty"` // path to this target's own api.html, relative to --out-html (docs/adr/0023-fleet-raw-rendered-split.md) — set only when this target's own --format included openapi
 }
 
+// Scope is the --org configuration a fleet run used, recorded on the
+// Aggregate so a later `render` pass over a saved fleet.json can
+// reconstruct fleet.html's Scope panel without it — nothing derived from
+// CLI flags a render invocation wouldn't otherwise have any way to know
+// (docs/adr/0024-fleet-render.md). Nil for a plain --targets run, which has
+// no comparable scope to record.
+type Scope struct {
+	Org             string   `json:"org"`
+	MaxRepos        int      `json:"maxRepos,omitempty"`
+	Concurrency     int      `json:"concurrency,omitempty"`
+	IncludeArchived bool     `json:"includeArchived,omitempty"`
+	IncludeForks    bool     `json:"includeForks,omitempty"`
+	RepoInclude     []string `json:"repoInclude,omitempty"`
+	RepoExclude     []string `json:"repoExclude,omitempty"`
+}
+
 // Aggregate is the fleet.json shape.
 type Aggregate struct {
 	Tool        string         `json:"tool"`
 	ToolVersion string         `json:"toolVersion"`
 	Targets     []TargetResult `json:"targets"`
+	Scope       *Scope         `json:"scope,omitempty"`
 	Coverage    struct {
 		Complete bool `json:"complete"`
 	} `json:"coverage"`
@@ -81,7 +98,13 @@ type RunOptions struct {
 	Resume       bool
 	BinaryPath   string // the gin-recon binary to re-exec per target, e.g. a resolved os.Args[0]
 	ToolVersion  string
-	Stderr       *bytes.Buffer // per-target stderr tails are captured here for the caller to surface; may be nil
+
+	// AllowDownloads mirrors --allow-downloads, passed through to every
+	// target's own audit subprocess exactly like Formats/ConfigPath — a
+	// real Go module fleet scans against typically still needs this the
+	// same way a direct audit invocation would.
+	AllowDownloads bool
+	Stderr         *bytes.Buffer // per-target stderr tails are captured here for the caller to surface; may be nil
 
 	// Remote targets (docs/adr/0019-fleet-remote-targets.md). AllowRemote
 	// mirrors --allow-remote-targets: the capability switch. AllowedHosts
@@ -246,6 +269,9 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 	args := []string{"audit", "--src", src, "--format", strings.Join(formats, ","), "--out", targetOut, "--force"}
 	if opts.ConfigPath != "" {
 		args = append(args, "--config", opts.ConfigPath)
+	}
+	if opts.AllowDownloads {
+		args = append(args, "--allow-downloads")
 	}
 
 	var stderr bytes.Buffer

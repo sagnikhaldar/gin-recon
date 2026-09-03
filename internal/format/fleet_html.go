@@ -19,19 +19,6 @@ import (
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 )
 
-// FleetScope is the --org configuration a fleet run used, for the Scope
-// panel — present only for an --org run, never for a hand-written
-// --targets manifest, which has no comparable "scope" to summarize.
-type FleetScope struct {
-	Org             string
-	MaxRepos        int
-	Concurrency     int
-	IncludeArchived bool
-	IncludeForks    bool
-	RepoInclude     []string
-	RepoExclude     []string
-}
-
 var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype html>
 <html lang="en">
 <head>
@@ -197,7 +184,7 @@ const fleetFilterJS = `
 type fleetHTMLData struct {
 	Agg              *fleet.Aggregate
 	Delta            *fleet.FleetDelta
-	Scope            *FleetScope
+	Scope            *fleet.Scope
 	RawDirLink       string // relative path from this page back to --out (docs/adr/0023-fleet-raw-rendered-split.md); plain string, auto-escaped like any other URL-context value
 	ThemeCSS         template.CSS
 	BrandMark        template.HTML
@@ -217,7 +204,7 @@ type fleetHTMLData struct {
 // else is generated directly from the same values being marshaled to
 // JSON, nothing re-read from disk. scope is nil for a --targets run;
 // non-nil for --org.
-func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *FleetScope, rawDirLink string) ([]byte, error) {
+func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope, rawDirLink string) ([]byte, error) {
 	data := fleetHTMLData{
 		Agg:        agg,
 		Delta:      delta,

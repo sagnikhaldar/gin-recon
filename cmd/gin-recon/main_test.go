@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1010,5 +1011,156 @@ func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
 	}
 	if len(agg.Targets) != 2 {
 		t.Fatalf("Targets = %+v, want exactly 2 (the --max-repos cap)", agg.Targets)
+	}
+}
+
+// TestRunFleetRenderAddsFormatWithoutRescanning is the CLI-level
+// integration test for docs/adr/0024-fleet-render.md's central claim:
+// render, over a fleet.json a prior fleet run already produced,
+// retroactively adds a format (openapi) to every target and regenerates
+// fleet.html — entirely from already-computed evidence, without ever
+// touching the original source tree again. Proven here the same way the
+// single-report render test proves it: by moving the source tree away
+// before running render at all.
+func TestRunFleetRenderAddsFormatWithoutRescanning(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(outDir+"-html", "targets", "repo-a", "api.html")); !os.IsNotExist(err) {
+		t.Fatal("api.html should not exist yet: the original fleet run only requested --format json")
+	}
+
+	// The whole point: the source tree is gone by the time render runs.
+	if err := os.RemoveAll(src); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"render", "--report", filepath.Join(outDir, "fleet.json"), "--format", "json,openapi", "--out", outDir, "--force"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet render exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	htmlOutDir := outDir + "-html"
+	if _, err := os.Stat(filepath.Join(htmlOutDir, "fleet.html")); err != nil {
+		t.Errorf("fleet.html was not (re)written: %v", err)
+	}
+	apiHTMLPath := filepath.Join(htmlOutDir, "targets", "repo-a", "api.html")
+	if _, err := os.Stat(apiHTMLPath); err != nil {
+		t.Errorf("api.html was not produced by the render pass: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "targets", "repo-a", "openapi.json")); err != nil {
+		t.Errorf("openapi.json (raw evidence) should exist in --out: %v", err)
+	}
+
+	fleetHTML, err := os.ReadFile(filepath.Join(htmlOutDir, "fleet.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(fleetHTML), `href="targets/repo-a/api.html"`) {
+		t.Errorf("fleet.html does not link to the newly-rendered api.html:\n%s", fleetHTML)
+	}
+
+	// fleet.json itself must reflect the new link too, not just fleet.html
+	// — see runFleetRender's own comment on why this write exists.
+	aggData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agg struct {
+		Targets []struct {
+			Name    string `json:"name"`
+			APIHTML string `json:"apiHtml"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(aggData, &agg); err != nil {
+		t.Fatal(err)
+	}
+	if len(agg.Targets) != 1 || agg.Targets[0].APIHTML != filepath.Join("targets", "repo-a", "api.html") {
+		t.Errorf("fleet.json targets = %+v, want repo-a.apiHtml = targets/repo-a/api.html", agg.Targets)
+	}
+}
+
+func TestRunFleetRenderRequiresOut(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, fixtureDir(t, "auth-wrappers"))
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads"}, &stdout, &stderr); code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d; stderr: %s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := run([]string{"render", "--report", filepath.Join(outDir, "fleet.json"), "--format", "json"}, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Errorf("exit code = %d, want %d", code, cli.ExitOperationalError)
+	}
+	if !strings.Contains(stderr.String(), "--out is required") {
+		t.Errorf("stderr = %q, want it to explain --out is required", stderr.String())
+	}
+}
+
+func TestRunFleetRenderRequiresForce(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, fixtureDir(t, "auth-wrappers"))
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads"}, &stdout, &stderr); code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d; stderr: %s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := run([]string{"render", "--report", filepath.Join(outDir, "fleet.json"), "--format", "json", "--out", outDir}, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Errorf("exit code = %d, want %d", code, cli.ExitOperationalError)
+	}
+	if !strings.Contains(stderr.String(), "--force is required") {
+		t.Errorf("stderr = %q, want it to explain --force is required", stderr.String())
+	}
+}
+
+func TestIsFleetAggregateJSON(t *testing.T) {
+	if !isFleetAggregateJSON([]byte(`{"tool":"gin-recon","targets":[{"name":"a"}]}`)) {
+		t.Error("a fleet aggregate (targets array, no schemaVersion) should be detected")
+	}
+	if isFleetAggregateJSON([]byte(`{"schemaVersion":"1.0","routes":[]}`)) {
+		t.Error("an ordinary report.Report (schemaVersion present) should not be detected as a fleet aggregate")
+	}
+	if isFleetAggregateJSON([]byte(`not json`)) {
+		t.Error("malformed JSON should not be detected as a fleet aggregate")
 	}
 }

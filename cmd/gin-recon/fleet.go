@@ -136,20 +136,21 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 
 	var stderrBuf bytes.Buffer
 	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
-		ManifestPath: manifestPath,
-		Manifest:     manifest,
-		ManifestData: manifestData,
-		ConfigPath:   opts.ConfigPath,
-		Formats:      targetFormats,
-		OutDir:       opts.OutDir,
-		HTMLOutDir:   htmlOutDir,
-		Concurrency:  opts.Concurrency,
-		Resume:       opts.Resume,
-		BinaryPath:   binaryPath,
-		ToolVersion:  report.ToolVersion,
-		Stderr:       &stderrBuf,
-		AllowRemote:  opts.AllowRemoteTargets,
-		AllowedHosts: allowedHosts,
+		ManifestPath:   manifestPath,
+		Manifest:       manifest,
+		ManifestData:   manifestData,
+		ConfigPath:     opts.ConfigPath,
+		Formats:        targetFormats,
+		OutDir:         opts.OutDir,
+		HTMLOutDir:     htmlOutDir,
+		Concurrency:    opts.Concurrency,
+		Resume:         opts.Resume,
+		BinaryPath:     binaryPath,
+		ToolVersion:    report.ToolVersion,
+		Stderr:         &stderrBuf,
+		AllowRemote:    opts.AllowRemoteTargets,
+		AllowedHosts:   allowedHosts,
+		AllowDownloads: opts.AllowDownloads,
 	})
 	if stderrBuf.Len() > 0 {
 		stderr.Write(stderrBuf.Bytes())
@@ -169,6 +170,10 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	if discoveryIncomplete {
 		agg.Coverage.Complete = false
 	}
+	// Recorded on the aggregate itself, not just used to render fleet.html
+	// in this same run — see buildFleetScope's own doc comment
+	// (docs/adr/0024-fleet-render.md).
+	agg.Scope = buildFleetScope(opts)
 
 	data, err := json.MarshalIndent(agg, "", "  ")
 	if err != nil {
@@ -212,7 +217,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		return cli.ExitOperationalError
 	}
 	rawDirLink := "../" + filepath.Base(opts.OutDir)
-	htmlData, err := format.FleetHTML(agg, fleetDelta, buildFleetScope(opts), rawDirLink)
+	htmlData, err := format.FleetHTML(agg, fleetDelta, agg.Scope, rawDirLink)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
 		return cli.ExitOperationalError
@@ -257,12 +262,15 @@ func buildFleetAllowedHosts(cfg *config.Config) []fleet.AllowedHost {
 
 // buildFleetScope builds fleet.html's Scope panel data for an --org run —
 // nil for a plain --targets run, which has no comparable scope to
-// summarize (docs/adr/0021-fleet-org-enumeration.md).
-func buildFleetScope(opts *cli.Options) *format.FleetScope {
+// summarize (docs/adr/0021-fleet-org-enumeration.md). Stored on the
+// Aggregate itself (docs/adr/0024-fleet-render.md) so a later render pass
+// over a saved fleet.json can restore this panel without still having the
+// original CLI flags available.
+func buildFleetScope(opts *cli.Options) *fleet.Scope {
 	if opts.Org == "" {
 		return nil
 	}
-	scope := &format.FleetScope{
+	scope := &fleet.Scope{
 		Org:             opts.Org,
 		MaxRepos:        opts.MaxRepos,
 		Concurrency:     opts.Concurrency,
@@ -359,4 +367,124 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 		return "", nil, nil, false, cli.ExitOperationalError
 	}
 	return discoveredPath, result.Manifest, data, result.Incomplete, cli.ExitSuccess
+}
+
+// runFleetRender re-renders every target recorded `ok` in a saved
+// fleet.json, without re-scanning any of them, then regenerates
+// fleet.html — docs/adr/0024-fleet-render.md's fleet-shaped counterpart to
+// runRender's own single-report path. data is opts.ReportPath's
+// already-read bytes (runRender read them once to detect the report
+// kind); reused here rather than read a second time.
+func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) int {
+	if opts.OutDir == "" {
+		fmt.Fprintf(stderr, "gin-recon: --out is required when --report names a fleet.json\n")
+		return cli.ExitOperationalError
+	}
+	// A fleet render always overwrites every target's own already-computed
+	// output (that is the entire operation) — requiring --force up front
+	// avoids a confusing partial run that fails on the first target whose
+	// file already exists.
+	if !opts.Force {
+		fmt.Fprintf(stderr, "gin-recon: fleet render: --force is required — a fleet render always overwrites each target's own previously rendered output\n")
+		return cli.ExitOperationalError
+	}
+	var agg fleet.Aggregate
+	if err := json.Unmarshal(data, &agg); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: --report: decoding fleet.json: %v\n", err)
+		return cli.ExitOperationalError
+	}
+
+	cfg, err := loadConfig(opts.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	for _, f := range opts.Formats {
+		if !formatsImplemented[f] {
+			fmt.Fprintf(stderr, "gin-recon: --format %s is not implemented yet; %s\n", f, implementedFormatsMessage)
+			return cli.ExitOperationalError
+		}
+	}
+
+	rawDir := opts.OutDir
+	htmlOutDir := rawDir + "-html"
+	if err := os.MkdirAll(htmlOutDir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	// Each target's own already-computed routes.json is resolved relative
+	// to the loaded fleet.json's own directory — the same convention
+	// fleet.CompareBaseline already uses for a --baseline's targets.
+	fleetJSONDir := filepath.Dir(opts.ReportPath)
+
+	for i, t := range agg.Targets {
+		if t.Status != fleet.StatusOK {
+			continue // render reformats what exists; it does not retry a failed or not-go-module target
+		}
+
+		rep, err := loadReportFile(filepath.Join(fleetJSONDir, "targets", t.Name, "routes.json"))
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+			return cli.ExitOperationalError
+		}
+		if err := validateRenderedReport(rep); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+			return cli.ExitOperationalError
+		}
+
+		targetRawOut := filepath.Join(rawDir, "targets", t.Name)
+		targetOpts := &cli.Options{Command: cli.CommandRender, OutDir: targetRawOut, Formats: opts.Formats, Force: true}
+		if code := writeReport(rep, targetOpts, cfg, stdout, stderr, cli.ExitSuccess); code != cli.ExitSuccess {
+			return code
+		}
+
+		// api.html moves into the rendered tree exactly the way a live
+		// fleet run already moves it (docs/adr/0023-fleet-raw-rendered-split.md)
+		// — render's own output must be indistinguishable from what a live
+		// run with the same --format would have produced.
+		srcHTML := filepath.Join(targetRawOut, htmlCompanionFilename)
+		if _, statErr := os.Stat(srcHTML); statErr == nil {
+			destDir := filepath.Join(htmlOutDir, "targets", t.Name)
+			if err := os.MkdirAll(destDir, 0o755); err != nil {
+				fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+				return cli.ExitOperationalError
+			}
+			destHTML := filepath.Join(destDir, htmlCompanionFilename)
+			if err := os.Rename(srcHTML, destHTML); err != nil {
+				fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+				return cli.ExitOperationalError
+			}
+			agg.Targets[i].APIHTML = filepath.Join("targets", t.Name, htmlCompanionFilename)
+		} else {
+			// --format on this render no longer includes openapi: any
+			// previously-recorded link would now point at nothing.
+			agg.Targets[i].APIHTML = ""
+		}
+	}
+
+	// fleet.json itself is updated too, not just fleet.html — each target's
+	// APIHTML just changed, and docs/adr/0024-fleet-render.md's whole
+	// premise (fleet.json as a complete, durable record) breaks if the
+	// file on disk silently falls out of sync with what was just rendered.
+	aggData, err := json.MarshalIndent(&agg, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet render: encoding fleet.json: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if err := os.WriteFile(filepath.Join(rawDir, fleetAggregateFilename), aggData, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+
+	rawDirLink := "../" + filepath.Base(rawDir)
+	htmlData, err := format.FleetHTML(&agg, nil, agg.Scope, rawDirLink)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet render: rendering fleet.html: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if err := os.WriteFile(filepath.Join(htmlOutDir, fleetHTMLFilename), htmlData, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	return cli.ExitSuccess
 }

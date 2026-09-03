@@ -90,7 +90,7 @@ func TestFleetHTMLRendersScopeForOrgRun(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
 		{Name: "svc-a", GitURL: "https://github.com/myorg/svc-a.git", Status: fleet.StatusOK},
 	}}
-	scope := &FleetScope{Org: "myorg", MaxRepos: 100, Concurrency: 3, RepoInclude: []string{"svc-*"}}
+	scope := &fleet.Scope{Org: "myorg", MaxRepos: 100, Concurrency: 3, RepoInclude: []string{"svc-*"}}
 
 	out, err := FleetHTML(agg, nil, scope, "../out")
 	if err != nil {
