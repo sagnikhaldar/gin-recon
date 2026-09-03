@@ -61,11 +61,11 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 {{if .Scope}}
 <p class="gr-eyebrow">{{.GitMark}} GitHub organization inventory</p>
 <h1>{{.Scope.Org}}</h1>
-<p class="gr-lede">{{len .Agg.Targets}} discovered repositor{{if eq (len .Agg.Targets) 1}}y{{else}}ies{{end}}, one audit per target. Each target's own full report is untouched under <code>targets/&lt;name&gt;/</code>.</p>
+<p class="gr-lede">{{len .Agg.Targets}} discovered repositor{{if eq (len .Agg.Targets) 1}}y{{else}}ies{{end}}, one audit per target. Each target's own raw report lives under <code>{{$.RawDirLink}}/targets/&lt;name&gt;/</code>, untouched.</p>
 {{else}}
 <p class="gr-eyebrow">Fleet report</p>
 <h1>{{len .Agg.Targets}} target{{if ne (len .Agg.Targets) 1}}s{{end}} scanned</h1>
-<p class="gr-lede">One audit per target, aggregated. Each target's own full report is untouched under <code>targets/&lt;name&gt;/</code>.</p>
+<p class="gr-lede">One audit per target, aggregated. Each target's own raw report lives under <code>{{$.RawDirLink}}/targets/&lt;name&gt;/</code>, untouched.</p>
 {{end}}
 </div>
 <div class="gr-metrics">
@@ -105,7 +105,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <td><code>{{.Name}}</code><br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}</td>
 <td class="gr-status-{{.Status}}">{{.Status}}</td>
 <td>{{.Complete}}</td>
-<td>{{if .Report}}<a href="{{.Report}}">routes.json</a>{{end}}</td>
+<td>{{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}} &middot; <a href="{{.APIHTML}}">api.html</a>{{end}}</td>
 <td class="gr-error">{{.Error}}</td>
 </tr>
 {{end}}</tbody>
@@ -198,6 +198,7 @@ type fleetHTMLData struct {
 	Agg              *fleet.Aggregate
 	Delta            *fleet.FleetDelta
 	Scope            *FleetScope
+	RawDirLink       string // relative path from this page back to --out (docs/adr/0023-fleet-raw-rendered-split.md); plain string, auto-escaped like any other URL-context value
 	ThemeCSS         template.CSS
 	BrandMark        template.HTML
 	GitMark          template.HTML
@@ -209,18 +210,23 @@ type fleetHTMLData struct {
 
 // FleetHTML renders agg (and, when given, delta/scope) as the browsable
 // companion fleet.json always gets (docs/adr/0020-fleet-html-view.md,
-// docs/adr/0022-fleet-baseline-delta.md, docs/adr/0021-fleet-org-enumeration.md) —
-// generated directly from the same values being marshaled to JSON, nothing
-// re-read from disk. scope is nil for a --targets run; non-nil for --org.
-func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *FleetScope) ([]byte, error) {
+// docs/adr/0022-fleet-baseline-delta.md, docs/adr/0021-fleet-org-enumeration.md).
+// rawDirLink is this page's relative path back to --out
+// (docs/adr/0023-fleet-raw-rendered-split.md), used to link each target's
+// raw routes.json across the raw/rendered directory split — everything
+// else is generated directly from the same values being marshaled to
+// JSON, nothing re-read from disk. scope is nil for a --targets run;
+// non-nil for --org.
+func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *FleetScope, rawDirLink string) ([]byte, error) {
 	data := fleetHTMLData{
-		Agg:       agg,
-		Delta:     delta,
-		Scope:     scope,
-		ThemeCSS:  template.CSS(themeCSS),
-		BrandMark: template.HTML(brandMarkHTML),
-		GitMark:   template.HTML(gitMarkHTML),
-		FilterJS:  template.JS(fleetFilterJS),
+		Agg:        agg,
+		Delta:      delta,
+		Scope:      scope,
+		RawDirLink: rawDirLink,
+		ThemeCSS:   template.CSS(themeCSS),
+		BrandMark:  template.HTML(brandMarkHTML),
+		GitMark:    template.HTML(gitMarkHTML),
+		FilterJS:   template.JS(fleetFilterJS),
 	}
 	for _, t := range agg.Targets {
 		switch t.Status {

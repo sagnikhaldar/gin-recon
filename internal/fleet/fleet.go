@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -34,7 +35,8 @@ type TargetResult struct {
 	Status   Status `json:"status"`
 	Error    string `json:"error,omitempty"`
 	Complete bool   `json:"complete"`
-	Report   string `json:"report,omitempty"` // path to this target's own routes.json, relative to --out
+	Report   string `json:"report,omitempty"`  // path to this target's own routes.json, relative to --out (the raw directory)
+	APIHTML  string `json:"apiHtml,omitempty"` // path to this target's own api.html, relative to --out-html (docs/adr/0023-fleet-raw-rendered-split.md) — set only when this target's own --format included openapi
 }
 
 // Aggregate is the fleet.json shape.
@@ -72,8 +74,9 @@ type RunOptions struct {
 	Manifest     *Manifest
 	ManifestData []byte
 	ConfigPath   string
-	Formats      []string
+	Formats      []string // passed through to every target's own audit subprocess; "json" is always included regardless (docs/adr/0023-fleet-raw-rendered-split.md)
 	OutDir       string
+	HTMLOutDir   string // sibling directory every HTML artifact moves into; empty disables the split (docs/adr/0023-fleet-raw-rendered-split.md)
 	Concurrency  int
 	Resume       bool
 	BinaryPath   string // the gin-recon binary to re-exec per target, e.g. a resolved os.Args[0]
@@ -239,7 +242,8 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 		return res
 	}
 
-	args := []string{"audit", "--src", src, "--format", "json", "--out", targetOut, "--force"}
+	formats := formatsWithJSON(opts.Formats)
+	args := []string{"audit", "--src", src, "--format", strings.Join(formats, ","), "--out", targetOut, "--force"}
 	if opts.ConfigPath != "" {
 		args = append(args, "--config", opts.ConfigPath)
 	}
@@ -279,7 +283,40 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 	res.Status = StatusOK
 	res.Complete = decoded.ScanCoverage.Complete
 	res.Report = filepath.Join("targets", t.Name, "routes.json")
+
+	// api.html (written alongside openapi.json in targetOut, if "openapi"
+	// was requested) moves into the sibling rendered tree — a plain file
+	// move, not a second scan, per docs/adr/0023-fleet-raw-rendered-split.md.
+	// A failed move degrades silently (res.APIHTML just stays empty, and
+	// fleet.html renders that target with no rendered-view link) rather
+	// than surfacing an error here: runOneTarget runs concurrently across
+	// goroutines with no lock of its own, and opts.Stderr is only ever
+	// safely written from within Run's own mutex-guarded section.
+	if opts.HTMLOutDir != "" {
+		srcHTML := filepath.Join(targetOut, "api.html")
+		if _, statErr := os.Stat(srcHTML); statErr == nil {
+			destDir := filepath.Join(opts.HTMLOutDir, "targets", t.Name)
+			if err := os.MkdirAll(destDir, 0o755); err == nil {
+				destHTML := filepath.Join(destDir, "api.html")
+				if err := os.Rename(srcHTML, destHTML); err == nil {
+					res.APIHTML = filepath.Join("targets", t.Name, "api.html")
+				}
+			}
+		}
+	}
 	return res
+}
+
+// formatsWithJSON returns formats with "json" included exactly once —
+// fleet always needs a target's own routes.json for its aggregate
+// regardless of what else was requested (docs/adr/0023-fleet-raw-rendered-split.md).
+func formatsWithJSON(formats []string) []string {
+	for _, f := range formats {
+		if f == "json" {
+			return formats
+		}
+	}
+	return append([]string{"json"}, formats...)
 }
 
 // resolveSource turns one target into a local directory to scan: a local

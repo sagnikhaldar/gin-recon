@@ -19,7 +19,7 @@ func TestFleetHTMLRendersTargets(t *testing.T) {
 	}
 	agg.Coverage.Complete = false
 
-	out, err := FleetHTML(agg, nil, nil)
+	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestFleetHTMLEscapesHostileContent(t *testing.T) {
 		{Name: "<script>evil</script>", Status: fleet.StatusFailed, Error: "<img src=x onerror=alert(1)>"},
 	}}
 
-	out, err := FleetHTML(agg, nil, nil)
+	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestFleetHTMLRendersDeltaWhenPresent(t *testing.T) {
 	}}
 	delta.Summary.AddedRoutes = 1
 
-	out, err := FleetHTML(agg, delta, nil)
+	out, err := FleetHTML(agg, delta, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestFleetHTMLRendersDeltaWhenPresent(t *testing.T) {
 
 func TestFleetHTMLOmitsDeltaSectionWhenAbsent(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
-	out, err := FleetHTML(agg, nil, nil)
+	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestFleetHTMLRendersScopeForOrgRun(t *testing.T) {
 	}}
 	scope := &FleetScope{Org: "myorg", MaxRepos: 100, Concurrency: 3, RepoInclude: []string{"svc-*"}}
 
-	out, err := FleetHTML(agg, nil, scope)
+	out, err := FleetHTML(agg, nil, scope, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestFleetHTMLRendersScopeForOrgRun(t *testing.T) {
 
 func TestFleetHTMLOmitsScopeForTargetsRun(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
-	out, err := FleetHTML(agg, nil, nil)
+	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestFleetHTMLOmitsScopeForTargetsRun(t *testing.T) {
 
 func TestFleetHTMLIncludesFilterControls(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
-	out, err := FleetHTML(agg, nil, nil)
+	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
@@ -129,11 +129,48 @@ func TestFleetHTMLIncludesFilterControls(t *testing.T) {
 	}
 }
 
+// TestFleetHTMLLinksAcrossTheRawRenderedSplit is a regression test for
+// docs/adr/0023-fleet-raw-rendered-split.md: fleet.html now lives in a
+// sibling <out>-html directory, so its link to a target's raw routes.json
+// must cross back into --out using the caller-supplied prefix, while its
+// link to that target's own api.html (already moved into the same
+// directory tree as fleet.html itself) stays a plain same-directory
+// relative link.
+func TestFleetHTMLLinksAcrossTheRawRenderedSplit(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", Status: fleet.StatusOK, Report: "targets/svc-a/routes.json", APIHTML: "targets/svc-a/api.html"},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../scan")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	if !strings.Contains(html, `href="../scan/targets/svc-a/routes.json"`) {
+		t.Errorf("routes.json link did not cross into the raw directory via the supplied prefix:\n%s", html)
+	}
+	if !strings.Contains(html, `href="targets/svc-a/api.html"`) {
+		t.Errorf("api.html link should stay relative to fleet.html's own directory:\n%s", html)
+	}
+}
+
+func TestFleetHTMLOmitsAPIHTMLLinkWhenAbsent(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", Status: fleet.StatusOK, Report: "targets/svc-a/routes.json"},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../scan")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "api.html") {
+		t.Error("expected no api.html link for a target that never produced one")
+	}
+}
+
 func TestFleetHTMLOmitsReportLinkWhenAbsent(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
 		{Name: "not-a-module", Status: fleet.StatusNotGoModule, Complete: true},
 	}}
-	out, err := FleetHTML(agg, nil, nil)
+	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}

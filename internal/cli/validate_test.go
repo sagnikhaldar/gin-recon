@@ -183,9 +183,14 @@ func TestValidateFleetRejectsOutOfRangeConcurrency(t *testing.T) {
 	expectValidateError(t, "must be between 1 and 8", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--concurrency=9")
 }
 
-func TestValidateFleetRejectsNonJSONFormat(t *testing.T) {
+func TestValidateFleetAcceptsAuditFormats(t *testing.T) {
 	dir := t.TempDir()
-	expectValidateError(t, "only supports \"json\"", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--format=md")
+	mustParseAndValidate(t, "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--format=json,md,openapi,sarif")
+}
+
+func TestValidateFleetRejectsUnknownFormat(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "unsupported format", "fleet", "--targets=/tmp/targets.json", "--out="+dir, "--format=yaml")
 }
 
 func TestValidateFleetRejectsUnsupportedFailOnSelector(t *testing.T) {

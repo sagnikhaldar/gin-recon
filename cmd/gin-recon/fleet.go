@@ -100,8 +100,13 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// --out is the raw-artifacts root; every HTML file gin-recon fleet
+	// produces lands in the sibling <out>-html directory instead
+	// (docs/adr/0023-fleet-raw-rendered-split.md) — derived automatically,
+	// no separate flag, no separate render step to remember to run.
+	htmlOutDir := opts.OutDir + "-html"
 	aggregatePath := filepath.Join(opts.OutDir, fleetAggregateFilename)
-	htmlPath := filepath.Join(opts.OutDir, fleetHTMLFilename)
+	htmlPath := filepath.Join(htmlOutDir, fleetHTMLFilename)
 	checkExists := []string{aggregatePath, htmlPath}
 	if opts.Baseline != "" {
 		checkExists = append(checkExists, filepath.Join(opts.OutDir, fleetDeltaFilename))
@@ -124,14 +129,20 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		}
 	}
 
+	targetFormats := make([]string, len(opts.Formats))
+	for i, f := range opts.Formats {
+		targetFormats[i] = string(f)
+	}
+
 	var stderrBuf bytes.Buffer
 	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
 		ManifestPath: manifestPath,
 		Manifest:     manifest,
 		ManifestData: manifestData,
 		ConfigPath:   opts.ConfigPath,
-		Formats:      []string{string(cli.FormatJSON)},
+		Formats:      targetFormats,
 		OutDir:       opts.OutDir,
+		HTMLOutDir:   htmlOutDir,
 		Concurrency:  opts.Concurrency,
 		Resume:       opts.Resume,
 		BinaryPath:   binaryPath,
@@ -191,8 +202,17 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	// relationship api.html already has with openapi.json
 	// (docs/adr/0020-fleet-html-view.md) — no separate flag, always
 	// regenerated from the same agg/fleetDelta values already computed
-	// above, nothing re-read from disk.
-	htmlData, err := format.FleetHTML(agg, fleetDelta, buildFleetScope(opts))
+	// above, nothing re-read from disk. It lives in the sibling <out>-html
+	// directory (docs/adr/0023-fleet-raw-rendered-split.md), so its links
+	// to each target's raw routes.json cross back into --out; RawDirLink is
+	// that relative prefix, computed once here rather than baked into
+	// internal/format, which has no reason to know about this layout.
+	if err := os.MkdirAll(htmlOutDir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	rawDirLink := "../" + filepath.Base(opts.OutDir)
+	htmlData, err := format.FleetHTML(agg, fleetDelta, buildFleetScope(opts), rawDirLink)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
 		return cli.ExitOperationalError

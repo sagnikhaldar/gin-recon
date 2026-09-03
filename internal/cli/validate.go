@@ -82,14 +82,16 @@ func Validate(opts *Options) error {
 		if opts.Concurrency < 1 || opts.Concurrency > 8 {
 			return fmt.Errorf("--concurrency: must be between 1 and 8, got %d", opts.Concurrency)
 		}
-		// Only the JSON aggregate exists today; md/openapi/sarif are
-		// per-target formats fleet already writes to each target's own
-		// output directory, not something the fleet.json aggregate itself
-		// renders as (docs/adr/0018-fleet-scanning.md). Rejecting them here
-		// rather than silently ignoring keeps that explicit.
+		// --format means for fleet what it already means for audit: which
+		// formats each target's own audit subprocess produces
+		// (docs/adr/0023-fleet-raw-rendered-split.md). fleet.json itself is
+		// always JSON regardless of this list — there is no separate
+		// concept of "the aggregate's own format" to select here.
 		for _, f := range opts.Formats {
-			if f != FormatJSON {
-				return fmt.Errorf("--format: fleet only supports \"json\" today, got %q", f)
+			switch f {
+			case FormatJSON, FormatMD, FormatOpenAPI, FormatSARIF:
+			default:
+				return fmt.Errorf("--format: unsupported format %q", f)
 			}
 		}
 		for _, selector := range opts.FailOn {

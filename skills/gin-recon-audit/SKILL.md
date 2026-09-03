@@ -274,9 +274,13 @@ yet, show them the two-entry config shape rather than guessing at scope:
 ] } }
 ```
 
-Read the results from `<outDir>/fleet.json` (or open `fleet.html` — a
-self-contained summary table linking to every target's own report) rather
-than opening each target individually. Each target lands in exactly one of
+Read the results from `<outDir>/fleet.json` (or open `<outDir>-html/fleet.html`
+— a self-contained summary table linking to every target's own report)
+rather than opening each target individually. `<outDir>` holds only raw
+JSON; every HTML file, including a target's own `api.html` when `--format`
+included `openapi`, lands in the sibling `<outDir>-html` directory
+instead — generated automatically in the same run, no separate command.
+Each target lands in exactly one of
 `ok`, `not-go-module` (no `go.mod` — never counted as a failure), or
 `failed` (retried automatically on the next `--resume`, so a long fleet run
 interrupted partway through is safe to re-invoke with `--resume` added

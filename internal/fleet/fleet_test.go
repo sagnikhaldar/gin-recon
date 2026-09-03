@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func main() {
@@ -36,7 +37,7 @@ func main() {
 	fs := flag.NewFlagSet("audit", flag.ExitOnError)
 	src := fs.String("src", "", "")
 	out := fs.String("out", "", "")
-	fs.String("format", "", "")
+	format := fs.String("format", "", "")
 	fs.Bool("force", false, "")
 	fs.String("config", "", "")
 	fs.Parse(os.Args[2:])
@@ -46,19 +47,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "fake-audit: no behavior file")
 		os.Exit(1)
 	}
+	complete := "false"
 	switch string(behavior) {
 	case "fail":
 		fmt.Fprintln(os.Stderr, "fake-audit: simulated failure")
 		os.Exit(1)
 	case "complete":
-		os.MkdirAll(*out, 0o755)
-		os.WriteFile(filepath.Join(*out, "routes.json"), []byte(` + "`" + `{"scanCoverage":{"complete":true}}` + "`" + `), 0o644)
+		complete = "true"
 	case "incomplete":
-		os.MkdirAll(*out, 0o755)
-		os.WriteFile(filepath.Join(*out, "routes.json"), []byte(` + "`" + `{"scanCoverage":{"complete":false}}` + "`" + `), 0o644)
+		complete = "false"
 	default:
 		fmt.Fprintln(os.Stderr, "fake-audit: unknown behavior")
 		os.Exit(1)
+	}
+	os.MkdirAll(*out, 0o755)
+	os.WriteFile(filepath.Join(*out, "routes.json"), []byte(` + "`" + `{"scanCoverage":{"complete":` + "`" + `+complete+` + "`" + `}}` + "`" + `), 0o644)
+	if strings.Contains(*format, "openapi") {
+		os.WriteFile(filepath.Join(*out, "openapi.json"), []byte("{}"), 0o644)
+		os.WriteFile(filepath.Join(*out, "api.html"), []byte("<html></html>"), 0o644)
 	}
 }
 `
@@ -90,6 +96,93 @@ func targetDir(t *testing.T, behavior string) string {
 		}
 	}
 	return dir
+}
+
+// TestRunMovesAPIHTMLIntoHTMLOutDir exercises
+// docs/adr/0023-fleet-raw-rendered-split.md end to end: a target whose own
+// --format included "openapi" gets its api.html moved out of the raw
+// --out tree into the sibling HTMLOutDir, with the raw openapi.json left
+// behind — a plain file move, not a second scan.
+func TestRunMovesAPIHTMLIntoHTMLOutDir(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "svc-a", Src: targetDir(t, "complete")},
+	}}
+	outDir := t.TempDir()
+	htmlOutDir := t.TempDir()
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json", "openapi"},
+		OutDir:       outDir,
+		HTMLOutDir:   htmlOutDir,
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := agg.Targets[0]
+	if got.APIHTML != filepath.Join("targets", "svc-a", "api.html") {
+		t.Errorf("APIHTML = %q, want targets/svc-a/api.html", got.APIHTML)
+	}
+	if _, err := os.Stat(filepath.Join(htmlOutDir, "targets", "svc-a", "api.html")); err != nil {
+		t.Errorf("api.html was not moved into HTMLOutDir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "targets", "svc-a", "api.html")); !os.IsNotExist(err) {
+		t.Error("api.html should no longer exist in the raw --out tree after the move")
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "targets", "svc-a", "openapi.json")); err != nil {
+		t.Errorf("openapi.json (raw evidence) should stay in --out: %v", err)
+	}
+}
+
+func TestRunLeavesAPIHTMLFieldEmptyWithoutHTMLOutDir(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "svc-a", Src: targetDir(t, "complete")},
+	}}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json", "openapi"},
+		OutDir:       t.TempDir(),
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if agg.Targets[0].APIHTML != "" {
+		t.Errorf("APIHTML = %q, want empty when HTMLOutDir was never set", agg.Targets[0].APIHTML)
+	}
+}
+
+func TestFormatsWithJSONAddsJSONOnce(t *testing.T) {
+	cases := [][]string{
+		{"openapi"},
+		{"json", "openapi"},
+		{"openapi", "json"},
+		{},
+	}
+	for _, in := range cases {
+		out := formatsWithJSON(in)
+		count := 0
+		for _, f := range out {
+			if f == "json" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("formatsWithJSON(%v) = %v, want exactly one \"json\"", in, out)
+		}
+	}
 }
 
 func TestRunClassifiesEveryStatus(t *testing.T) {
