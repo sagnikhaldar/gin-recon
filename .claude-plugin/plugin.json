@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "gin-recon",
   "displayName": "Gin Recon",
-  "version": "0.1.0",
+  "version": "0.1.1-syncprobe",
   "description": "Deterministic static-analysis inventory & audit for Gin route surfaces. Enumerate routes and middleware chains, classify authentication as proven/public/unknown, and generate OpenAPI 3.1 + SARIF + HTML documentation — no AI, no target execution.",
   "homepage": "https://github.com/sagnikhaldar/gin-recon#readme",
   "repository": "https://github.com/sagnikhaldar/gin-recon",
