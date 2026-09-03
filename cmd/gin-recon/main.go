@@ -895,10 +895,13 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	}
 
 	aggregatePath := filepath.Join(opts.OutDir, fleetAggregateFilename)
+	htmlPath := filepath.Join(opts.OutDir, fleetHTMLFilename)
 	if !opts.Force && !opts.Resume {
-		if _, err := os.Stat(aggregatePath); err == nil {
-			fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite or --resume to continue\n", aggregatePath)
-			return cli.ExitOperationalError
+		for _, p := range []string{aggregatePath, htmlPath} {
+			if _, err := os.Stat(p); err == nil {
+				fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite or --resume to continue\n", p)
+				return cli.ExitOperationalError
+			}
 		}
 	}
 
@@ -960,6 +963,20 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		return cli.ExitOperationalError
 	}
 
+	// fleet.html is an unconditional companion to fleet.json, the same
+	// relationship api.html already has with openapi.json
+	// (docs/adr/0020-fleet-html-view.md) — no separate flag, always
+	// regenerated from the same agg value just marshaled above.
+	htmlData, err := format.FleetHTML(agg)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if err := os.WriteFile(htmlPath, htmlData, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+
 	for _, sel := range opts.FailOn {
 		if sel == "incomplete" && !agg.Coverage.Complete {
 			return cli.ExitGate
@@ -972,6 +989,10 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 // each target's own full report lives underneath targets/<name>/, untouched
 // (docs/adr/0018-fleet-scanning.md).
 const fleetAggregateFilename = "fleet.json"
+
+// fleetHTMLFilename is fleet.json's unconditional HTML companion
+// (docs/adr/0020-fleet-html-view.md).
+const fleetHTMLFilename = "fleet.html"
 
 // validateRenderedReport rejects a --report document render cannot safely
 // reformat: an unrecognized/incompatible schema major — the same
