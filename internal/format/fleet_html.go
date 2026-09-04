@@ -88,6 +88,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <dl class="gr-key-values">
 <dt>authMiddleware configured</dt><dd>{{.Agg.AuthConfig.MiddlewareCount}}</dd>
 <dt>authWrappers configured</dt><dd>{{.Agg.AuthConfig.WrappersCount}}</dd>
+<dt>analysis.followModules configured</dt><dd>{{.Agg.FollowModulesCount}}{{if not .Agg.FollowModulesCount}} — a target that imports and mounts another module's own routes (a common pattern: one service calling another module's own Init(router, ...)) won't have those routes counted at all without this{{end}}</dd>
 {{if .TargetConfigCount}}<dt>Targets using their own repo-committed config</dt><dd>{{.TargetConfigCount}} of {{len .Agg.Targets}} — reviewed by whoever committed it to that repository, not necessarily independently of it</dd>{{end}}
 {{if .TargetConfigDirCount}}<dt>Targets using an operator-owned config</dt><dd>{{.TargetConfigDirCount}} of {{len .Agg.Targets}} — from --target-config-dir, never sourced from the scanned repository itself</dd>{{end}}
 </dl>

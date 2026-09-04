@@ -154,6 +154,42 @@ func TestFleetHTMLOmitsAuthMiddlewareWarningWhenConfigured(t *testing.T) {
 	}
 }
 
+// TestFleetHTMLWarnsWhenNoFollowModulesConfigured is a regression test for
+// docs/adr/0036-fleet-html-follow-modules-visibility.md: a target that
+// imports and mounts another module's own routes (las-be-flow calling
+// las-be-lender-bfin's own Init(router, ...), confirmed by reading real
+// source) won't have those routes counted at all without
+// analysis.followModules — a second silently-narrowing config knob,
+// alongside authMiddleware, that must not be left for a reader to
+// discover only by noticing a route-count gap.
+func TestFleetHTMLWarnsWhenNoFollowModulesConfigured(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if !strings.Contains(string(out), "won't have those routes counted at all without this") {
+		t.Errorf("expected the no-followModules explanation when FollowModulesCount is zero\n%s", out)
+	}
+}
+
+func TestFleetHTMLOmitsFollowModulesWarningWhenConfigured(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	agg.FollowModulesCount = 1
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "won't have those routes counted at all without this") {
+		t.Errorf("did not expect the no-followModules explanation when FollowModulesCount is non-zero\n%s", out)
+	}
+	if !strings.Contains(string(out), "<dt>analysis.followModules configured</dt><dd>1</dd>") {
+		t.Errorf("expected the Configuration panel to show the configured count\n%s", out)
+	}
+}
+
 // TestFleetHTMLRendersOwnConfigBadge is a regression test for
 // docs/adr/0031-fleet-per-target-config.md: a target that used its own
 // committed config (--use-target-config) must be visibly distinguishable

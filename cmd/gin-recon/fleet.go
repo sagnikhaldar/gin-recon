@@ -319,6 +319,9 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	agg.Scope = buildFleetScope(opts, discoveryIncomplete)
 	agg.AuthConfig.MiddlewareCount = len(cfg.AuthMiddleware)
 	agg.AuthConfig.WrappersCount = len(cfg.AuthWrappers)
+	if cfg.Analysis != nil {
+		agg.FollowModulesCount = len(cfg.Analysis.FollowModules)
+	}
 
 	data, err := json.MarshalIndent(agg, "", "  ")
 	if err != nil {
@@ -606,6 +609,9 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 	// is about to describe (docs/adr/0030-fleet-html-auth-config-visibility.md).
 	agg.AuthConfig.MiddlewareCount = len(cfg.AuthMiddleware)
 	agg.AuthConfig.WrappersCount = len(cfg.AuthWrappers)
+	if cfg.Analysis != nil {
+		agg.FollowModulesCount = len(cfg.Analysis.FollowModules)
+	}
 	for _, f := range opts.Formats {
 		if !formatsImplemented[f] {
 			fmt.Fprintf(stderr, "gin-recon: --format %s is not implemented yet; %s\n", f, implementedFormatsMessage)

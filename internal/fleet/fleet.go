@@ -143,6 +143,21 @@ type Aggregate struct {
 		MiddlewareCount int `json:"middlewareCount"`
 		WrappersCount   int `json:"wrappersCount"`
 	} `json:"authConfig"`
+
+	// FollowModulesCount is the number of analysis.followModules glob
+	// patterns this run's --config actually configured — the second
+	// silently-narrowing config knob found live, alongside AuthConfig
+	// above: a service that imports and mounts another module's routes
+	// (a real, common pattern in this org — las-be-flow calling
+	// las-be-lender-bfin/-dsp/-hero/-sib's own Init(router, ...)) only
+	// gets those routes counted if followModules names the dependency;
+	// without it, both the library scanned alone (structurally, always)
+	// and the consumer scanned without this set under-report real routes.
+	// fleet.html surfaces this the same way it already does for
+	// authMiddleware, rather than leaving a reader to reverse-engineer a
+	// route-count gap the way this field's own addition required
+	// (docs/adr/0036-fleet-html-follow-modules-visibility.md).
+	FollowModulesCount int `json:"followModulesCount,omitempty"`
 }
 
 // AllowedHost is one entry of a reviewed fleet.allowedRemoteHosts config

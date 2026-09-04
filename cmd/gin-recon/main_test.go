@@ -1448,6 +1448,7 @@ func TestRunFleetPopulatesAuthConfigAndProvenFromRealConfig(t *testing.T) {
 	cfgPath := filepath.Join(root, "cfg.json")
 	cfg := `{
 		"version": 1,
+		"analysis": {"followModules": ["gin-recon-fixtures/**"]},
 		"authMiddleware": {
 			"gin-recon-fixtures/auth-wrappers.RequireAuth": {"assurance": "analyze"},
 			"gin-recon-fixtures/auth-wrappers.RequireAuthContradicted": {"assurance": "analyze"},
@@ -1484,6 +1485,9 @@ func TestRunFleetPopulatesAuthConfigAndProvenFromRealConfig(t *testing.T) {
 	}
 	if agg.AuthConfig.WrappersCount != 1 {
 		t.Errorf("AuthConfig.WrappersCount = %d, want 1", agg.AuthConfig.WrappersCount)
+	}
+	if agg.FollowModulesCount != 1 {
+		t.Errorf("FollowModulesCount = %d, want 1", agg.FollowModulesCount)
 	}
 	if agg.Targets[0].Proven == 0 {
 		t.Error("Targets[0].Proven = 0, want non-zero: this fixture has proven routes under this exact config")
