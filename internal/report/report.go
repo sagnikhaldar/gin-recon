@@ -385,12 +385,16 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 // toolVersion and classifierRulesetVersion are placeholders until phase 5
 // wires them to build-time version injection (see PLAN.md#versioning).
 //
-// toolVersion is 0.1.0 for the v0.1.0 tag — the project's first tagged
-// release, not a bump from anything: no earlier version was ever actually
-// tagged, so there is nothing to be MINOR relative to yet (see
-// PLAN.md#versioning). Future changes bump from here per that policy.
+// toolVersion is 0.2.0 for the v0.2.0 tag, bumped from the tagged v0.1.0
+// per PLAN.md#versioning's MINOR definition: fleet's `--out` default
+// (docs/adr/0028), the fleet.html evidence dashboard and its
+// auth-config/enumeration-coverage visibility (docs/adr/0029, docs/adr/0030),
+// and the `--out .` sibling-directory fix (docs/adr/0027) are all additive/
+// backward-compatible — new optional report fields, new defaults with safe
+// fallbacks — none of it changes classification results on unchanged
+// source, so classifierRulesetVersion stays at 0.1.0.
 const (
-	toolVersion              = "0.1.0"
+	toolVersion              = "0.2.0"
 	classifierRulesetVersion = "0.1.0"
 )
 
