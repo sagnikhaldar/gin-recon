@@ -37,6 +37,53 @@ func TestFleetHTMLRendersTargets(t *testing.T) {
 // plus route-evidence counts — gin-recon's own proven/public/unknown
 // vocabulary (docs/adr/0008), not a copy of any sibling tool's own
 // per-repository metrics.
+// TestFleetHTMLExplainsZeroRouteOKTargets is a regression test for a real
+// live finding: several "ok" targets in a real org scan showed 0 routes
+// with no bug at all — they're shared libraries other services import and
+// mount routes from (gin-recon scans one repository at a time), or use a
+// different web framework entirely. Confirmed by inspecting real source
+// (las-be-lender-bfin's webhook.Init(router *gin.RouterGroup, ...) only
+// registers routes once imported and called by las-be-flow, which is
+// where those exact routes are already counted). Rather than leave a
+// reader to reverse-engineer that, the dashboard must say so directly.
+func TestFleetHTMLExplainsZeroRouteOKTargets(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", Status: fleet.StatusOK, Routes: 0},
+		{Name: "svc-b", Status: fleet.StatusOK, Routes: 5},
+		{Name: "svc-c", Status: fleet.StatusFailed},
+		{Name: "svc-d", Status: fleet.StatusNotGoModule},
+	}}
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	if !strings.Contains(html, "0*</span>") {
+		t.Errorf("expected the 0* mark for svc-a\n%s", html)
+	}
+	if !strings.Contains(html, "1 target scanned cleanly but found no routes") {
+		t.Errorf("expected the zero-route explainer note counting exactly 1\n%s", html)
+	}
+	if strings.Contains(html, ">5</span>") && strings.Contains(html, "5*") {
+		t.Errorf("svc-b has real routes and must not get the 0* mark\n%s", html)
+	}
+}
+
+// TestFleetHTMLOmitsZeroRouteNoteWhenNotApplicable confirms the note
+// doesn't appear at all when nothing would need it.
+func TestFleetHTMLOmitsZeroRouteNoteWhenNotApplicable(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK, Routes: 5}}}
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "found no routes of their own") {
+		t.Errorf("should not show the zero-route note when no target needs it\n%s", out)
+	}
+}
+
 func TestFleetHTMLRendersEvidenceMetricsAndBadges(t *testing.T) {
 	agg := &fleet.Aggregate{
 		Tool:        "gin-recon",

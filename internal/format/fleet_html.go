@@ -94,6 +94,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 </div>
 <div class="gr-panel">
 <h2 class="gr-panel__title">Targets</h2>
+{{if .ZeroRouteOKCount}}<p class="gr-lede" style="margin:0;padding:12px 16px 0;">{{.ZeroRouteOKCount}} target{{if ne .ZeroRouteOKCount 1}}s{{end}} scanned cleanly but found no routes of their own (marked <code>0*</code> below) — hover a mark for why; gin-recon scans one repository at a time, so a shared library's routes only ever show up under whichever service actually imports and mounts them.</p>{{end}}
 <div class="gr-filters" data-gr-filter="gr-targets-table">
 <div><label for="gr-target-search">Search</label><input id="gr-target-search" type="search" placeholder="Target, status, error…" data-gr-filter-search></div>
 <div><label for="gr-target-status">Status</label><select id="gr-target-status" data-gr-filter-status><option value="">All statuses</option><option value="ok">ok</option><option value="failed">failed</option><option value="not-go-module">not-go-module</option></select></div>
@@ -107,7 +108,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <td><code>{{.Name}}</code>{{if .TargetConfigDir}} <span class="gr-badge gr-badge--good" title="Used an operator-owned config from --target-config-dir, never sourced from this repository">own config (dir)</span>{{else if .TargetConfig}} <span class="gr-badge gr-badge--neutral" title="Used this target's own committed config instead of the fleet-wide --config">own config (repo)</span>{{end}}<br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}</td>
 <td>{{if eq .Status "ok"}}<span class="gr-badge gr-badge--good">{{.Status}}</span>{{else if eq .Status "failed"}}<span class="gr-badge gr-badge--bad">{{.Status}}</span>{{else}}<span class="gr-badge gr-badge--neutral">{{.Status}}</span>{{end}}</td>
 <td>{{if eq .Status "ok"}}{{if .Complete}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}{{else}}<span class="gr-count">&mdash;</span>{{end}}</td>
-<td class="gr-num">{{if .Routes}}{{.Routes}}{{else}}<span class="gr-count">0</span>{{end}}</td>
+<td class="gr-num">{{if .Routes}}{{.Routes}}{{else if eq .Status "ok"}}<span class="gr-count" title="No gin.Engine/RouterGroup route registrations found in this module's own source. Common, legitimate reasons: it's a library other services import and mount routes from (gin-recon scans one repository at a time, so its routes only show up in whichever service actually imports and registers them); it uses a different web framework entirely; or it genuinely has no HTTP surface (a worker, SDK, or config package).">0*</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
 <td class="gr-num">{{if .Proven}}<span class="gr-badge gr-badge--good">{{.Proven}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
 <td class="gr-num">{{if .Public}}<span class="gr-badge gr-badge--warn">{{.Public}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
 <td class="gr-num">{{if .Unknown}}<span class="gr-badge gr-badge--warn">{{.Unknown}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
@@ -214,6 +215,7 @@ type fleetHTMLData struct {
 	NotGoModuleCount     int
 	TargetConfigCount    int
 	TargetConfigDirCount int
+	ZeroRouteOKCount     int
 }
 
 // FleetHTML renders agg (and, when given, delta/scope) as the browsable
@@ -250,6 +252,9 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 		}
 		if t.TargetConfigDir {
 			data.TargetConfigDirCount++
+		}
+		if t.Status == fleet.StatusOK && t.Routes == 0 {
+			data.ZeroRouteOKCount++
 		}
 	}
 
