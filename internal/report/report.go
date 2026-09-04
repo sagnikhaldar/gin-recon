@@ -385,18 +385,19 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 // toolVersion and classifierRulesetVersion are placeholders until phase 5
 // wires them to build-time version injection (see PLAN.md#versioning).
 //
-// toolVersion is 0.3.1 for the v0.3.1 tag, bumped from the tagged v0.3.0
-// per PLAN.md#versioning's PATCH definition: fleet's live progress
-// reporting (docs/adr/0032) and the checkpoint-map data race fix are both
-// stderr/internal-only — no change to report shape or classification
-// results, so classifierRulesetVersion stays at 0.1.0. (v0.3.0 itself
-// covered fleet --use-target-config (docs/adr/0031); v0.2.0 covered
-// fleet's `--out` default (docs/adr/0028), the fleet.html evidence
-// dashboard and its auth-config/enumeration-coverage visibility
-// (docs/adr/0029, docs/adr/0030), and the `--out .` sibling-directory fix
-// (docs/adr/0027).)
+// toolVersion is 0.4.0 for the v0.4.0 tag, bumped from the tagged v0.3.1
+// per PLAN.md#versioning's MINOR definition: fleet --target-config-dir
+// (docs/adr/0033) is a new opt-in flag with a safe (off) default and a new
+// optional report field (targetConfigDir) — no change to classification
+// results for anyone not passing it, so classifierRulesetVersion stays at
+// 0.1.0. (v0.3.1 covered fleet's live progress reporting (docs/adr/0032)
+// and a checkpoint-map data race fix; v0.3.0 covered fleet
+// --use-target-config (docs/adr/0031); v0.2.0 covered fleet's `--out`
+// default (docs/adr/0028), the fleet.html evidence dashboard and its
+// auth-config/enumeration-coverage visibility (docs/adr/0029,
+// docs/adr/0030), and the `--out .` sibling-directory fix (docs/adr/0027).)
 const (
-	toolVersion              = "0.3.1"
+	toolVersion              = "0.4.0"
 	classifierRulesetVersion = "0.1.0"
 )
 
