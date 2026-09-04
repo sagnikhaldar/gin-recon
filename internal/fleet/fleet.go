@@ -265,7 +265,10 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	var mu sync.Mutex // guards cp and saveCheckpoint below
 
 	for i, t := range targets {
-		if done, ok := cp.Complete[t.Name]; ok {
+		mu.Lock()
+		done, ok := cp.Complete[t.Name]
+		mu.Unlock()
+		if ok {
 			results[i] = done
 			reused++
 			continue
