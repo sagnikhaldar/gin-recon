@@ -149,8 +149,27 @@ func TestValidateFleetRejectsBothTargetsAndOrg(t *testing.T) {
 	expectValidateError(t, "exactly one of --targets or --org", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--org=myorg", "--allow-remote-targets")
 }
 
-func TestValidateFleetRequiresOut(t *testing.T) {
-	expectValidateError(t, "--out is required", "fleet", "--targets=/tmp/targets.json")
+// TestValidateFleetDefaultsOutUnderGinReconDir is a regression test for
+// docs/adr/0028-gin-recon-default-output-directory.md: fleet no longer
+// requires --out at all — a --targets run without one defaults to
+// .gin-recon/<manifest base name>, mirroring a sibling tool's own
+// .express-recon/<org> convention with gin-recon's own directory name.
+func TestValidateFleetDefaultsOutUnderGinReconDir(t *testing.T) {
+	opts := mustParseAndValidate(t, "fleet", "--targets=/tmp/targets.json")
+	want := filepath.Join(".gin-recon", "targets")
+	if opts.OutDir != want {
+		t.Errorf("OutDir = %q, want %q", opts.OutDir, want)
+	}
+}
+
+// TestValidateFleetOrgDefaultsOutToLowercasedOrgName covers the --org half
+// of the same default: .gin-recon/<org>, lowercased.
+func TestValidateFleetOrgDefaultsOutToLowercasedOrgName(t *testing.T) {
+	opts := mustParseAndValidate(t, "fleet", "--org=MyOrg", "--allow-remote-targets")
+	want := filepath.Join(".gin-recon", "myorg")
+	if opts.OutDir != want {
+		t.Errorf("OutDir = %q, want %q", opts.OutDir, want)
+	}
 }
 
 func TestValidateFleetOrgRequiresAllowRemoteTargets(t *testing.T) {

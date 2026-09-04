@@ -37,6 +37,22 @@ type TargetResult struct {
 	Complete bool   `json:"complete"`
 	Report   string `json:"report,omitempty"`  // path to this target's own routes.json, relative to --out (the raw directory)
 	APIHTML  string `json:"apiHtml,omitempty"` // path to this target's own api.html, relative to --out-html (docs/adr/0023-fleet-raw-rendered-split.md) — set only when this target's own --format included openapi
+
+	// Routes/Proven/Public/Unknown are this target's own routes.json
+	// summary, copied up so fleet.html can show each target's assurance
+	// breakdown without a reader having to open every target's own report
+	// individually (docs/adr/0028-gin-recon-default-output-directory.md's
+	// accompanying fleet.html redesign). Proven is
+	// provenByConfirmedShape+provenByAttestedUnresolved combined — fleet
+	// scope cares whether a route's auth was established at all, not which
+	// of the two enforcement-shape mechanisms established it (that detail
+	// is still in the target's own routes.json, one click away). Set only
+	// for a StatusOK target; zero value for every other status, same as an
+	// empty repository would report.
+	Routes  int `json:"routes,omitempty"`
+	Proven  int `json:"proven,omitempty"`
+	Public  int `json:"public,omitempty"`
+	Unknown int `json:"unknown,omitempty"`
 }
 
 // Scope is the --org configuration a fleet run used, recorded on the
@@ -53,6 +69,23 @@ type Scope struct {
 	IncludeForks    bool     `json:"includeForks,omitempty"`
 	RepoInclude     []string `json:"repoInclude,omitempty"`
 	RepoExclude     []string `json:"repoExclude,omitempty"`
+	// DiscoveryComplete is false when --max-repos or the page cap cut
+	// enumeration short of the whole organization — a coarser
+	// incompleteness than any one target's own scanCoverage.complete
+	// (docs/adr/0021-fleet-org-enumeration.md), surfaced on the Scope panel
+	// itself so a reader doesn't have to infer it from Coverage.Complete
+	// being false for an unrelated reason (a target scan failure).
+	// DiscoveryCompleteKnown distinguishes a real "false" (this run's own
+	// discovery was actually incomplete) from a fleet.json predating this
+	// field entirely, which would otherwise unmarshal DiscoveryComplete's
+	// zero value as a confident, wrong "incomplete" claim about a run that
+	// was never actually checked — false is a normal Go zero value, not a
+	// safe "unknown" sentinel, so it needs an explicit companion rather
+	// than being trusted on its own (docs/adr/0030-fleet-html-auth-config-visibility.md).
+	// Left untouched by render, which never redoes discovery and so has no
+	// way to learn this about a run it didn't perform.
+	DiscoveryComplete      bool `json:"discoveryComplete,omitempty"`
+	DiscoveryCompleteKnown bool `json:"discoveryCompleteKnown,omitempty"`
 }
 
 // Aggregate is the fleet.json shape.
@@ -69,6 +102,30 @@ type Aggregate struct {
 		Reused     int  `json:"reused"`
 		Checkpoint bool `json:"checkpoint"`
 	} `json:"resume"`
+	// Totals sums every target's own Routes/Proven/Public/Unknown — the
+	// fleet-wide evidence rollup fleet.html's metrics row shows. Computed
+	// once after every target finishes (Run), not recomputed by a later
+	// render pass, since render never re-reads a target's routes.json for
+	// any other purpose either — it trusts fleet.json's own record.
+	Totals struct {
+		Routes  int `json:"routes"`
+		Proven  int `json:"proven"`
+		Public  int `json:"public"`
+		Unknown int `json:"unknown"`
+	} `json:"totals"`
+	// AuthConfig records how many authMiddleware/authWrappers entries this
+	// run's --config actually configured — not read back by anything, only
+	// so fleet.html can explain a fleet-wide Totals.Proven of zero as "no
+	// authMiddleware was configured for this run" rather than leaving a
+	// reader to wonder whether every scanned route is genuinely
+	// unauthenticated (docs/adr/0030-fleet-html-auth-config-visibility.md).
+	// Populated by cmd/gin-recon, not here: internal/fleet deliberately
+	// never imports internal/config (ADR-0019's own decoupling), and cfg is
+	// already loaded one layer up regardless.
+	AuthConfig struct {
+		MiddlewareCount int `json:"middlewareCount"`
+		WrappersCount   int `json:"wrappersCount"`
+	} `json:"authConfig"`
 }
 
 // AllowedHost is one entry of a reviewed fleet.allowedRemoteHosts config
@@ -206,6 +263,10 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 		if r.Status == StatusFailed || (r.Status == StatusOK && !r.Complete) {
 			agg.Coverage.Complete = false
 		}
+		agg.Totals.Routes += r.Routes
+		agg.Totals.Proven += r.Proven
+		agg.Totals.Public += r.Public
+		agg.Totals.Unknown += r.Unknown
 	}
 	agg.Resume.Requested = opts.Resume
 	agg.Resume.Reused = reused
@@ -299,6 +360,13 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 		ScanCoverage struct {
 			Complete bool `json:"complete"`
 		} `json:"scanCoverage"`
+		Summary *struct {
+			TotalRoutes                int `json:"totalRoutes"`
+			ProvenByConfirmedShape     int `json:"provenByConfirmedShape"`
+			ProvenByAttestedUnresolved int `json:"provenByAttestedUnresolved"`
+			Public                     int `json:"public"`
+			Unknown                    int `json:"unknown"`
+		} `json:"summary"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		res.Status = StatusFailed
@@ -309,6 +377,12 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 	res.Status = StatusOK
 	res.Complete = decoded.ScanCoverage.Complete
 	res.Report = filepath.Join("targets", t.Name, "routes.json")
+	if decoded.Summary != nil {
+		res.Routes = decoded.Summary.TotalRoutes
+		res.Proven = decoded.Summary.ProvenByConfirmedShape + decoded.Summary.ProvenByAttestedUnresolved
+		res.Public = decoded.Summary.Public
+		res.Unknown = decoded.Summary.Unknown
+	}
 
 	// api.html (written alongside openapi.json in targetOut, if "openapi"
 	// was requested) moves into the sibling rendered tree — a plain file

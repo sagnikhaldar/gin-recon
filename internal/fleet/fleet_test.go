@@ -48,6 +48,7 @@ func main() {
 		os.Exit(1)
 	}
 	complete := "false"
+	summary := ""
 	switch string(behavior) {
 	case "fail":
 		fmt.Fprintln(os.Stderr, "fake-audit: simulated failure")
@@ -56,12 +57,15 @@ func main() {
 		complete = "true"
 	case "incomplete":
 		complete = "false"
+	case "with-routes":
+		complete = "true"
+		summary = ` + "`" + `,"summary":{"totalRoutes":5,"provenByConfirmedShape":2,"provenByAttestedUnresolved":1,"public":1,"unknown":1}` + "`" + `
 	default:
 		fmt.Fprintln(os.Stderr, "fake-audit: unknown behavior")
 		os.Exit(1)
 	}
 	os.MkdirAll(*out, 0o755)
-	os.WriteFile(filepath.Join(*out, "routes.json"), []byte(` + "`" + `{"scanCoverage":{"complete":` + "`" + `+complete+` + "`" + `}}` + "`" + `), 0o644)
+	os.WriteFile(filepath.Join(*out, "routes.json"), []byte(` + "`" + `{"scanCoverage":{"complete":` + "`" + `+complete+` + "`" + `}` + "`" + `+summary+` + "`" + `}` + "`" + `), 0o644)
 	if strings.Contains(*format, "openapi") {
 		os.WriteFile(filepath.Join(*out, "openapi.json"), []byte("{}"), 0o644)
 		os.WriteFile(filepath.Join(*out, "api.html"), []byte("<html></html>"), 0o644)
@@ -233,6 +237,49 @@ func TestRunClassifiesEveryStatus(t *testing.T) {
 	failed := agg.Targets[2]
 	if failed.Error == "" {
 		t.Error("failed target has no captured stderr")
+	}
+}
+
+// TestRunPopulatesRouteEvidenceCounts covers fleet.html's redesigned
+// metrics/table (docs/adr/0028-gin-recon-default-output-directory.md's
+// accompanying change): each OK target's own routes.json "summary" block
+// is copied onto its TargetResult, and Aggregate.Totals is the sum across
+// every target — not recomputed from anything else, so a target reporting
+// zero routes (no "summary" key at all, the "complete"/"incomplete"
+// behaviors above) must not contribute anything but zeros.
+func TestRunPopulatesRouteEvidenceCounts(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "with-routes", Src: targetDir(t, "with-routes")},
+		{Name: "empty", Src: targetDir(t, "complete")},
+	}}
+	outDir := t.TempDir()
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       outDir,
+		Concurrency:  2,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+
+	withRoutes := agg.Targets[0]
+	if withRoutes.Routes != 5 || withRoutes.Proven != 3 || withRoutes.Public != 1 || withRoutes.Unknown != 1 {
+		t.Errorf("with-routes target = %+v, want Routes=5 Proven=3 Public=1 Unknown=1", withRoutes)
+	}
+	empty := agg.Targets[1]
+	if empty.Routes != 0 || empty.Proven != 0 || empty.Public != 0 || empty.Unknown != 0 {
+		t.Errorf("empty target = %+v, want all-zero evidence counts", empty)
+	}
+
+	if agg.Totals.Routes != 5 || agg.Totals.Proven != 3 || agg.Totals.Public != 1 || agg.Totals.Unknown != 1 {
+		t.Errorf("Totals = %+v, want Routes=5 Proven=3 Public=1 Unknown=1", agg.Totals)
 	}
 }
 

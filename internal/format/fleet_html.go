@@ -26,15 +26,14 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{if .Scope}}{{.Scope.Org}} · {{end}}gin-recon fleet report</title>
 <style>{{.ThemeCSS}}
-.gr-status-ok { color: var(--gr-good); font-weight: 600; }
-.gr-status-failed { color: var(--gr-bad); font-weight: 600; }
-.gr-status-not-go-module { color: var(--gr-muted); }
 .gr-table { width: 100%; border-collapse: collapse; }
 .gr-table th, .gr-table td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--gr-border); vertical-align: top; font-size: 13px; }
 .gr-table th { background: var(--gr-panel-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--gr-muted); }
+.gr-table td.gr-num { text-align: right; font-variant-numeric: tabular-nums; }
 .gr-table tr:last-child td { border-bottom: none; }
 .gr-table tr[hidden] { display: none; }
 .gr-src { color: var(--gr-muted); font-size: 12px; }
+.gr-count { color: var(--gr-muted); }
 .gr-error { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; color: var(--gr-bad); }
 .gr-shell code { background: var(--gr-panel-muted); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>
@@ -56,13 +55,19 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 {{end}}
 </div>
 <div class="gr-metrics">
+<div class="gr-metric"><span class="gr-metric__value">{{len .Agg.Targets}}</span><span class="gr-metric__label">Targets</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.OKCount}}</span><span class="gr-metric__label">OK</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.FailedCount}}</span><span class="gr-metric__label">Failed</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.NotGoModuleCount}}</span><span class="gr-metric__label">Not a Go module</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.Agg.Coverage.Complete}}</span><span class="gr-metric__label">Coverage complete</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.Agg.Totals.Routes}}</span><span class="gr-metric__label">Routes</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.Agg.Totals.Proven}}</span><span class="gr-metric__label">Proven</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.Agg.Totals.Public}}</span><span class="gr-metric__label">Public</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.Agg.Totals.Unknown}}</span><span class="gr-metric__label">Unknown</span></div>
 </div>
 {{if .Agg.Resume.Requested}}<p class="gr-lede" style="margin:8px 24px 0;">Resumed: {{.Agg.Resume.Reused}} target(s) reused from checkpoint.</p>{{end}}
 {{if .Agg.Resume.Checkpoint}}<p class="gr-lede" style="margin:4px 24px 0;">Checkpoint retained — this run is not yet complete.</p>{{end}}
+{{if not .Agg.AuthConfig.MiddlewareCount}}<p class="gr-lede" style="margin:4px 24px 0;">No <code>authMiddleware</code> configured for this run — every route below defaults to <strong>public</strong> or <strong>unknown</strong>; Proven can only ever be non-zero once <code>--config</code> names the actual auth-middleware symbols these targets call.</p>{{end}}
 {{if .Scope}}
 <div class="gr-panel">
 <h2 class="gr-panel__title">Scope</h2>
@@ -74,9 +79,17 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <dt>Include forks</dt><dd>{{.Scope.IncludeForks}}</dd>
 {{if .Scope.RepoInclude}}<dt>Repo include</dt><dd>{{range $i, $p := .Scope.RepoInclude}}{{if $i}}, {{end}}{{$p}}{{end}}</dd>{{end}}
 {{if .Scope.RepoExclude}}<dt>Repo exclude</dt><dd>{{range $i, $p := .Scope.RepoExclude}}{{if $i}}, {{end}}{{$p}}{{end}}</dd>{{end}}
+{{if .Scope.DiscoveryCompleteKnown}}<dt>Enumeration coverage</dt><dd>{{if .Scope.DiscoveryComplete}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}</dd>{{end}}
 </dl>
 </div>
 {{end}}
+<div class="gr-panel">
+<h2 class="gr-panel__title">Configuration</h2>
+<dl class="gr-key-values">
+<dt>authMiddleware configured</dt><dd>{{.Agg.AuthConfig.MiddlewareCount}}</dd>
+<dt>authWrappers configured</dt><dd>{{.Agg.AuthConfig.WrappersCount}}</dd>
+</dl>
+</div>
 <div class="gr-panel">
 <h2 class="gr-panel__title">Targets</h2>
 <div class="gr-filters" data-gr-filter="gr-targets-table">
@@ -86,12 +99,16 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 </div>
 <div class="gr-table-wrap">
 <table class="gr-table" id="gr-targets-table">
-<thead><tr><th>Target</th><th>Status</th><th>Coverage</th><th>Report</th><th>Error</th></tr></thead>
+<thead><tr><th>Target</th><th>Status</th><th>Coverage</th><th>Routes</th><th>Proven</th><th>Public</th><th>Unknown</th><th>Report</th><th>Error</th></tr></thead>
 <tbody>
 {{range .Agg.Targets}}<tr data-gr-search="{{.Name}} {{.Status}} {{.Error}}" data-gr-status="{{.Status}}">
 <td><code>{{.Name}}</code><br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}</td>
-<td class="gr-status-{{.Status}}">{{.Status}}</td>
-<td>{{.Complete}}</td>
+<td>{{if eq .Status "ok"}}<span class="gr-badge gr-badge--good">{{.Status}}</span>{{else if eq .Status "failed"}}<span class="gr-badge gr-badge--bad">{{.Status}}</span>{{else}}<span class="gr-badge gr-badge--neutral">{{.Status}}</span>{{end}}</td>
+<td>{{if eq .Status "ok"}}{{if .Complete}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}{{else}}<span class="gr-count">&mdash;</span>{{end}}</td>
+<td class="gr-num">{{if .Routes}}{{.Routes}}{{else}}<span class="gr-count">0</span>{{end}}</td>
+<td class="gr-num">{{if .Proven}}<span class="gr-badge gr-badge--good">{{.Proven}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
+<td class="gr-num">{{if .Public}}<span class="gr-badge gr-badge--warn">{{.Public}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
+<td class="gr-num">{{if .Unknown}}<span class="gr-badge gr-badge--warn">{{.Unknown}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
 <td>{{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}} &middot; <a href="{{.APIHTML}}">api.html</a>{{end}}</td>
 <td class="gr-error">{{.Error}}</td>
 </tr>

@@ -54,8 +54,8 @@ const discoveredTargetsFilename = "discovered-targets.json"
 // later, after the original --config path may have moved or changed.
 const configSnapshotBasename = "config-snapshot"
 
-// fleetHTMLSibling resolves --out's sibling rendered-output directory and
-// the relative link back to --out from inside it
+// fleetHTMLSibling resolves --out's rendered-output directory and the
+// relative link back to --out from inside it
 // (docs/adr/0023-fleet-raw-rendered-split.md). Anchored to --out's own
 // absolute path rather than a naive `outDir + "-html"` / filepath.Base(outDir)
 // on the raw string: --out "." is a real, common invocation (scanning from
@@ -63,10 +63,22 @@ const configSnapshotBasename = "config-snapshot"
 // "." — a naive approach turns it into a nonsense ".-html" sibling nested
 // inside --out and a "../." raw-link that points at --out's own parent
 // instead of --out itself.
+//
+// --out "." gets a second special case on top of that: a *sibling* of "."
+// is --out's own parent directory — for a project directory like
+// ~/repo, that is ~/, outside the directory the caller actually asked to
+// scope output to (docs/adr/0027-fleet-out-dot-nests-rendered-output.md).
+// So --out "." nests the rendered output inside itself (<out>/html) rather
+// than beside it, trading the "no HTML file ever lives under --out"
+// invariant ADR 0023 states for every other --out value for keeping
+// everything under a `.`-scoped run inside the directory the caller named.
 func fleetHTMLSibling(outDir string) (htmlDir, rawLink string, err error) {
 	abs, err := filepath.Abs(outDir)
 	if err != nil {
 		return "", "", fmt.Errorf("resolving --out: %w", err)
+	}
+	if filepath.Clean(outDir) == "." {
+		return filepath.Join(abs, "html"), "..", nil
 	}
 	base := filepath.Base(abs)
 	return filepath.Join(filepath.Dir(abs), base+"-html"), "../" + base, nil
@@ -94,14 +106,16 @@ var fleetBinaryPathForTests string
 // stages of a fleet run, not an undifferentiated block.
 func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	// The shared --config is loaded up front (in addition to being passed
-	// through to each target's own audit subprocess) purely to read
+	// through to each target's own audit subprocess) to read
 	// fleet.allowedRemoteHosts — docs/adr/0019-fleet-remote-targets.md's
-	// config-reviewed scope for --allow-remote-targets. No other config
-	// field is read at this layer; everything else still only ever reaches
-	// analysis through the per-target audit subprocess itself. --org needs
-	// this resolved before anything else, since discovering an
-	// organization's repositories is itself a network call authorized the
-	// same way (docs/adr/0021-fleet-org-enumeration.md).
+	// config-reviewed scope for --allow-remote-targets — and, later below,
+	// authMiddleware/authWrappers counts for fleet.html's own
+	// AuthConfig note (docs/adr/0030-fleet-html-auth-config-visibility.md).
+	// Every actual classification decision still only ever happens inside
+	// the per-target audit subprocess itself; nothing here re-derives or
+	// second-guesses it. --org needs this resolved before anything else,
+	// since discovering an organization's repositories is itself a network
+	// call authorized the same way (docs/adr/0021-fleet-org-enumeration.md).
 	cfg, err := loadConfig(opts.ConfigPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
@@ -130,7 +144,8 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	}
 
 	// --out is the raw-artifacts root; every HTML file gin-recon fleet
-	// produces lands in the sibling <out>-html directory instead
+	// produces lands in the sibling <out>-html directory instead (or, for
+	// --out ".", nested inside it — see fleetHTMLSibling)
 	// (docs/adr/0023-fleet-raw-rendered-split.md) — derived automatically,
 	// no separate flag, no separate render step to remember to run.
 	htmlOutDir, rawDirLink, err := fleetHTMLSibling(opts.OutDir)
@@ -206,7 +221,9 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	// Recorded on the aggregate itself, not just used to render fleet.html
 	// in this same run — see buildFleetScope's own doc comment
 	// (docs/adr/0024-fleet-render.md).
-	agg.Scope = buildFleetScope(opts)
+	agg.Scope = buildFleetScope(opts, discoveryIncomplete)
+	agg.AuthConfig.MiddlewareCount = len(cfg.AuthMiddleware)
+	agg.AuthConfig.WrappersCount = len(cfg.AuthWrappers)
 
 	data, err := json.MarshalIndent(agg, "", "  ")
 	if err != nil {
@@ -298,18 +315,20 @@ func buildFleetAllowedHosts(cfg *config.Config) []fleet.AllowedHost {
 // Aggregate itself (docs/adr/0024-fleet-render.md) so a later render pass
 // over a saved fleet.json can restore this panel without still having the
 // original CLI flags available.
-func buildFleetScope(opts *cli.Options) *fleet.Scope {
+func buildFleetScope(opts *cli.Options, discoveryIncomplete bool) *fleet.Scope {
 	if opts.Org == "" {
 		return nil
 	}
 	scope := &fleet.Scope{
-		Org:             opts.Org,
-		MaxRepos:        opts.MaxRepos,
-		Concurrency:     opts.Concurrency,
-		IncludeArchived: opts.IncludeArchived,
-		IncludeForks:    opts.IncludeForks,
-		RepoInclude:     opts.RepoInclude,
-		RepoExclude:     opts.RepoExclude,
+		Org:                    opts.Org,
+		MaxRepos:               opts.MaxRepos,
+		Concurrency:            opts.Concurrency,
+		IncludeArchived:        opts.IncludeArchived,
+		IncludeForks:           opts.IncludeForks,
+		RepoInclude:            opts.RepoInclude,
+		RepoExclude:            opts.RepoExclude,
+		DiscoveryComplete:      !discoveryIncomplete,
+		DiscoveryCompleteKnown: true,
 	}
 	if scope.MaxRepos == 0 {
 		scope.MaxRepos = fleet.DefaultMaxRepos
@@ -457,9 +476,15 @@ func writeFleetConfigSnapshot(opts *cli.Options, stderr io.Writer) int {
 // already-read bytes (runRender read them once to detect the report
 // kind); reused here rather than read a second time.
 func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) int {
+	// No --out re-renders in place: --report's own directory (a saved
+	// fleet.json's raw root, e.g. .gin-recon/<org>/fleet.json) is the
+	// obvious default raw root to write back into, matching how a live
+	// fleet run's --out already means "the raw root" — so
+	// `render --report .gin-recon/<org>/fleet.json --force` alone
+	// regenerates .gin-recon/<org>-html/ with no --out needed
+	// (docs/adr/0028-gin-recon-default-output-directory.md).
 	if opts.OutDir == "" {
-		fmt.Fprintf(stderr, "gin-recon: --out is required when --report names a fleet.json\n")
-		return cli.ExitOperationalError
+		opts.OutDir = filepath.Dir(opts.ReportPath)
 	}
 	// A fleet render always overwrites every target's own already-computed
 	// output (that is the entire operation) — requiring --force up front
@@ -480,6 +505,12 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}
+	// Refreshed the same way Routes/Proven/Public/Unknown are below: this
+	// render's own --config, not whatever the original fleet run's --config
+	// happened to contain, is what actually governs the re-render fleet.html
+	// is about to describe (docs/adr/0030-fleet-html-auth-config-visibility.md).
+	agg.AuthConfig.MiddlewareCount = len(cfg.AuthMiddleware)
+	agg.AuthConfig.WrappersCount = len(cfg.AuthWrappers)
 	for _, f := range opts.Formats {
 		if !formatsImplemented[f] {
 			fmt.Fprintf(stderr, "gin-recon: --format %s is not implemented yet; %s\n", f, implementedFormatsMessage)
@@ -517,6 +548,18 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 			return cli.ExitOperationalError
 		}
 
+		// Refreshed from this target's own already-computed routes.json —
+		// not recomputed, and not a second scan — so a fleet.json written
+		// before docs/adr/0028-gin-recon-default-output-directory.md's
+		// fleet.html redesign (Routes/Proven/Public/Unknown all zero) picks
+		// up real values the next time it's rendered.
+		if rep.Summary != nil {
+			agg.Targets[i].Routes = rep.Summary.TotalRoutes
+			agg.Targets[i].Proven = rep.Summary.ProvenByConfirmedShape + rep.Summary.ProvenByAttestedUnresolved
+			agg.Targets[i].Public = rep.Summary.Public
+			agg.Targets[i].Unknown = rep.Summary.Unknown
+		}
+
 		targetRawOut := filepath.Join(rawDir, "targets", t.Name)
 		targetOpts := &cli.Options{Command: cli.CommandRender, OutDir: targetRawOut, Formats: opts.Formats, Force: true}
 		if code := writeReport(rep, targetOpts, cfg, stdout, stderr, cli.ExitSuccess); code != cli.ExitSuccess {
@@ -545,6 +588,14 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 			// previously-recorded link would now point at nothing.
 			agg.Targets[i].APIHTML = ""
 		}
+	}
+
+	agg.Totals.Routes, agg.Totals.Proven, agg.Totals.Public, agg.Totals.Unknown = 0, 0, 0, 0
+	for _, t := range agg.Targets {
+		agg.Totals.Routes += t.Routes
+		agg.Totals.Proven += t.Proven
+		agg.Totals.Public += t.Public
+		agg.Totals.Unknown += t.Unknown
 	}
 
 	// fleet.json itself is updated too, not just fleet.html — each target's

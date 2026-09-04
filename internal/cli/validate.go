@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -77,7 +78,11 @@ func Validate(opts *Options) error {
 			return fmt.Errorf("--max-repos: must be between 1 and %d, got %d", fleet.MaxMaxRepos, opts.MaxRepos)
 		}
 		if opts.OutDir == "" {
-			return fmt.Errorf("--out is required")
+			dir, err := defaultFleetOutDir(opts)
+			if err != nil {
+				return err
+			}
+			opts.OutDir = dir
 		}
 		if opts.Concurrency < 1 || opts.Concurrency > 8 {
 			return fmt.Errorf("--concurrency: must be between 1 and 8, got %d", opts.Concurrency)
@@ -200,6 +205,30 @@ func Validate(opts *Options) error {
 	}
 
 	return nil
+}
+
+// defaultFleetOutDir computes fleet's --out when the caller didn't pass one,
+// so `fleet --org <name> --allow-remote-targets` or `fleet --targets <path>`
+// works with no --out at all — docs/adr/0028-gin-recon-default-output-directory.md,
+// gin-recon's own directory name for a sibling tool's own
+// `.express-recon/<org>` convention. --org gets `.gin-recon/<org>`
+// (lowercased, matching the sibling convention and GitHub's own
+// case-insensitive org names); --targets gets `.gin-recon/<manifest base
+// name>`, the closest available scope identity for a hand-written manifest
+// that has no organization name of its own. Passing --out explicitly always
+// overrides this and is unaffected by anything here.
+func defaultFleetOutDir(opts *Options) (string, error) {
+	if fi, err := os.Lstat(".gin-recon"); err == nil && (fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir()) {
+		return "", fmt.Errorf("--out: refusing to default into \".gin-recon\": it exists and is not a plain directory; pass --out explicitly")
+	}
+	if opts.Org != "" {
+		return filepath.Join(".gin-recon", strings.ToLower(opts.Org)), nil
+	}
+	name := strings.TrimSuffix(filepath.Base(opts.TargetsPath), filepath.Ext(opts.TargetsPath))
+	if name == "" {
+		name = "targets"
+	}
+	return filepath.Join(".gin-recon", name), nil
 }
 
 // requireUnderSrc enforces docs/cli-contract.md's "the path must remain under

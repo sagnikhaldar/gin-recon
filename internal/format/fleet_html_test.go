@@ -31,6 +31,118 @@ func TestFleetHTMLRendersTargets(t *testing.T) {
 	}
 }
 
+// TestFleetHTMLRendersEvidenceMetricsAndBadges covers the richer dashboard
+// docs/adr/0028-gin-recon-default-output-directory.md's fleet.html redesign
+// added: a fleet-wide totals row and, per target, status/coverage badges
+// plus route-evidence counts — gin-recon's own proven/public/unknown
+// vocabulary (docs/adr/0008), not a copy of any sibling tool's own
+// per-repository metrics.
+func TestFleetHTMLRendersEvidenceMetricsAndBadges(t *testing.T) {
+	agg := &fleet.Aggregate{
+		Tool:        "gin-recon",
+		ToolVersion: "0.1.0",
+		Targets: []fleet.TargetResult{
+			{Name: "svc-a", Src: "/repos/svc-a", Status: fleet.StatusOK, Complete: true, Routes: 5, Proven: 3, Public: 1, Unknown: 1},
+			{Name: "svc-b", Src: "/repos/svc-b", Status: fleet.StatusFailed, Error: "audit exited 1"},
+		},
+	}
+	agg.Coverage.Complete = false
+	agg.Totals.Routes = 5
+	agg.Totals.Proven = 3
+	agg.Totals.Public = 1
+	agg.Totals.Unknown = 1
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	for _, want := range []string{
+		`gr-badge--good">ok`,
+		`gr-badge--bad">failed`,
+		`gr-badge--good">complete`,
+		`gr-badge--good">3</span>`,
+		`gr-badge--warn">1</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("output missing %q\n%s", want, html)
+		}
+	}
+	if !strings.Contains(html, `<span class="gr-metric__value">5</span><span class="gr-metric__label">Routes</span>`) {
+		t.Errorf("output missing the fleet-wide Routes metric tile\n%s", html)
+	}
+}
+
+// TestFleetHTMLWarnsWhenNoAuthMiddlewareConfigured is a regression test for
+// docs/adr/0030-fleet-html-auth-config-visibility.md: real live-org output
+// showed Totals.Proven = 0 across every target, which reads as "gin-recon
+// can't detect auth" unless the page also says the run's own --config never
+// named a single authMiddleware entry — the actual, structural reason
+// nothing could ever have been classified proven.
+func TestFleetHTMLWarnsWhenNoAuthMiddlewareConfigured(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if !strings.Contains(string(out), "No <code>authMiddleware</code> configured") {
+		t.Errorf("expected the no-authMiddleware note when AuthConfig.MiddlewareCount is zero\n%s", out)
+	}
+}
+
+func TestFleetHTMLOmitsAuthMiddlewareWarningWhenConfigured(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK, Proven: 3}}}
+	agg.AuthConfig.MiddlewareCount = 2
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "No <code>authMiddleware</code> configured") {
+		t.Errorf("did not expect the no-authMiddleware note when AuthConfig.MiddlewareCount is non-zero\n%s", out)
+	}
+	if !strings.Contains(string(out), "<dt>authMiddleware configured</dt><dd>2</dd>") {
+		t.Errorf("expected the Configuration panel to show the configured count\n%s", out)
+	}
+}
+
+// TestFleetHTMLRendersEnumerationCoverage covers the Scope panel's new
+// "Enumeration coverage" row (docs/adr/0030-fleet-html-auth-config-visibility.md):
+// an --org run that hit --max-repos/the page cap should read as incomplete
+// distinctly from an unrelated target scan failure, not just fold silently
+// into the same Coverage-complete metric tile.
+func TestFleetHTMLRendersEnumerationCoverage(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	scope := &fleet.Scope{Org: "myorg", DiscoveryComplete: false, DiscoveryCompleteKnown: true}
+
+	out, err := FleetHTML(agg, nil, scope, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if !strings.Contains(string(out), `<dt>Enumeration coverage</dt><dd><span class="gr-badge gr-badge--warn">incomplete</span></dd>`) {
+		t.Errorf("expected an incomplete Enumeration coverage badge\n%s", out)
+	}
+}
+
+// TestFleetHTMLOmitsEnumerationCoverageWhenUnknown is a regression test for
+// a real mistake caught before it shipped: rendering an old fleet.json that
+// predates DiscoveryComplete would otherwise unmarshal its Go zero value
+// (false) and confidently claim "incomplete" about a run that was never
+// actually checked. DiscoveryCompleteKnown must gate the row entirely.
+func TestFleetHTMLOmitsEnumerationCoverageWhenUnknown(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	scope := &fleet.Scope{Org: "myorg"} // DiscoveryComplete/DiscoveryCompleteKnown both zero-valued, as an old fleet.json would decode
+
+	out, err := FleetHTML(agg, nil, scope, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	if strings.Contains(string(out), "Enumeration coverage") {
+		t.Errorf("should not claim any enumeration coverage state when it was never recorded\n%s", out)
+	}
+}
+
 // A target's Error field is captured stderr from another process
 // (docs/adr/0018-fleet-scanning.md's stderr tail) — exactly the kind of
 // untrusted content that must never be interpretable as markup by a viewer

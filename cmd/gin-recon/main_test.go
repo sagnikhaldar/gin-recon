@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
+	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 )
 
 func TestRunSchemaReportSucceeds(t *testing.T) {
@@ -1152,15 +1153,60 @@ func TestRunFleetTargetsDoesNotWriteConfigSnapshot(t *testing.T) {
 	}
 }
 
-// TestRunFleetOutDotProducesSensibleHTMLSibling is a regression test for a
-// real bug found live-testing against a real org: `fleet --out .` (a
-// realistic invocation — running from inside the directory meant to hold
-// output) turned the naive `opts.OutDir + "-html"` / filepath.Base(".")
-// computation into a nonsense ".-html" directory nested inside --out
-// itself, and fleet.html's own link back to --out became "../." (the
-// parent of --out, not --out) instead of a real sibling and a working
-// link — see fleetHTMLSibling's doc comment.
-func TestRunFleetOutDotProducesSensibleHTMLSibling(t *testing.T) {
+// TestRunFleetDefaultsOutUnderGinReconDir is the CLI-level integration test
+// for docs/adr/0028-gin-recon-default-output-directory.md: a bare
+// `fleet --targets ...` with no --out at all creates .gin-recon/<manifest
+// base name> (raw) and its sibling .gin-recon/<manifest base
+// name>-html/fleet.html (rendered), mirroring a sibling tool's own
+// .express-recon/<org>/<org>-html convention.
+func TestRunFleetDefaultsOutUnderGinReconDir(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWD) }()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", "targets.json"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(root, ".gin-recon", "targets", "fleet.json")); err != nil {
+		t.Errorf("expected fleet.json under .gin-recon/targets: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".gin-recon", "targets-html", "fleet.html")); err != nil {
+		t.Errorf("expected fleet.html under .gin-recon/targets-html: %v", err)
+	}
+}
+
+// TestRunFleetOutDotNestsRenderedOutput is a regression test for a real bug
+// found live-testing against a real org: `fleet --out .` (a realistic
+// invocation — running from inside the directory meant to hold output) put
+// fleet.html in a directory sibling to --out's own parent
+// (docs/adr/0027-fleet-out-dot-nests-rendered-output.md) — for
+// ~/Tools/fleet-out, that meant ~/Tools/fleet-out-html, escaping the
+// directory the caller actually pointed --out at. --out "." should nest its
+// rendered output inside itself instead — see fleetHTMLSibling's doc
+// comment.
+func TestRunFleetOutDotNestsRenderedOutput(t *testing.T) {
 	fleetBinaryPathForTests = buildRealGinReconBinary(t)
 	defer func() { fleetBinaryPathForTests = "" }()
 
@@ -1194,26 +1240,23 @@ func TestRunFleetOutDotProducesSensibleHTMLSibling(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
 	}
 
-	wantHTMLDir := outDir + "-html"
+	wantHTMLDir := filepath.Join(outDir, "html")
 	if _, err := os.Stat(filepath.Join(wantHTMLDir, "fleet.html")); err != nil {
-		t.Fatalf("expected fleet.html under sibling dir %s: %v", wantHTMLDir, err)
+		t.Fatalf("expected fleet.html nested under --out at %s: %v", wantHTMLDir, err)
 	}
-	if _, err := os.Stat(filepath.Join(outDir, ".-html")); !os.IsNotExist(err) {
-		t.Errorf("a bogus %q directory was created inside --out, stat err = %v", filepath.Join(outDir, ".-html"), err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "fleet-out-html")); err != nil {
-		t.Errorf("sibling html dir should be a sibling of fleet-out, not nested: %v", err)
+	if _, err := os.Stat(filepath.Join(root, "fleet-out-html")); !os.IsNotExist(err) {
+		t.Errorf("rendered output escaped --out into a sibling of its parent, stat err = %v", err)
 	}
 
 	htmlData, err := os.ReadFile(filepath.Join(wantHTMLDir, "fleet.html"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(htmlData), `href="../."`) || strings.Contains(string(htmlData), ".././") {
+	if strings.Contains(string(htmlData), `href="../."`) {
 		t.Errorf("fleet.html links back to --out's parent instead of --out itself: %s", htmlData)
 	}
-	if !strings.Contains(string(htmlData), "../fleet-out/") {
-		t.Errorf("fleet.html should link back to --out via ../fleet-out/, got: %s", htmlData)
+	if !strings.Contains(string(htmlData), "../targets/") {
+		t.Errorf("fleet.html should link back to --out via ../targets/, got: %s", htmlData)
 	}
 }
 
@@ -1225,6 +1268,155 @@ func TestRunFleetOutDotProducesSensibleHTMLSibling(t *testing.T) {
 // touching the original source tree again. Proven here the same way the
 // single-report render test proves it: by moving the source tree away
 // before running render at all.
+// TestRunFleetPopulatesAuthConfigAndProvenFromRealConfig is a regression
+// test for docs/adr/0030-fleet-html-auth-config-visibility.md, built after
+// a real --org run against smallcase showed Totals.Proven = 0 across every
+// target. That was correct given the --config actually used (no
+// authMiddleware entries at all, only fleet.allowedRemoteHosts) — this test
+// proves the other half: a real --config naming real authMiddleware/
+// authWrappers symbols does populate Aggregate.AuthConfig and does produce
+// a non-zero Proven count, using the auth-wrappers fixture's own known
+// expected classification (3 of its 6 routes are proven).
+func TestRunFleetPopulatesAuthConfigAndProvenFromRealConfig(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(root, "cfg.json")
+	cfg := `{
+		"version": 1,
+		"authMiddleware": {
+			"gin-recon-fixtures/auth-wrappers.RequireAuth": {"assurance": "analyze"},
+			"gin-recon-fixtures/auth-wrappers.RequireAuthContradicted": {"assurance": "analyze"},
+			"gin-recon-fixtures/auth-wrappers.RequireRoleFactory": {"assurance": "analyze"}
+		},
+		"authWrappers": ["gin-recon-fixtures/auth-wrappers.LoggedAuth"]
+	}`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--config", cfgPath, "--out", outDir, "--allow-downloads"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	var agg fleet.Aggregate
+	aggData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(aggData, &agg); err != nil {
+		t.Fatal(err)
+	}
+	if agg.AuthConfig.MiddlewareCount != 3 {
+		t.Errorf("AuthConfig.MiddlewareCount = %d, want 3", agg.AuthConfig.MiddlewareCount)
+	}
+	if agg.AuthConfig.WrappersCount != 1 {
+		t.Errorf("AuthConfig.WrappersCount = %d, want 1", agg.AuthConfig.WrappersCount)
+	}
+	if agg.Targets[0].Proven == 0 {
+		t.Error("Targets[0].Proven = 0, want non-zero: this fixture has proven routes under this exact config")
+	}
+	if agg.Totals.Proven != agg.Targets[0].Proven {
+		t.Errorf("Totals.Proven = %d, want %d", agg.Totals.Proven, agg.Targets[0].Proven)
+	}
+
+	htmlData, err := os.ReadFile(filepath.Join(outDir+"-html", "fleet.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(htmlData), "No <code>authMiddleware</code> configured") {
+		t.Errorf("fleet.html should not warn about missing authMiddleware when 3 were configured:\n%s", htmlData)
+	}
+}
+
+// TestRunFleetRenderRefreshesRouteEvidenceCounts is a regression test for
+// docs/adr/0028-gin-recon-default-output-directory.md's fleet.html
+// redesign: a fleet.json written before Routes/Proven/Public/Unknown
+// existed (simulated here by zeroing them out by hand) gets them
+// backfilled — from each target's own already-computed routes.json, no
+// rescan — the next time it's rendered.
+func TestRunFleetRenderRefreshesRouteEvidenceCounts(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	fleetJSONPath := filepath.Join(outDir, "fleet.json")
+	var agg fleet.Aggregate
+	aggData, err := os.ReadFile(fleetJSONPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(aggData, &agg); err != nil {
+		t.Fatal(err)
+	}
+	if agg.Targets[0].Routes == 0 {
+		t.Fatal("test setup: fixture reported zero routes, nothing to zero out")
+	}
+
+	// Simulate a fleet.json written before this field existed.
+	agg.Targets[0].Routes, agg.Targets[0].Proven, agg.Targets[0].Public, agg.Targets[0].Unknown = 0, 0, 0, 0
+	agg.Totals.Routes, agg.Totals.Proven, agg.Totals.Public, agg.Totals.Unknown = 0, 0, 0, 0
+	staleData, err := json.MarshalIndent(&agg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fleetJSONPath, staleData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"render", "--report", fleetJSONPath, "--force"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet render exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	refreshedData, err := os.ReadFile(fleetJSONPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refreshed fleet.Aggregate
+	if err := json.Unmarshal(refreshedData, &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Targets[0].Routes == 0 {
+		t.Error("render did not refresh the target's Routes count")
+	}
+	if refreshed.Totals.Routes != refreshed.Targets[0].Routes {
+		t.Errorf("Totals.Routes = %d, want %d (recomputed from the refreshed target)", refreshed.Totals.Routes, refreshed.Targets[0].Routes)
+	}
+}
+
 func TestRunFleetRenderAddsFormatWithoutRescanning(t *testing.T) {
 	fleetBinaryPathForTests = buildRealGinReconBinary(t)
 	defer func() { fleetBinaryPathForTests = "" }()
@@ -1302,7 +1494,14 @@ func TestRunFleetRenderAddsFormatWithoutRescanning(t *testing.T) {
 	}
 }
 
-func TestRunFleetRenderRequiresOut(t *testing.T) {
+// TestRunFleetRenderDefaultsOutToReportDir is a regression test for
+// docs/adr/0028-gin-recon-default-output-directory.md: a fleet render no
+// longer requires --out — omitting it re-renders in place, into --report's
+// own directory (the raw root a live fleet run would have used), so
+// `render --report .gin-recon/<org>/fleet.json --force` alone regenerates
+// the sibling .gin-recon/<org>-html/ with no --out needed. --force is
+// still required regardless (unchanged, a fleet render always overwrites).
+func TestRunFleetRenderDefaultsOutToReportDir(t *testing.T) {
 	fleetBinaryPathForTests = buildRealGinReconBinary(t)
 	defer func() { fleetBinaryPathForTests = "" }()
 
@@ -1318,14 +1517,26 @@ func TestRunFleetRenderRequiresOut(t *testing.T) {
 		t.Fatalf("fleet exit code = %d; stderr: %s", code, stderr.String())
 	}
 
+	reportPath := filepath.Join(outDir, "fleet.json")
+
 	stdout.Reset()
 	stderr.Reset()
-	code := run([]string{"render", "--report", filepath.Join(outDir, "fleet.json"), "--format", "json"}, &stdout, &stderr)
+	code := run([]string{"render", "--report", reportPath, "--format", "json"}, &stdout, &stderr)
 	if code != cli.ExitOperationalError {
-		t.Errorf("exit code = %d, want %d", code, cli.ExitOperationalError)
+		t.Errorf("exit code without --force = %d, want %d", code, cli.ExitOperationalError)
 	}
-	if !strings.Contains(stderr.String(), "--out is required") {
-		t.Errorf("stderr = %q, want it to explain --out is required", stderr.String())
+	if !strings.Contains(stderr.String(), "--force is required") {
+		t.Errorf("stderr = %q, want it to explain --force is required", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"render", "--report", reportPath, "--format", "json", "--force"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("render exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(outDir+"-html", "fleet.html")); err != nil {
+		t.Errorf("expected fleet.html under the default sibling dir %s: %v", outDir+"-html", err)
 	}
 }
 
