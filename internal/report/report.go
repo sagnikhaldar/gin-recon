@@ -385,16 +385,17 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 // toolVersion and classifierRulesetVersion are placeholders until phase 5
 // wires them to build-time version injection (see PLAN.md#versioning).
 //
-// toolVersion is 0.2.0 for the v0.2.0 tag, bumped from the tagged v0.1.0
-// per PLAN.md#versioning's MINOR definition: fleet's `--out` default
-// (docs/adr/0028), the fleet.html evidence dashboard and its
-// auth-config/enumeration-coverage visibility (docs/adr/0029, docs/adr/0030),
-// and the `--out .` sibling-directory fix (docs/adr/0027) are all additive/
-// backward-compatible — new optional report fields, new defaults with safe
-// fallbacks — none of it changes classification results on unchanged
-// source, so classifierRulesetVersion stays at 0.1.0.
+// toolVersion is 0.3.0 for the v0.3.0 tag, bumped from the tagged v0.2.0
+// per PLAN.md#versioning's MINOR definition: fleet --use-target-config
+// (docs/adr/0031) is a new opt-in flag with a safe (off) default and a new
+// optional report field (targetConfig) — it doesn't change classification
+// results for anyone not passing it, so classifierRulesetVersion stays at
+// 0.1.0. (v0.2.0 itself covered fleet's `--out` default (docs/adr/0028),
+// the fleet.html evidence dashboard and its auth-config/enumeration-
+// coverage visibility (docs/adr/0029, docs/adr/0030), and the `--out .`
+// sibling-directory fix (docs/adr/0027) — also all additive.)
 const (
-	toolVersion              = "0.2.0"
+	toolVersion              = "0.3.0"
 	classifierRulesetVersion = "0.1.0"
 )
 
