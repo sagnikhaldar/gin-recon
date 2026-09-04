@@ -201,6 +201,23 @@ func TestValidateFleetAcceptsUseTargetConfig(t *testing.T) {
 	}
 }
 
+// TestValidateFleetAcceptsTargetConfigDir covers
+// docs/adr/0033-fleet-target-config-dir.md: --target-config-dir must name
+// an existing directory.
+func TestValidateFleetAcceptsTargetConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	configDir := t.TempDir()
+	opts := mustParseAndValidate(t, "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--target-config-dir="+configDir)
+	if opts.TargetConfigDir != configDir {
+		t.Errorf("TargetConfigDir = %q, want %q", opts.TargetConfigDir, configDir)
+	}
+}
+
+func TestValidateFleetRejectsNonexistentTargetConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--target-config-dir", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--target-config-dir=/definitely/does/not/exist")
+}
+
 func TestValidateFleetRejectsMaxReposWithoutOrg(t *testing.T) {
 	dir := t.TempDir()
 	expectValidateError(t, "--max-repos is --org only", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--max-repos=50")

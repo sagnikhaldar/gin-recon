@@ -123,17 +123,39 @@ func TestFleetHTMLRendersOwnConfigBadge(t *testing.T) {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
 	html := string(out)
-	if !strings.Contains(html, `own config</span>`) {
+	if !strings.Contains(html, `own config (repo)</span>`) {
 		t.Errorf("expected an own-config badge for svc-a\n%s", html)
 	}
-	if !strings.Contains(html, "Targets using their own config</dt><dd>1 of 2") {
-		t.Errorf("expected the Configuration panel to report 1 of 2 targets using their own config\n%s", html)
+	if !strings.Contains(html, "Targets using their own repo-committed config</dt><dd>1 of 2") {
+		t.Errorf("expected the Configuration panel to report 1 of 2 targets using their own repo-committed config\n%s", html)
 	}
 }
 
-// TestFleetHTMLOmitsOwnConfigRollupWhenUnused confirms the rollup line
-// itself doesn't show up as a confusing "0 of N" when --use-target-config
-// was never in play at all.
+// TestFleetHTMLRendersOwnConfigDirBadge covers --target-config-dir
+// (docs/adr/0033-fleet-target-config-dir.md): visibly distinct from the
+// repo-committed variant, and takes precedence when both would apply.
+func TestFleetHTMLRendersOwnConfigDirBadge(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", Status: fleet.StatusOK, TargetConfigDir: true},
+		{Name: "svc-b", Status: fleet.StatusOK, TargetConfig: true},
+	}}
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	if !strings.Contains(html, `own config (dir)</span>`) {
+		t.Errorf("expected an own-config-dir badge for svc-a\n%s", html)
+	}
+	if !strings.Contains(html, "Targets using an operator-owned config</dt><dd>1 of 2") {
+		t.Errorf("expected the Configuration panel to report 1 of 2 targets using an operator-owned config\n%s", html)
+	}
+}
+
+// TestFleetHTMLOmitsOwnConfigRollupWhenUnused confirms the rollup lines
+// themselves don't show up as a confusing "0 of N" when neither
+// --use-target-config nor --target-config-dir was ever in play.
 func TestFleetHTMLOmitsOwnConfigRollupWhenUnused(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
 
@@ -141,7 +163,7 @@ func TestFleetHTMLOmitsOwnConfigRollupWhenUnused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
-	if strings.Contains(string(out), "Targets using their own config") {
+	if strings.Contains(string(out), "own repo-committed config") || strings.Contains(string(out), "operator-owned config") {
 		t.Errorf("should not mention own-config usage when no target used one\n%s", out)
 	}
 }

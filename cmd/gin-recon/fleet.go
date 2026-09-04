@@ -201,6 +201,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		AllowedHosts:    allowedHosts,
 		AllowDownloads:  opts.AllowDownloads,
 		UseTargetConfig: opts.UseTargetConfig,
+		TargetConfigDir: opts.TargetConfigDir,
 	})
 	if stderrBuf.Len() > 0 {
 		stderr.Write(stderrBuf.Bytes())

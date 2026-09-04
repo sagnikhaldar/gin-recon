@@ -1376,6 +1376,72 @@ func TestRunFleetPopulatesAuthConfigAndProvenFromRealConfig(t *testing.T) {
 // fleet scan pick up a target's own committed config
 // (.gin-recon-reconcile-config.json, the real filename already used by
 // several repositories in the org this was built for) with no shared
+// TestRunFleetUsesTargetConfigDirEndToEnd is the CLI-level integration test
+// for docs/adr/0033-fleet-target-config-dir.md: --target-config-dir gets a
+// target real proven classification via a config file that lives entirely
+// outside the scanned repository — no commit, no push, no PR into the
+// target's own repo required, unlike --use-target-config.
+func TestRunFleetUsesTargetConfigDirEndToEnd(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targetConfigDir := filepath.Join(root, "operator-configs")
+	if err := os.MkdirAll(targetConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ownConfig := `{
+		"version": 1,
+		"authMiddleware": {
+			"gin-recon-fixtures/auth-wrappers.RequireAuth": {"assurance": "analyze"},
+			"gin-recon-fixtures/auth-wrappers.RequireAuthContradicted": {"assurance": "analyze"},
+			"gin-recon-fixtures/auth-wrappers.RequireRoleFactory": {"assurance": "analyze"}
+		},
+		"authWrappers": ["gin-recon-fixtures/auth-wrappers.LoggedAuth"]
+	}`
+	if err := os.WriteFile(filepath.Join(targetConfigDir, "repo-a.json"), []byte(ownConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads", "--target-config-dir", targetConfigDir}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	var agg fleet.Aggregate
+	aggData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(aggData, &agg); err != nil {
+		t.Fatal(err)
+	}
+	if !agg.Targets[0].TargetConfigDir {
+		t.Error("Targets[0].TargetConfigDir = false, want true")
+	}
+	if agg.Targets[0].Proven == 0 {
+		t.Error("Targets[0].Proven = 0, want non-zero: classified via --target-config-dir with no --config at all")
+	}
+
+	// The whole point: nothing under src (the scanned repository) was ever
+	// touched or read for config purposes.
+	if _, err := os.Stat(filepath.Join(src, ".gin-recon-reconcile-config.json")); !os.IsNotExist(err) {
+		t.Error("no config file should exist inside the scanned repository itself")
+	}
+}
+
 // --config at all, and get the same real proven classification a direct
 // `audit --config <that file>` invocation of that one repository would.
 func TestRunFleetUsesTargetOwnConfigEndToEnd(t *testing.T) {
@@ -1431,7 +1497,7 @@ func TestRunFleetUsesTargetOwnConfigEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(htmlData), "own config</span>") {
+	if !strings.Contains(string(htmlData), "own config (repo)</span>") {
 		t.Errorf("fleet.html should show the own-config badge for repo-a:\n%s", htmlData)
 	}
 }

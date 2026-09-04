@@ -113,6 +113,18 @@ type Options struct {
 	// invents. Without it, fleet behaves exactly as before: ConfigPath only.
 	UseTargetConfig bool
 
+	// TargetConfigDir is fleet-only (docs/adr/0033-fleet-target-config-dir.md):
+	// a local, operator-owned directory holding one config file per target
+	// (<dir>/<target-name>.json), entirely outside every scanned
+	// repository. Takes precedence over both UseTargetConfig's
+	// repository-embedded file and ConfigPath for a target it has an entry
+	// for. Solves the same "give this one target its own real auth
+	// evidence" need UseTargetConfig does, without requiring that evidence
+	// ever be committed into the target's own repository — no PR, no
+	// merge, no risk to a production branch, and a strictly stronger trust
+	// story (the scanned repository can never supply its own "proof").
+	TargetConfigDir string
+
 	// fleet --org only (docs/adr/0021-fleet-org-enumeration.md): an
 	// alternative to TargetsPath that populates the same manifest shape by
 	// enumerating a GitHub organization instead of reading a hand-written

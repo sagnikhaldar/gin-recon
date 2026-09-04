@@ -63,6 +63,13 @@ type TargetResult struct {
 	// reviewed independently of it — a real, different trust provenance
 	// worth being able to see, not just infer.
 	TargetConfig bool `json:"targetConfig,omitempty"`
+
+	// TargetConfigDir is true when --target-config-dir found and used an
+	// entry for this target — outranks TargetConfig above when both would
+	// otherwise apply (docs/adr/0033-fleet-target-config-dir.md), since an
+	// operator-owned directory outside every scanned repository is
+	// stronger evidence than a file the repository itself supplied.
+	TargetConfigDir bool `json:"targetConfigDir,omitempty"`
 }
 
 // Scope is the --org configuration a fleet run used, recorded on the
@@ -194,6 +201,17 @@ type RunOptions struct {
 	// repository-embedded config at all is its own capability switch, not
 	// automatic just because ConfigPath happens to be set.
 	UseTargetConfig bool
+
+	// TargetConfigDir mirrors --target-config-dir
+	// (docs/adr/0033-fleet-target-config-dir.md): a local, operator-owned
+	// directory holding one config file per target
+	// (<dir>/<target-name>.json), outside every scanned repository. Wins
+	// over both UseTargetConfig's repository-embedded file and ConfigPath
+	// for a target it has an entry for — a target's own committed file is
+	// still real reviewed evidence, but this directory is evidence the
+	// operator running fleet controls directly, a strictly stronger trust
+	// position, and needs no commit/PR/merge into the target's own repo.
+	TargetConfigDir string
 
 	// Remote targets (docs/adr/0019-fleet-remote-targets.md). AllowRemote
 	// mirrors --allow-remote-targets: the capability switch. AllowedHosts
@@ -410,6 +428,17 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 		if candidate := filepath.Join(src, targetConfigFilename); fileExists(candidate) {
 			targetConfigPath = candidate
 			res.TargetConfig = true
+		}
+	}
+	if opts.TargetConfigDir != "" {
+		for _, ext := range []string{".json", ".yaml", ".yml"} {
+			candidate := filepath.Join(opts.TargetConfigDir, t.Name+ext)
+			if fileExists(candidate) {
+				targetConfigPath = candidate
+				res.TargetConfigDir = true
+				res.TargetConfig = false // this target's own repo file, if any, was outranked
+				break
+			}
 		}
 	}
 

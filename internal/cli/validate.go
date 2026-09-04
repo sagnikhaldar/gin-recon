@@ -87,6 +87,12 @@ func Validate(opts *Options) error {
 		if opts.Concurrency < 1 || opts.Concurrency > 8 {
 			return fmt.Errorf("--concurrency: must be between 1 and 8, got %d", opts.Concurrency)
 		}
+		if opts.TargetConfigDir != "" {
+			fi, err := os.Stat(opts.TargetConfigDir)
+			if err != nil || !fi.IsDir() {
+				return fmt.Errorf("--target-config-dir: %q must be an existing directory", opts.TargetConfigDir)
+			}
+		}
 		// --format means for fleet what it already means for audit: which
 		// formats each target's own audit subprocess produces
 		// (docs/adr/0023-fleet-raw-rendered-split.md). fleet.json itself is

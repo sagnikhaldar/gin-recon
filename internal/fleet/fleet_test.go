@@ -397,6 +397,105 @@ func TestRunIgnoresTargetOwnConfigWithoutFlag(t *testing.T) {
 	}
 }
 
+// TestRunTargetConfigDirOutranksRepoOwnConfig is the core regression test
+// for docs/adr/0033-fleet-target-config-dir.md: an operator-owned
+// --target-config-dir entry must win over a target's own repo-committed
+// config when both exist for the same target — stronger, independently
+// controlled evidence takes precedence over evidence the scanned
+// repository itself supplied.
+func TestRunTargetConfigDirOutranksRepoOwnConfig(t *testing.T) {
+	bin := buildFakeAudit(t)
+
+	src := targetDir(t, "complete")
+	repoConfig := filepath.Join(src, targetConfigFilename)
+	if err := os.WriteFile(repoConfig, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targetConfigDir := t.TempDir()
+	dirConfig := filepath.Join(targetConfigDir, "has-both.json")
+	if err := os.WriteFile(dirConfig, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := &Manifest{Version: 1, Targets: []Target{{Name: "has-both", Src: src}}}
+	outDir := t.TempDir()
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath:    filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:        manifest,
+		ManifestData:    []byte("fixture"),
+		Formats:         []string{"json"},
+		OutDir:          outDir,
+		Concurrency:     1,
+		BinaryPath:      bin,
+		ToolVersion:     "test",
+		UseTargetConfig: true,
+		TargetConfigDir: targetConfigDir,
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+
+	used, err := os.ReadFile(filepath.Join(outDir, "targets", "has-both", "config-used.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(used) != dirConfig {
+		t.Errorf("used --config %q, want the target-config-dir file %q to win", used, dirConfig)
+	}
+	if !agg.Targets[0].TargetConfigDir {
+		t.Error("TargetConfigDir = false, want true")
+	}
+	if agg.Targets[0].TargetConfig {
+		t.Error("TargetConfig = true, want false: outranked by TargetConfigDir")
+	}
+}
+
+// TestRunTargetConfigDirFallsBackWithoutEntry confirms a target with no
+// matching file in --target-config-dir still falls back correctly (to its
+// own repo config if --use-target-config found one, else the shared
+// --config) rather than silently using nothing.
+func TestRunTargetConfigDirFallsBackWithoutEntry(t *testing.T) {
+	bin := buildFakeAudit(t)
+
+	sharedConfig := filepath.Join(t.TempDir(), "shared-config.json")
+	if err := os.WriteFile(sharedConfig, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetConfigDir := t.TempDir() // empty — no entry for "no-entry"
+
+	manifest := &Manifest{Version: 1, Targets: []Target{{Name: "no-entry", Src: targetDir(t, "complete")}}}
+	outDir := t.TempDir()
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath:    filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:        manifest,
+		ManifestData:    []byte("fixture"),
+		ConfigPath:      sharedConfig,
+		Formats:         []string{"json"},
+		OutDir:          outDir,
+		Concurrency:     1,
+		BinaryPath:      bin,
+		ToolVersion:     "test",
+		TargetConfigDir: targetConfigDir,
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+
+	used, err := os.ReadFile(filepath.Join(outDir, "targets", "no-entry", "config-used.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(used) != sharedConfig {
+		t.Errorf("used --config %q, want fallback to the shared config %q", used, sharedConfig)
+	}
+	if agg.Targets[0].TargetConfigDir {
+		t.Error("TargetConfigDir = true, want false: no matching file in the directory")
+	}
+}
+
 func TestRunResumeSkipsCompletedTargets(t *testing.T) {
 	bin := buildFakeAudit(t)
 	manifestPath := filepath.Join(t.TempDir(), "targets.json")
