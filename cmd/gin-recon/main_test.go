@@ -1121,6 +1121,35 @@ func TestRunFleetOrgWritesConfigSnapshot(t *testing.T) {
 
 // TestRunFleetTargetsDoesNotWriteConfigSnapshot confirms the snapshot is
 // --org-only (docs/adr/0025-fleet-org-config-snapshot.md): a plain
+// TestRunFleetPrintsProgress is the CLI-level check that fleet's stderr
+// actually carries live per-target progress lines, not just the
+// end-of-run error summary — a real complaint: a long fleet run produced
+// no visible output at all until it finished.
+func TestRunFleetPrintsProgress(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--out", filepath.Join(root, "out"), "--allow-downloads"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "[1/1] repo-a: ok") {
+		t.Errorf("stderr should carry a progress line for repo-a, got: %q", stderr.String())
+	}
+}
+
 // --targets run's own manifest and config are expected to already be
 // version-controlled together, so nothing new needs to be written.
 func TestRunFleetTargetsDoesNotWriteConfigSnapshot(t *testing.T) {

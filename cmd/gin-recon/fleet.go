@@ -196,6 +196,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		BinaryPath:      binaryPath,
 		ToolVersion:     report.ToolVersion,
 		Stderr:          &stderrBuf,
+		Progress:        stderr,
 		AllowRemote:     opts.AllowRemoteTargets,
 		AllowedHosts:    allowedHosts,
 		AllowDownloads:  opts.AllowDownloads,

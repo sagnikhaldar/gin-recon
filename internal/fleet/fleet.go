@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -172,6 +173,18 @@ type RunOptions struct {
 	AllowDownloads bool
 	Stderr         *bytes.Buffer // per-target stderr tails are captured here for the caller to surface; may be nil
 
+	// Progress, when non-nil, gets one line per target the moment that
+	// target finishes (or is reused from a --resume checkpoint) — a fleet
+	// run against a real organization can take minutes with zero other
+	// output otherwise. Deliberately a separate writer from Stderr above,
+	// written to directly and live rather than buffered: Stderr's whole
+	// point is to collect per-target error tails so the caller can dump
+	// them together in one predictable block after Run returns, which a
+	// live-interleaved progress line would defeat. Safe for concurrent
+	// writes from every target's own goroutine — guarded by the same mu
+	// that already serializes checkpoint saves below.
+	Progress io.Writer
+
 	// UseTargetConfig mirrors --use-target-config
 	// (docs/adr/0031-fleet-per-target-config.md): when true, a target whose
 	// own source tree contains targetConfigFilename uses it instead of
@@ -262,11 +275,34 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 
 	sem := make(chan struct{}, opts.Concurrency)
 	var wg sync.WaitGroup
-	var mu sync.Mutex // guards cp and saveCheckpoint below
+	var mu sync.Mutex // guards cp, saveCheckpoint, and completed/opts.Progress below
+	completed := 0
+
+	// reportProgress prints one line for a target the moment it's known —
+	// reused from a checkpoint or just finished — so a long fleet run isn't
+	// silent until it exits. Must be called with mu held (it reads/updates
+	// completed itself, so callers pass a pre-locked closure instead of
+	// locking around it, keeping every call site symmetric).
+	reportProgress := func(t Target, res TargetResult, resumed bool) {
+		completed++
+		if opts.Progress == nil {
+			return
+		}
+		suffix := ""
+		if resumed {
+			suffix = " (resumed)"
+		} else if res.Status == StatusOK {
+			suffix = fmt.Sprintf(" (%d routes)", res.Routes)
+		}
+		fmt.Fprintf(opts.Progress, "[%d/%d] %s: %s%s\n", completed, len(targets), t.Name, res.Status, suffix)
+	}
 
 	for i, t := range targets {
 		mu.Lock()
 		done, ok := cp.Complete[t.Name]
+		if ok {
+			reportProgress(t, done, true)
+		}
 		mu.Unlock()
 		if ok {
 			results[i] = done
@@ -282,6 +318,10 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 
 			res := runOneTarget(ctx, opts, manifestDir, t)
 			results[i] = res
+
+			mu.Lock()
+			reportProgress(t, res, false)
+			mu.Unlock()
 
 			if res.Status == StatusOK || res.Status == StatusNotGoModule {
 				mu.Lock()

@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -450,6 +451,88 @@ func TestRunResumeSkipsCompletedTargets(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outDir, CheckpointFilename)); !os.IsNotExist(err) {
 		t.Error("checkpoint should be removed once the fleet is complete")
+	}
+}
+
+// TestRunReportsProgress is a regression test for a real complaint: a fleet
+// run produced no output at all until it finished, which for a long,
+// many-target run reads as a hang. Progress must print one line per target
+// live as each one finishes (or is reused from a --resume checkpoint), not
+// batched up for the end — checked here with Concurrency: 1 so completion
+// order is deterministic.
+func TestRunReportsProgress(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifestPath := filepath.Join(t.TempDir(), "targets.json")
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "a", Src: targetDir(t, "with-routes")},
+		{Name: "b", Src: targetDir(t, "fail")},
+	}}
+	outDir := t.TempDir()
+	var progress bytes.Buffer
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: manifestPath,
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       outDir,
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		Progress:     &progress,
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+	if agg.Targets[0].Status != StatusOK || agg.Targets[1].Status != StatusFailed {
+		t.Fatalf("unexpected statuses: %+v", agg.Targets)
+	}
+
+	want := "[1/2] a: ok (5 routes)\n[2/2] b: failed\n"
+	if progress.String() != want {
+		t.Errorf("progress output = %q, want %q", progress.String(), want)
+	}
+}
+
+// TestRunReportsProgressForResumedTargets confirms a target reused from a
+// --resume checkpoint still gets its own progress line, marked distinctly,
+// rather than silently vanishing from the count.
+func TestRunReportsProgressForResumedTargets(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifestPath := filepath.Join(t.TempDir(), "targets.json")
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "a", Src: targetDir(t, "complete")},
+		{Name: "b", Src: targetDir(t, "fail")},
+	}}
+	outDir := t.TempDir()
+	base := RunOptions{
+		ManifestPath: manifestPath,
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       outDir,
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+	}
+	if _, err := Run(context.Background(), base); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(manifest.Targets[1].Src, "behavior"), []byte("complete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var progress bytes.Buffer
+	resumeOpts := base
+	resumeOpts.Resume = true
+	resumeOpts.Progress = &progress
+	if _, err := Run(context.Background(), resumeOpts); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+
+	want := "[1/2] a: ok (resumed)\n[2/2] b: ok (0 routes)\n"
+	if progress.String() != want {
+		t.Errorf("progress output = %q, want %q", progress.String(), want)
 	}
 }
 
