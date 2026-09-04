@@ -103,6 +103,16 @@ type Options struct {
 	Resume             bool
 	AllowRemoteTargets bool
 
+	// UseTargetConfig is fleet-only (docs/adr/0031-fleet-per-target-config.md):
+	// off by default, the same "capability switch, off unless asked"
+	// posture AllowRemoteTargets/AllowDownloads already use for a trust
+	// boundary this wide. When set, a target whose own source tree commits
+	// a conventional per-target config file uses it instead of ConfigPath
+	// for that target only — real evidence a human already reviewed and
+	// committed for that one repository specifically, not something gin-recon
+	// invents. Without it, fleet behaves exactly as before: ConfigPath only.
+	UseTargetConfig bool
+
 	// fleet --org only (docs/adr/0021-fleet-org-enumeration.md): an
 	// alternative to TargetsPath that populates the same manifest shape by
 	// enumerating a GitHub organization instead of reading a hand-written

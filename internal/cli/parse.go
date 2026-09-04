@@ -195,6 +195,7 @@ func parseFleet(args []string) (*Options, error) {
 	registerOnceString(fs, "targets", &opts.TargetsPath)
 	registerOnceString(fs, "org", &opts.Org)
 	registerOnceString(fs, "config", &opts.ConfigPath)
+	registerOnceBool(fs, "use-target-config", &opts.UseTargetConfig)
 	registerOnceString(fs, "out", &opts.OutDir)
 	registerOnceBool(fs, "force", &opts.Force)
 	registerOnceBool(fs, "resume", &opts.Resume)

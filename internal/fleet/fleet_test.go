@@ -39,7 +39,7 @@ func main() {
 	out := fs.String("out", "", "")
 	format := fs.String("format", "", "")
 	fs.Bool("force", false, "")
-	fs.String("config", "", "")
+	config := fs.String("config", "", "")
 	fs.Parse(os.Args[2:])
 
 	behavior, err := os.ReadFile(filepath.Join(*src, "behavior"))
@@ -66,6 +66,7 @@ func main() {
 	}
 	os.MkdirAll(*out, 0o755)
 	os.WriteFile(filepath.Join(*out, "routes.json"), []byte(` + "`" + `{"scanCoverage":{"complete":` + "`" + `+complete+` + "`" + `}` + "`" + `+summary+` + "`" + `}` + "`" + `), 0o644)
+	os.WriteFile(filepath.Join(*out, "config-used.txt"), []byte(*config), 0o644)
 	if strings.Contains(*format, "openapi") {
 		os.WriteFile(filepath.Join(*out, "openapi.json"), []byte("{}"), 0o644)
 		os.WriteFile(filepath.Join(*out, "api.html"), []byte("<html></html>"), 0o644)
@@ -280,6 +281,118 @@ func TestRunPopulatesRouteEvidenceCounts(t *testing.T) {
 
 	if agg.Totals.Routes != 5 || agg.Totals.Proven != 3 || agg.Totals.Public != 1 || agg.Totals.Unknown != 1 {
 		t.Errorf("Totals = %+v, want Routes=5 Proven=3 Public=1 Unknown=1", agg.Totals)
+	}
+}
+
+// TestRunUsesTargetOwnConfigWhenPresent is a regression test for
+// docs/adr/0031-fleet-per-target-config.md: with --use-target-config, a
+// target whose own source tree commits targetConfigFilename must use it
+// instead of the fleet-wide --config — real per-repository evidence a
+// human already reviewed, the same thing a direct `audit --config
+// <that repo's own file>` invocation would use for that one repository.
+func TestRunUsesTargetOwnConfigWhenPresent(t *testing.T) {
+	bin := buildFakeAudit(t)
+
+	withOwn := targetDir(t, "complete")
+	ownConfig := filepath.Join(withOwn, targetConfigFilename)
+	if err := os.WriteFile(ownConfig, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	withoutOwn := targetDir(t, "complete")
+
+	sharedConfig := filepath.Join(t.TempDir(), "shared-config.json")
+	if err := os.WriteFile(sharedConfig, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "has-own-config", Src: withOwn},
+		{Name: "no-own-config", Src: withoutOwn},
+	}}
+	outDir := t.TempDir()
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath:    filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:        manifest,
+		ManifestData:    []byte("fixture"),
+		ConfigPath:      sharedConfig,
+		Formats:         []string{"json"},
+		OutDir:          outDir,
+		Concurrency:     2,
+		BinaryPath:      bin,
+		ToolVersion:     "test",
+		UseTargetConfig: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+
+	usedByHasOwn, err := os.ReadFile(filepath.Join(outDir, "targets", "has-own-config", "config-used.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(usedByHasOwn) != ownConfig {
+		t.Errorf("has-own-config target's audit subprocess used --config %q, want its own file %q", usedByHasOwn, ownConfig)
+	}
+	if !agg.Targets[0].TargetConfig {
+		t.Error("agg.Targets[0].TargetConfig = false, want true")
+	}
+
+	usedByNoOwn, err := os.ReadFile(filepath.Join(outDir, "targets", "no-own-config", "config-used.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(usedByNoOwn) != sharedConfig {
+		t.Errorf("no-own-config target's audit subprocess used --config %q, want the shared config %q", usedByNoOwn, sharedConfig)
+	}
+	if agg.Targets[1].TargetConfig {
+		t.Error("agg.Targets[1].TargetConfig = true, want false: this target has no own-config file")
+	}
+}
+
+// TestRunIgnoresTargetOwnConfigWithoutFlag confirms --use-target-config
+// actually gates the behavior: without it, a target's own committed
+// targetConfigFilename must be ignored entirely, same as before this ADR.
+func TestRunIgnoresTargetOwnConfigWithoutFlag(t *testing.T) {
+	bin := buildFakeAudit(t)
+
+	withOwn := targetDir(t, "complete")
+	if err := os.WriteFile(filepath.Join(withOwn, targetConfigFilename), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sharedConfig := filepath.Join(t.TempDir(), "shared-config.json")
+	if err := os.WriteFile(sharedConfig, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := &Manifest{Version: 1, Targets: []Target{{Name: "has-own-config", Src: withOwn}}}
+	outDir := t.TempDir()
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		ConfigPath:   sharedConfig,
+		Formats:      []string{"json"},
+		OutDir:       outDir,
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		// UseTargetConfig deliberately left false.
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+
+	used, err := os.ReadFile(filepath.Join(outDir, "targets", "has-own-config", "config-used.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(used) != sharedConfig {
+		t.Errorf("used --config %q, want the shared config %q: --use-target-config was not set", used, sharedConfig)
+	}
+	if agg.Targets[0].TargetConfig {
+		t.Error("TargetConfig = true, want false: --use-target-config was not set")
 	}
 }
 

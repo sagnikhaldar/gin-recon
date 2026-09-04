@@ -184,21 +184,22 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 
 	var stderrBuf bytes.Buffer
 	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
-		ManifestPath:   manifestPath,
-		Manifest:       manifest,
-		ManifestData:   manifestData,
-		ConfigPath:     opts.ConfigPath,
-		Formats:        targetFormats,
-		OutDir:         opts.OutDir,
-		HTMLOutDir:     htmlOutDir,
-		Concurrency:    opts.Concurrency,
-		Resume:         opts.Resume,
-		BinaryPath:     binaryPath,
-		ToolVersion:    report.ToolVersion,
-		Stderr:         &stderrBuf,
-		AllowRemote:    opts.AllowRemoteTargets,
-		AllowedHosts:   allowedHosts,
-		AllowDownloads: opts.AllowDownloads,
+		ManifestPath:    manifestPath,
+		Manifest:        manifest,
+		ManifestData:    manifestData,
+		ConfigPath:      opts.ConfigPath,
+		Formats:         targetFormats,
+		OutDir:          opts.OutDir,
+		HTMLOutDir:      htmlOutDir,
+		Concurrency:     opts.Concurrency,
+		Resume:          opts.Resume,
+		BinaryPath:      binaryPath,
+		ToolVersion:     report.ToolVersion,
+		Stderr:          &stderrBuf,
+		AllowRemote:     opts.AllowRemoteTargets,
+		AllowedHosts:    allowedHosts,
+		AllowDownloads:  opts.AllowDownloads,
+		UseTargetConfig: opts.UseTargetConfig,
 	})
 	if stderrBuf.Len() > 0 {
 		stderr.Write(stderrBuf.Bytes())

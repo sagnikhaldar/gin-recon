@@ -182,6 +182,25 @@ func TestValidateFleetOrgAcceptsAllowRemoteTargets(t *testing.T) {
 	mustParseAndValidate(t, "fleet", "--out="+dir, "--org=myorg", "--allow-remote-targets")
 }
 
+// TestValidateFleetUseTargetConfigDefaultsFalse covers
+// docs/adr/0031-fleet-per-target-config.md: --use-target-config is a plain
+// opt-in bool, off unless explicitly passed.
+func TestValidateFleetUseTargetConfigDefaultsFalse(t *testing.T) {
+	dir := t.TempDir()
+	opts := mustParseAndValidate(t, "fleet", "--out="+dir, "--targets=/tmp/targets.json")
+	if opts.UseTargetConfig {
+		t.Error("UseTargetConfig = true, want false by default")
+	}
+}
+
+func TestValidateFleetAcceptsUseTargetConfig(t *testing.T) {
+	dir := t.TempDir()
+	opts := mustParseAndValidate(t, "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--use-target-config")
+	if !opts.UseTargetConfig {
+		t.Error("UseTargetConfig = false, want true")
+	}
+}
+
 func TestValidateFleetRejectsMaxReposWithoutOrg(t *testing.T) {
 	dir := t.TempDir()
 	expectValidateError(t, "--max-repos is --org only", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--max-repos=50")

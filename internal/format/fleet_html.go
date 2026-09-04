@@ -88,6 +88,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <dl class="gr-key-values">
 <dt>authMiddleware configured</dt><dd>{{.Agg.AuthConfig.MiddlewareCount}}</dd>
 <dt>authWrappers configured</dt><dd>{{.Agg.AuthConfig.WrappersCount}}</dd>
+{{if .TargetConfigCount}}<dt>Targets using their own config</dt><dd>{{.TargetConfigCount}} of {{len .Agg.Targets}} — reviewed by whoever committed it to that repository, not necessarily independently of it</dd>{{end}}
 </dl>
 </div>
 <div class="gr-panel">
@@ -102,7 +103,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <thead><tr><th>Target</th><th>Status</th><th>Coverage</th><th>Routes</th><th>Proven</th><th>Public</th><th>Unknown</th><th>Report</th><th>Error</th></tr></thead>
 <tbody>
 {{range .Agg.Targets}}<tr data-gr-search="{{.Name}} {{.Status}} {{.Error}}" data-gr-status="{{.Status}}">
-<td><code>{{.Name}}</code><br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}</td>
+<td><code>{{.Name}}</code>{{if .TargetConfig}} <span class="gr-badge gr-badge--neutral" title="Used this target's own committed config instead of the fleet-wide --config">own config</span>{{end}}<br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}</td>
 <td>{{if eq .Status "ok"}}<span class="gr-badge gr-badge--good">{{.Status}}</span>{{else if eq .Status "failed"}}<span class="gr-badge gr-badge--bad">{{.Status}}</span>{{else}}<span class="gr-badge gr-badge--neutral">{{.Status}}</span>{{end}}</td>
 <td>{{if eq .Status "ok"}}{{if .Complete}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}{{else}}<span class="gr-count">&mdash;</span>{{end}}</td>
 <td class="gr-num">{{if .Routes}}{{.Routes}}{{else}}<span class="gr-count">0</span>{{end}}</td>
@@ -199,17 +200,18 @@ const fleetFilterJS = `
 // pre-computed status counts for the metrics row (html/template has no
 // convenient count-by-predicate of its own).
 type fleetHTMLData struct {
-	Agg              *fleet.Aggregate
-	Delta            *fleet.FleetDelta
-	Scope            *fleet.Scope
-	RawDirLink       string // relative path from this page back to --out (docs/adr/0023-fleet-raw-rendered-split.md); plain string, auto-escaped like any other URL-context value
-	ThemeCSS         template.CSS
-	BrandMark        template.HTML
-	GitMark          template.HTML
-	FilterJS         template.JS
-	OKCount          int
-	FailedCount      int
-	NotGoModuleCount int
+	Agg               *fleet.Aggregate
+	Delta             *fleet.FleetDelta
+	Scope             *fleet.Scope
+	RawDirLink        string // relative path from this page back to --out (docs/adr/0023-fleet-raw-rendered-split.md); plain string, auto-escaped like any other URL-context value
+	ThemeCSS          template.CSS
+	BrandMark         template.HTML
+	GitMark           template.HTML
+	FilterJS          template.JS
+	OKCount           int
+	FailedCount       int
+	NotGoModuleCount  int
+	TargetConfigCount int
 }
 
 // FleetHTML renders agg (and, when given, delta/scope) as the browsable
@@ -240,6 +242,9 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 			data.FailedCount++
 		case fleet.StatusNotGoModule:
 			data.NotGoModuleCount++
+		}
+		if t.TargetConfig {
+			data.TargetConfigCount++
 		}
 	}
 

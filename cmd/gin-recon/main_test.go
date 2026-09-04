@@ -1342,6 +1342,71 @@ func TestRunFleetPopulatesAuthConfigAndProvenFromRealConfig(t *testing.T) {
 	}
 }
 
+// TestRunFleetUsesTargetOwnConfigEndToEnd is the CLI-level integration test
+// for docs/adr/0031-fleet-per-target-config.md: --use-target-config lets a
+// fleet scan pick up a target's own committed config
+// (.gin-recon-reconcile-config.json, the real filename already used by
+// several repositories in the org this was built for) with no shared
+// --config at all, and get the same real proven classification a direct
+// `audit --config <that file>` invocation of that one repository would.
+func TestRunFleetUsesTargetOwnConfigEndToEnd(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	ownConfig := `{
+		"version": 1,
+		"authMiddleware": {
+			"gin-recon-fixtures/auth-wrappers.RequireAuth": {"assurance": "analyze"},
+			"gin-recon-fixtures/auth-wrappers.RequireAuthContradicted": {"assurance": "analyze"},
+			"gin-recon-fixtures/auth-wrappers.RequireRoleFactory": {"assurance": "analyze"}
+		},
+		"authWrappers": ["gin-recon-fixtures/auth-wrappers.LoggedAuth"]
+	}`
+	if err := os.WriteFile(filepath.Join(src, ".gin-recon-reconcile-config.json"), []byte(ownConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads", "--use-target-config"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	var agg fleet.Aggregate
+	aggData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(aggData, &agg); err != nil {
+		t.Fatal(err)
+	}
+	if !agg.Targets[0].TargetConfig {
+		t.Error("Targets[0].TargetConfig = false, want true: repo-a committed its own config")
+	}
+	if agg.Targets[0].Proven == 0 {
+		t.Error("Targets[0].Proven = 0, want non-zero: this fixture is proven under its own committed config, with no shared --config at all")
+	}
+
+	htmlData, err := os.ReadFile(filepath.Join(outDir+"-html", "fleet.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(htmlData), "own config</span>") {
+		t.Errorf("fleet.html should show the own-config badge for repo-a:\n%s", htmlData)
+	}
+}
+
 // TestRunFleetRenderRefreshesRouteEvidenceCounts is a regression test for
 // docs/adr/0028-gin-recon-default-output-directory.md's fleet.html
 // redesign: a fleet.json written before Routes/Proven/Public/Unknown

@@ -53,6 +53,15 @@ type TargetResult struct {
 	Proven  int `json:"proven,omitempty"`
 	Public  int `json:"public,omitempty"`
 	Unknown int `json:"unknown,omitempty"`
+
+	// TargetConfig is true when --use-target-config found and used this
+	// target's own targetConfigFilename instead of the fleet-wide --config
+	// (docs/adr/0031-fleet-per-target-config.md). Recorded so a reader of
+	// fleet.json/fleet.html can tell which targets' classification came
+	// from evidence the target's own repository supplied, not a config
+	// reviewed independently of it — a real, different trust provenance
+	// worth being able to see, not just infer.
+	TargetConfig bool `json:"targetConfig,omitempty"`
 }
 
 // Scope is the --org configuration a fleet run used, recorded on the
@@ -163,6 +172,16 @@ type RunOptions struct {
 	AllowDownloads bool
 	Stderr         *bytes.Buffer // per-target stderr tails are captured here for the caller to surface; may be nil
 
+	// UseTargetConfig mirrors --use-target-config
+	// (docs/adr/0031-fleet-per-target-config.md): when true, a target whose
+	// own source tree contains targetConfigFilename uses it instead of
+	// ConfigPath for that target only. Off by default — a target's own
+	// source is exactly the kind of untrusted input docs/threat-model.md
+	// already treats scanned repositories as, so honoring a
+	// repository-embedded config at all is its own capability switch, not
+	// automatic just because ConfigPath happens to be set.
+	UseTargetConfig bool
+
 	// Remote targets (docs/adr/0019-fleet-remote-targets.md). AllowRemote
 	// mirrors --allow-remote-targets: the capability switch. AllowedHosts
 	// is the actual scope, from fleet.allowedRemoteHosts in a reviewed
@@ -187,6 +206,23 @@ func (o RunOptions) allowedHost(host string) (AllowedHost, bool) {
 // aggregate — enough to be useful, small enough that one hostile or noisy
 // target can't bloat fleet.json.
 const stderrTailLimit = 4096
+
+// targetConfigFilename is the conventional per-target config file
+// UseTargetConfig looks for at the root of each target's own resolved
+// source (docs/adr/0031-fleet-per-target-config.md) — chosen to match a
+// real, already-existing convention across several targets in the org
+// this was built for, rather than invent a new name nothing on disk uses
+// yet.
+const targetConfigFilename = ".gin-recon-reconcile-config.json"
+
+// fileExists reports whether path names a regular, readable file — used
+// only to probe for targetConfigFilename, never to distinguish "doesn't
+// exist" from any other stat error (either way, that target simply falls
+// back to opts.ConfigPath).
+func fileExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
+}
 
 // Run orchestrates one audit invocation per target, bounded by
 // opts.Concurrency, and returns the aggregate. It creates opts.OutDir and a
@@ -326,10 +362,18 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 		return res
 	}
 
+	targetConfigPath := opts.ConfigPath
+	if opts.UseTargetConfig {
+		if candidate := filepath.Join(src, targetConfigFilename); fileExists(candidate) {
+			targetConfigPath = candidate
+			res.TargetConfig = true
+		}
+	}
+
 	formats := formatsWithJSON(opts.Formats)
 	args := []string{"audit", "--src", src, "--format", strings.Join(formats, ","), "--out", targetOut, "--force"}
-	if opts.ConfigPath != "" {
-		args = append(args, "--config", opts.ConfigPath)
+	if targetConfigPath != "" {
+		args = append(args, "--config", targetConfigPath)
 	}
 	if opts.AllowDownloads {
 		args = append(args, "--allow-downloads")
