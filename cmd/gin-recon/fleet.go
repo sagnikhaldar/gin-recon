@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
 	"github.com/sagnikhaldar/gin-recon/internal/config"
@@ -97,6 +99,73 @@ var fleetGitHubAPIBaseForTests string
 // doesn't understand "audit" as a subcommand.
 var fleetBinaryPathForTests string
 
+// isInteractiveTerminalForTests overrides isInteractiveTerminal's result —
+// nil in every real invocation, falling through to the real os.Stdin
+// check. main_test.go's TestMain sets this to a false-returning func by
+// default for the whole test binary, so no test can ever accidentally
+// inherit a real terminal's stdin (e.g. `go test` run directly in an
+// interactive shell) and hang waiting on a prompt that will never be
+// answered; a test that specifically wants the prompt path overrides it
+// back to true just for that test, alongside fleetStdinForTests.
+var isInteractiveTerminalForTests func() bool
+
+// isInteractiveTerminal reports whether fleet is connected to a real
+// terminal it can safely prompt on — never true for CI, a script, or
+// piped/redirected input, all of which have no one able to answer a
+// prompt (docs/adr/0034-fleet-interactive-conflict-prompt.md).
+func isInteractiveTerminal() bool {
+	if isInteractiveTerminalForTests != nil {
+		return isInteractiveTerminalForTests()
+	}
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// fleetStdinForTests overrides the reader resolveFleetConflictInteractively
+// reads from; nil in every real invocation (os.Stdin).
+var fleetStdinForTests io.Reader
+
+// fleetConflictChoice is the user's answer to resolveFleetConflictInteractively.
+type fleetConflictChoice int
+
+const (
+	fleetConflictCancel fleetConflictChoice = iota
+	fleetConflictResume
+	fleetConflictOverwrite
+)
+
+// resolveFleetConflictInteractively asks, on a real terminal only (the
+// caller has already checked isInteractiveTerminal), how to proceed when
+// fleet's own prior output already exists at conflictPath. Any
+// unrecognized answer, blank input, or a stdin read error/EOF resolves to
+// cancel — the same safe, non-destructive outcome a non-interactive run
+// already gets from the hard error this replaces; never resumes or
+// overwrites on an ambiguous answer.
+func resolveFleetConflictInteractively(conflictPath string, stdout io.Writer) fleetConflictChoice {
+	fmt.Fprintf(stdout, "gin-recon: %s already exists.\n", conflictPath)
+	fmt.Fprint(stdout, "[R]esume, [O]verwrite, or [C]ancel? ")
+	stdin := io.Reader(os.Stdin)
+	if fleetStdinForTests != nil {
+		stdin = fleetStdinForTests
+	}
+	scanner := bufio.NewScanner(stdin)
+	if !scanner.Scan() {
+		fmt.Fprintln(stdout)
+		return fleetConflictCancel
+	}
+	switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+	case "r", "resume":
+		return fleetConflictResume
+	case "o", "overwrite":
+		return fleetConflictOverwrite
+	default:
+		return fleetConflictCancel
+	}
+}
+
 // runFleet is the command's entry point: resolve the target manifest (a
 // hand-written file or a discovered --org), load any --baseline up front,
 // run the fleet, then write its aggregate/delta/HTML outputs and evaluate
@@ -160,9 +229,32 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		checkExists = append(checkExists, filepath.Join(opts.OutDir, fleetDeltaFilename))
 	}
 	if !opts.Force && !opts.Resume {
+		var conflict string
 		for _, p := range checkExists {
 			if _, err := os.Stat(p); err == nil {
-				fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite or --resume to continue\n", p)
+				conflict = p
+				break
+			}
+		}
+		if conflict != "" {
+			// A real interactive terminal gets a choice instead of a flat
+			// error — --force/--resume still work exactly as before, this
+			// only covers the case neither was passed. Never prompts
+			// outside a real TTY (CI, scripts, piped input): those keep
+			// today's exact hard-error behavior, so nothing that already
+			// depends on a deterministic non-zero exit here changes
+			// (docs/adr/0034-fleet-interactive-conflict-prompt.md).
+			if !isInteractiveTerminal() {
+				fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite or --resume to continue\n", conflict)
+				return cli.ExitOperationalError
+			}
+			switch resolveFleetConflictInteractively(conflict, stdout) {
+			case fleetConflictResume:
+				opts.Resume = true
+			case fleetConflictOverwrite:
+				opts.Force = true
+			default:
+				fmt.Fprintf(stderr, "gin-recon: cancelled — %s already exists\n", conflict)
 				return cli.ExitOperationalError
 			}
 		}

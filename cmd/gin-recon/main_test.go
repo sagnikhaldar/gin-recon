@@ -17,6 +17,21 @@ import (
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 )
 
+// TestMain forces isInteractiveTerminalForTests false for the entire test
+// binary, regardless of how `go test` was actually invoked — running it
+// directly in an interactive shell (not just CI) leaves the real os.Stdin
+// check genuinely true, and any fleet test hitting the already-exists
+// conflict path without --force/--resume would otherwise block forever on
+// a prompt nothing will ever answer
+// (docs/adr/0034-fleet-interactive-conflict-prompt.md). A test that
+// specifically wants the interactive path overrides this back to a
+// true-returning func, paired with fleetStdinForTests, only for its own
+// duration.
+func TestMain(m *testing.M) {
+	isInteractiveTerminalForTests = func() bool { return false }
+	os.Exit(m.Run())
+}
+
 func TestRunSchemaReportSucceeds(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"schema"}, &stdout, &stderr)
@@ -1147,6 +1162,121 @@ func TestRunFleetPrintsProgress(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "[1/1] repo-a: ok") {
 		t.Errorf("stderr should carry a progress line for repo-a, got: %q", stderr.String())
+	}
+}
+
+// fleetConflictFixture runs a fresh fleet scan to completion and returns
+// the args a second, conflicting invocation against the same --out would
+// use — shared setup for every interactive-conflict-prompt test below
+// (docs/adr/0034-fleet-interactive-conflict-prompt.md).
+func fleetConflictFixture(t *testing.T) (args []string, outDir string) {
+	t.Helper()
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	t.Cleanup(func() { fleetBinaryPathForTests = "" })
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir = filepath.Join(root, "out")
+	args = []string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads"}
+
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != cli.ExitSuccess {
+		t.Fatalf("initial fleet run exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	return args, outDir
+}
+
+// TestRunFleetConflictNonInteractiveStillHardErrors is a regression test
+// pinning down existing behavior: without a real terminal (the default for
+// every test, tests, CI, and scripts), fleet must keep failing with the
+// same clear, deterministic error it always has — no prompt, no change.
+func TestRunFleetConflictNonInteractiveStillHardErrors(t *testing.T) {
+	args, _ := fleetConflictFixture(t)
+
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitOperationalError)
+	}
+	if !strings.Contains(stderr.String(), "already exists; pass --force to overwrite or --resume to continue") {
+		t.Errorf("stderr = %q, want the original hard-error message", stderr.String())
+	}
+}
+
+// TestRunFleetConflictInteractivePromptResume covers the "r" answer: it
+// must behave exactly as if --resume had been passed.
+func TestRunFleetConflictInteractivePromptResume(t *testing.T) {
+	args, _ := fleetConflictFixture(t)
+	isInteractiveTerminalForTests = func() bool { return true }
+	fleetStdinForTests = strings.NewReader("r\n")
+	defer func() { isInteractiveTerminalForTests = func() bool { return false }; fleetStdinForTests = nil }()
+
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "already exists") || !strings.Contains(stdout.String(), "[R]esume") {
+		t.Errorf("stdout should show the conflict prompt, got: %q", stdout.String())
+	}
+}
+
+// TestRunFleetConflictInteractivePromptOverwrite covers the "o" answer: it
+// must behave exactly as if --force had been passed.
+func TestRunFleetConflictInteractivePromptOverwrite(t *testing.T) {
+	args, _ := fleetConflictFixture(t)
+	isInteractiveTerminalForTests = func() bool { return true }
+	fleetStdinForTests = strings.NewReader("overwrite\n")
+	defer func() { isInteractiveTerminalForTests = func() bool { return false }; fleetStdinForTests = nil }()
+
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+}
+
+// TestRunFleetConflictInteractivePromptCancel covers an unrecognized
+// answer (and, by the same code path, a blank one or a closed stdin):
+// cancel is the only safe default — never silently resuming or
+// overwriting real output on an ambiguous response.
+func TestRunFleetConflictInteractivePromptCancel(t *testing.T) {
+	args, _ := fleetConflictFixture(t)
+	isInteractiveTerminalForTests = func() bool { return true }
+	fleetStdinForTests = strings.NewReader("banana\n")
+	defer func() { isInteractiveTerminalForTests = func() bool { return false }; fleetStdinForTests = nil }()
+
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitOperationalError)
+	}
+	if !strings.Contains(stderr.String(), "cancelled") {
+		t.Errorf("stderr = %q, want a cancellation message", stderr.String())
+	}
+}
+
+// TestRunFleetConflictInteractivePromptEOFCancels confirms a closed/empty
+// stdin (e.g. redirected from /dev/null despite a TTY-like stdin.Stat)
+// cancels rather than blocking or defaulting to something destructive.
+func TestRunFleetConflictInteractivePromptEOFCancels(t *testing.T) {
+	args, _ := fleetConflictFixture(t)
+	isInteractiveTerminalForTests = func() bool { return true }
+	fleetStdinForTests = strings.NewReader("")
+	defer func() { isInteractiveTerminalForTests = func() bool { return false }; fleetStdinForTests = nil }()
+
+	var stdout, stderr bytes.Buffer
+	code := run(args, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d", code, cli.ExitOperationalError)
 	}
 }
 
