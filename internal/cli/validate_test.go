@@ -193,6 +193,25 @@ func TestValidateFleetUseTargetConfigDefaultsFalse(t *testing.T) {
 	}
 }
 
+// TestValidateFleetRenderHTMLDefaultsFalse covers
+// docs/adr/0037-fleet-html-opt-in.md: fleet.html is no longer an
+// unconditional companion to fleet.json — --render-html defaults off.
+func TestValidateFleetRenderHTMLDefaultsFalse(t *testing.T) {
+	dir := t.TempDir()
+	opts := mustParseAndValidate(t, "fleet", "--out="+dir, "--targets=/tmp/targets.json")
+	if opts.RenderHTML {
+		t.Error("RenderHTML = true, want false by default")
+	}
+}
+
+func TestValidateFleetAcceptsRenderHTML(t *testing.T) {
+	dir := t.TempDir()
+	opts := mustParseAndValidate(t, "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--render-html")
+	if !opts.RenderHTML {
+		t.Error("RenderHTML = false, want true")
+	}
+}
+
 func TestValidateFleetAcceptsUseTargetConfig(t *testing.T) {
 	dir := t.TempDir()
 	opts := mustParseAndValidate(t, "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--use-target-config")

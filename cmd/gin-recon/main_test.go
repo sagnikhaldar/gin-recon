@@ -1165,6 +1165,43 @@ func TestRunFleetPrintsProgress(t *testing.T) {
 	}
 }
 
+// TestRunFleetDoesNotRenderHTMLByDefault is a regression test for
+// docs/adr/0037-fleet-html-opt-in.md: fleet.html was previously an
+// unconditional companion to fleet.json — asked directly not to do that,
+// since rendering should be something the user opts into, not something
+// fleet decides for them. A bare fleet run with no --render-html must
+// write the raw fleet.json and nothing under any <out>-html sibling at
+// all — not even the directory.
+func TestRunFleetDoesNotRenderHTMLByDefault(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	root := t.TempDir()
+	src := filepath.Join(root, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(root, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(root, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(outDir, "fleet.json")); err != nil {
+		t.Errorf("expected fleet.json to still be written: %v", err)
+	}
+	if _, err := os.Stat(outDir + "-html"); !os.IsNotExist(err) {
+		t.Errorf("no <out>-html sibling should exist without --render-html, stat err = %v", err)
+	}
+}
+
 // fleetConflictFixture runs a fresh fleet scan to completion and returns
 // the args a second, conflicting invocation against the same --out would
 // use — shared setup for every interactive-conflict-prompt test below
@@ -1315,9 +1352,10 @@ func TestRunFleetTargetsDoesNotWriteConfigSnapshot(t *testing.T) {
 // TestRunFleetDefaultsOutUnderGinReconDir is the CLI-level integration test
 // for docs/adr/0028-gin-recon-default-output-directory.md: a bare
 // `fleet --targets ...` with no --out at all creates .gin-recon/<manifest
-// base name> (raw) and its sibling .gin-recon/<manifest base
-// name>-html/fleet.html (rendered), mirroring a sibling tool's own
-// .express-recon/<org>/<org>-html convention.
+// base name> (raw) and, with --render-html (docs/adr/0037-fleet-html-opt-in.md),
+// its sibling .gin-recon/<manifest base name>-html/fleet.html (rendered),
+// mirroring a sibling tool's own .express-recon/<org>/<org>-html
+// convention.
 func TestRunFleetDefaultsOutUnderGinReconDir(t *testing.T) {
 	fleetBinaryPathForTests = buildRealGinReconBinary(t)
 	defer func() { fleetBinaryPathForTests = "" }()
@@ -1343,7 +1381,7 @@ func TestRunFleetDefaultsOutUnderGinReconDir(t *testing.T) {
 	defer func() { _ = os.Chdir(origWD) }()
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fleet", "--targets", "targets.json"}, &stdout, &stderr)
+	code := run([]string{"fleet", "--targets", "targets.json", "--render-html"}, &stdout, &stderr)
 	if code != cli.ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
 	}
@@ -1394,7 +1432,7 @@ func TestRunFleetOutDotNestsRenderedOutput(t *testing.T) {
 	defer func() { _ = os.Chdir(origWD) }()
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fleet", "--targets", "targets.json", "--out", "."}, &stdout, &stderr)
+	code := run([]string{"fleet", "--targets", "targets.json", "--out", ".", "--render-html"}, &stdout, &stderr)
 	if code != cli.ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
 	}
@@ -1467,7 +1505,7 @@ func TestRunFleetPopulatesAuthConfigAndProvenFromRealConfig(t *testing.T) {
 	outDir := filepath.Join(root, "out")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fleet", "--targets", manifestPath, "--config", cfgPath, "--out", outDir, "--allow-downloads"}, &stdout, &stderr)
+	code := run([]string{"fleet", "--targets", manifestPath, "--config", cfgPath, "--out", outDir, "--allow-downloads", "--render-html"}, &stdout, &stderr)
 	if code != cli.ExitSuccess {
 		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
 	}
@@ -1607,7 +1645,7 @@ func TestRunFleetUsesTargetOwnConfigEndToEnd(t *testing.T) {
 	outDir := filepath.Join(root, "out")
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads", "--use-target-config"}, &stdout, &stderr)
+	code := run([]string{"fleet", "--targets", manifestPath, "--out", outDir, "--allow-downloads", "--use-target-config", "--render-html"}, &stdout, &stderr)
 	if code != cli.ExitSuccess {
 		t.Fatalf("fleet exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
 	}

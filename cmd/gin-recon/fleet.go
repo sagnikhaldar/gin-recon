@@ -212,11 +212,16 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// --out is the raw-artifacts root; every HTML file gin-recon fleet
-	// produces lands in the sibling <out>-html directory instead (or, for
-	// --out ".", nested inside it — see fleetHTMLSibling)
-	// (docs/adr/0023-fleet-raw-rendered-split.md) — derived automatically,
-	// no separate flag, no separate render step to remember to run.
+	// --out is the raw-artifacts root; when --render-html is passed, every
+	// HTML file gin-recon fleet produces lands in the sibling <out>-html
+	// directory instead (or, for --out ".", nested inside it — see
+	// fleetHTMLSibling) (docs/adr/0023-fleet-raw-rendered-split.md).
+	// Computing the path here is cheap (no I/O) and needed for the
+	// conflict check below regardless of --render-html, but htmlOutDir is
+	// only ever created/written to further down, gated on --render-html
+	// (docs/adr/0037-fleet-html-opt-in.md) — fleet's own output is the raw
+	// scan by default; rendering is a separate, explicit step, same as
+	// `render` already is for a saved fleet.json.
 	htmlOutDir, rawDirLink, err := fleetHTMLSibling(opts.OutDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
@@ -224,7 +229,10 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	}
 	aggregatePath := filepath.Join(opts.OutDir, fleetAggregateFilename)
 	htmlPath := filepath.Join(htmlOutDir, fleetHTMLFilename)
-	checkExists := []string{aggregatePath, htmlPath}
+	checkExists := []string{aggregatePath}
+	if opts.RenderHTML {
+		checkExists = append(checkExists, htmlPath)
+	}
 	if opts.Baseline != "" {
 		checkExists = append(checkExists, filepath.Join(opts.OutDir, fleetDeltaFilename))
 	}
@@ -274,6 +282,10 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		targetFormats[i] = string(f)
 	}
 
+	targetHTMLOutDir := ""
+	if opts.RenderHTML {
+		targetHTMLOutDir = htmlOutDir
+	}
 	var stderrBuf bytes.Buffer
 	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
 		ManifestPath:    manifestPath,
@@ -282,7 +294,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		ConfigPath:      opts.ConfigPath,
 		Formats:         targetFormats,
 		OutDir:          opts.OutDir,
-		HTMLOutDir:      htmlOutDir,
+		HTMLOutDir:      targetHTMLOutDir,
 		Concurrency:     opts.Concurrency,
 		Resume:          opts.Resume,
 		BinaryPath:      binaryPath,
@@ -351,27 +363,29 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// fleet.html is an unconditional companion to fleet.json, the same
-	// relationship api.html already has with openapi.json
-	// (docs/adr/0020-fleet-html-view.md) — no separate flag, always
+	// fleet.html is opt-in via --render-html, not automatic
+	// (docs/adr/0037-fleet-html-opt-in.md) — fleet's own job is the raw
+	// scan; rendering it is a separate, explicit decision, the same way
+	// `render` already treats a saved fleet.json. When requested, it's
 	// regenerated from the same agg/fleetDelta values already computed
-	// above, nothing re-read from disk. It lives in the sibling <out>-html
-	// directory (docs/adr/0023-fleet-raw-rendered-split.md), so its links
-	// to each target's raw routes.json cross back into --out; RawDirLink is
-	// that relative prefix, computed once here rather than baked into
-	// internal/format, which has no reason to know about this layout.
-	if err := os.MkdirAll(htmlOutDir, 0o755); err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return cli.ExitOperationalError
-	}
-	htmlData, err := format.FleetHTML(agg, fleetDelta, agg.Scope, rawDirLink)
-	if err != nil {
-		fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
-		return cli.ExitOperationalError
-	}
-	if err := os.WriteFile(htmlPath, htmlData, 0o644); err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return cli.ExitOperationalError
+	// above, nothing re-read from disk, into the sibling <out>-html
+	// directory (docs/adr/0023-fleet-raw-rendered-split.md); RawDirLink is
+	// the relative prefix its links to each target's raw routes.json need
+	// to cross back into --out.
+	if opts.RenderHTML {
+		if err := os.MkdirAll(htmlOutDir, 0o755); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		htmlData, err := format.FleetHTML(agg, fleetDelta, agg.Scope, rawDirLink)
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		if err := os.WriteFile(htmlPath, htmlData, 0o644); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return cli.ExitOperationalError
+		}
 	}
 
 	for _, sel := range opts.FailOn {

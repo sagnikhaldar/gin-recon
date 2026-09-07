@@ -103,6 +103,14 @@ type Options struct {
 	Resume             bool
 	AllowRemoteTargets bool
 
+	// RenderHTML is fleet-only (docs/adr/0037-fleet-html-opt-in.md): off by
+	// default. fleet.html was previously an unconditional companion to
+	// every fleet.json (ADR-0020); a fleet run's own job is now just the
+	// raw scan — rendering it into fleet.html is a separate, explicit
+	// decision the caller opts into, the same way `render` already treats
+	// a saved fleet.json rather than something fleet decides for them.
+	RenderHTML bool
+
 	// UseTargetConfig is fleet-only (docs/adr/0031-fleet-per-target-config.md):
 	// off by default, the same "capability switch, off unless asked"
 	// posture AllowRemoteTargets/AllowDownloads already use for a trust
