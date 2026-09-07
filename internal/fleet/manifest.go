@@ -86,43 +86,55 @@ func LoadManifest(path string) (*Manifest, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("fleet: reading --targets file: %w", err)
 	}
+	m, err := ParseManifest(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	return m, data, nil
+}
 
+// ParseManifest strictly validates a manifest's raw bytes — the same
+// validation LoadManifest applies to a hand-written --targets file, factored
+// out so a manifest built in memory (--repo, docs/adr/0038-fleet-repo-shorthand.md)
+// goes through the identical checks rather than a second, potentially
+// divergent copy of them.
+func ParseManifest(data []byte) (*Manifest, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var m Manifest
 	if err := dec.Decode(&m); err != nil {
-		return nil, nil, fmt.Errorf("fleet: invalid targets file: %w", err)
+		return nil, fmt.Errorf("fleet: invalid targets file: %w", err)
 	}
 	if dec.More() {
-		return nil, nil, fmt.Errorf("fleet: invalid targets file: trailing content after the top-level object")
+		return nil, fmt.Errorf("fleet: invalid targets file: trailing content after the top-level object")
 	}
 	if m.Version != 1 {
-		return nil, nil, fmt.Errorf("fleet: targets file version must be 1, got %d", m.Version)
+		return nil, fmt.Errorf("fleet: targets file version must be 1, got %d", m.Version)
 	}
 	if len(m.Targets) == 0 {
-		return nil, nil, fmt.Errorf("fleet: targets file has no targets")
+		return nil, fmt.Errorf("fleet: targets file has no targets")
 	}
 
 	seen := make(map[string]bool, len(m.Targets))
 	for _, t := range m.Targets {
 		if t.Name == "" || t.Name == "." || t.Name == ".." || !validTargetName.MatchString(t.Name) {
-			return nil, nil, fmt.Errorf("fleet: target name %q must match %s", t.Name, validTargetName.String())
+			return nil, fmt.Errorf("fleet: target name %q must match %s", t.Name, validTargetName.String())
 		}
 		if seen[t.Name] {
-			return nil, nil, fmt.Errorf("fleet: duplicate target name %q", t.Name)
+			return nil, fmt.Errorf("fleet: duplicate target name %q", t.Name)
 		}
 		seen[t.Name] = true
 
 		if (t.Src == "") == (t.Git == nil) {
-			return nil, nil, fmt.Errorf("fleet: target %q: exactly one of \"src\" or \"git\" is required", t.Name)
+			return nil, fmt.Errorf("fleet: target %q: exactly one of \"src\" or \"git\" is required", t.Name)
 		}
 		if t.Git != nil {
 			if err := validateGitSource(t.Name, t.Git); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
 	}
-	return &m, data, nil
+	return &m, nil
 }
 
 // validateGitSource enforces docs/adr/0019-fleet-remote-targets.md's URL

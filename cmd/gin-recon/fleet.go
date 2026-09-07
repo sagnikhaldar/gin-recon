@@ -192,6 +192,15 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	}
 	allowedHosts := buildFleetAllowedHosts(cfg)
 
+	// Read before resolveFleetManifest overwrites discovered-targets.json
+	// with this run's own fresh discovery (docs/adr/0039-fleet-org-update.md)
+	// — --update compares the two, so the "before" side has to be captured
+	// first. A no-op, empty result when --update wasn't passed or no prior
+	// complete run exists at this --out (first run ever, or one that never
+	// finished): every target then falls through to a real scan, same as
+	// today.
+	oldPushedAt, oldResults := loadFleetUpdateState(opts, stderr)
+
 	manifestPath, manifest, manifestData, discoveryIncomplete, exitCode := resolveFleetManifest(opts, allowedHosts, stderr)
 	if exitCode != cli.ExitSuccess {
 		return exitCode
@@ -236,7 +245,12 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	if opts.Baseline != "" {
 		checkExists = append(checkExists, filepath.Join(opts.OutDir, fleetDeltaFilename))
 	}
-	if !opts.Force && !opts.Resume {
+	// --update skips this entirely, not just the interactive branch below:
+	// like --force/--resume, it's itself a complete, self-sufficient answer
+	// to "output already exists here" (docs/adr/0039-fleet-org-update.md) —
+	// cli.Validate already refuses --update combined with either of the
+	// other two, so there's no ambiguity about which answer wins.
+	if !opts.Force && !opts.Resume && !opts.Update {
 		var conflict string
 		for _, p := range checkExists {
 			if _, err := os.Stat(p); err == nil {
@@ -286,6 +300,27 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	if opts.RenderHTML {
 		targetHTMLOutDir = htmlOutDir
 	}
+	// Built from the "before" state captured above, compared against this
+	// run's own fresh discovery — a target whose GitHub pushedAt hasn't
+	// moved gets its previous result preseeded (docs/adr/0039-fleet-org-update.md)
+	// instead of being rescanned. nil (not an empty map) when --update
+	// wasn't passed, so Aggregate.Update.Requested stays accurately false.
+	var preseed map[string]fleet.TargetResult
+	if opts.Update {
+		preseed = map[string]fleet.TargetResult{}
+		for _, t := range manifest.Targets {
+			if t.GitHub == nil || t.GitHub.PushedAt == "" {
+				continue
+			}
+			old, ok := oldResults[t.Name]
+			if !ok || (old.Status != fleet.StatusOK && old.Status != fleet.StatusNotGoModule) {
+				continue
+			}
+			if oldPushedAt[t.Name] == t.GitHub.PushedAt {
+				preseed[t.Name] = old
+			}
+		}
+	}
 	var stderrBuf bytes.Buffer
 	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
 		ManifestPath:    manifestPath,
@@ -306,6 +341,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		AllowDownloads:  opts.AllowDownloads,
 		UseTargetConfig: opts.UseTargetConfig,
 		TargetConfigDir: opts.TargetConfigDir,
+		Preseed:         preseed,
 	})
 	if stderrBuf.Len() > 0 {
 		stderr.Write(stderrBuf.Bytes())
@@ -453,6 +489,9 @@ func buildFleetScope(opts *cli.Options, discoveryIncomplete bool) *fleet.Scope {
 // discovers one from a GitHub organization and persists it, so the rest of
 // runFleet never needs to know which one happened.
 func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, stderr io.Writer) (manifestPath string, manifest *fleet.Manifest, manifestData []byte, discoveryIncomplete bool, exitCode int) {
+	if opts.Repo != "" {
+		return resolveFleetRepoManifest(opts, stderr)
+	}
 	if opts.Org == "" {
 		manifest, manifestData, err := fleet.LoadManifest(opts.TargetsPath)
 		if err != nil {
@@ -537,6 +576,32 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 	return discoveredPath, result.Manifest, identityData, result.Incomplete, cli.ExitSuccess
 }
 
+// resolveFleetRepoManifest builds a one-target manifest in memory for
+// --repo (docs/adr/0038-fleet-repo-shorthand.md) — the common case of
+// auditing exactly one remote repository without hand-writing a manifest
+// file first. Goes through fleet.ParseManifest, the identical validation a
+// hand-written --targets file already gets (name pattern, https-only URL,
+// no embedded userinfo), so nothing here can silently diverge from it; the
+// actual clone is still gated by --allow-remote-targets/
+// fleet.allowedRemoteHosts exactly as before, checked downstream in
+// fleet.Run like any other git target.
+func resolveFleetRepoManifest(opts *cli.Options, stderr io.Writer) (manifestPath string, manifest *fleet.Manifest, manifestData []byte, discoveryIncomplete bool, exitCode int) {
+	url, name := cli.ParseFleetRepo(opts.Repo)
+	data, err := json.Marshal(&fleet.Manifest{Version: 1, Targets: []fleet.Target{
+		{Name: name, Git: &fleet.GitSource{URL: url, Ref: opts.Ref}},
+	}})
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: --repo: encoding manifest: %v\n", err)
+		return "", nil, nil, false, cli.ExitOperationalError
+	}
+	m, err := fleet.ParseManifest(data)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: --repo: %v\n", err)
+		return "", nil, nil, false, cli.ExitOperationalError
+	}
+	return filepath.Join(opts.OutDir, "repo-target.json"), m, data, false, cli.ExitSuccess
+}
+
 // fleetManifestIdentityData returns m's JSON encoding with every target's
 // GitHub provenance block stripped, for use as the fleet checkpoint's
 // ManifestHash input (docs/adr/0026-fleet-org-resume-ignores-provenance-drift.md).
@@ -551,6 +616,56 @@ func fleetManifestIdentityData(m *fleet.Manifest) ([]byte, error) {
 		stripped.Targets[i] = fleet.Target{Name: t.Name, Src: t.Src, Git: t.Git}
 	}
 	return json.Marshal(stripped)
+}
+
+// loadFleetUpdateState reads whatever a previous complete run already left
+// at opts.OutDir — the discovered manifest's per-target GitHub pushedAt,
+// and fleet.json's own per-target results — before resolveFleetManifest
+// overwrites the former with this run's fresh discovery
+// (docs/adr/0039-fleet-org-update.md). Both returned maps are simply empty
+// (never an error) when --update wasn't requested, no prior run exists at
+// this --out, or either file fails to parse — a missing "before" state
+// just means every target falls through to a real scan, the same
+// behavior as today.
+func loadFleetUpdateState(opts *cli.Options, stderr io.Writer) (pushedAt map[string]string, results map[string]fleet.TargetResult) {
+	pushedAt = map[string]string{}
+	results = map[string]fleet.TargetResult{}
+	if !opts.Update {
+		return pushedAt, results
+	}
+	data, err := os.ReadFile(filepath.Join(opts.OutDir, fleetAggregateFilename))
+	if err != nil {
+		return pushedAt, results
+	}
+	var agg fleet.Aggregate
+	if json.Unmarshal(data, &agg) != nil {
+		return pushedAt, results
+	}
+	// A prior run under a different toolVersion may have classified routes
+	// under different rules entirely — reusing its results unchanged could
+	// silently present outdated classification as current. Matches a
+	// sibling tool's own real check here (confirmed directly against its
+	// source, not assumed), adapted to gin-recon's own field name: refuse
+	// every reuse rather than any, so the discrepancy can't go unnoticed
+	// for only some targets.
+	if agg.ToolVersion != "" && agg.ToolVersion != report.ToolVersion {
+		fmt.Fprintf(stderr, "gin-recon: --update: previous run at %q used toolVersion %s, this binary is %s; performing a full rescan\n", opts.OutDir, agg.ToolVersion, report.ToolVersion)
+		return pushedAt, results
+	}
+	for _, t := range agg.Targets {
+		results[t.Name] = t
+	}
+	if data, err := os.ReadFile(filepath.Join(opts.OutDir, discoveredTargetsFilename)); err == nil {
+		var m fleet.Manifest
+		if json.Unmarshal(data, &m) == nil {
+			for _, t := range m.Targets {
+				if t.GitHub != nil {
+					pushedAt[t.Name] = t.GitHub.PushedAt
+				}
+			}
+		}
+	}
+	return pushedAt, results
 }
 
 // writeFleetConfigSnapshot copies opts.ConfigPath's exact bytes into --out

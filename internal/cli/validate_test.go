@@ -141,12 +141,12 @@ func TestValidateRejectsZeroTimeout(t *testing.T) {
 
 func TestValidateFleetRequiresTargetsOrOrg(t *testing.T) {
 	dir := t.TempDir()
-	expectValidateError(t, "exactly one of --targets or --org", "fleet", "--out="+dir)
+	expectValidateError(t, "exactly one of --targets, --org, or --repo", "fleet", "--out="+dir)
 }
 
 func TestValidateFleetRejectsBothTargetsAndOrg(t *testing.T) {
 	dir := t.TempDir()
-	expectValidateError(t, "exactly one of --targets or --org", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--org=myorg", "--allow-remote-targets")
+	expectValidateError(t, "exactly one of --targets, --org, or --repo", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--org=myorg", "--allow-remote-targets")
 }
 
 // TestValidateFleetDefaultsOutUnderGinReconDir is a regression test for
@@ -172,9 +172,83 @@ func TestValidateFleetOrgDefaultsOutToLowercasedOrgName(t *testing.T) {
 	}
 }
 
+// TestValidateFleetAcceptsRepo covers docs/adr/0038-fleet-repo-shorthand.md:
+// --repo is a third alternative to --targets/--org, defaulting --out to
+// .gin-recon/<repo name>.
+func TestValidateFleetAcceptsRepo(t *testing.T) {
+	opts := mustParseAndValidate(t, "fleet", "--repo=owner/name", "--allow-remote-targets")
+	if opts.Repo != "owner/name" {
+		t.Errorf("Repo = %q, want %q", opts.Repo, "owner/name")
+	}
+	want := filepath.Join(".gin-recon", "name")
+	if opts.OutDir != want {
+		t.Errorf("OutDir = %q, want %q", opts.OutDir, want)
+	}
+}
+
+func TestValidateFleetRepoRequiresAllowRemoteTargets(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "require --allow-remote-targets", "fleet", "--out="+dir, "--repo=owner/name")
+}
+
+func TestValidateFleetRejectsRefWithoutRepo(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--ref is --repo only", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--ref=main")
+}
+
+func TestValidateFleetRejectsUpdateWithoutOrg(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--update is --org only", "fleet", "--out="+dir, "--targets=/tmp/targets.json", "--update")
+}
+
+func TestValidateFleetAcceptsUpdateWithOrg(t *testing.T) {
+	dir := t.TempDir()
+	opts := mustParseAndValidate(t, "fleet", "--out="+dir, "--org=myorg", "--allow-remote-targets", "--update")
+	if !opts.Update {
+		t.Error("Update = false, want true")
+	}
+}
+
+// TestValidateFleetRejectsUpdateWithResume and
+// TestValidateFleetRejectsUpdateWithForce cover
+// docs/adr/0039-fleet-org-update.md's mutual-exclusivity rule, matching a
+// sibling tool's own identical --resume/--update/--overwrite rule
+// (confirmed directly against its source): --update, --resume, and
+// --force each answer "output already exists" completely on their own,
+// so combining any two is refused rather than silently picking a winner.
+func TestValidateFleetRejectsUpdateWithResume(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--update and --resume cannot be used together", "fleet", "--out="+dir, "--org=myorg", "--allow-remote-targets", "--update", "--resume")
+}
+
+func TestValidateFleetRejectsUpdateWithForce(t *testing.T) {
+	dir := t.TempDir()
+	expectValidateError(t, "--update and --force cannot be used together", "fleet", "--out="+dir, "--org=myorg", "--allow-remote-targets", "--update", "--force")
+}
+
+func TestParseFleetRepoOwnerName(t *testing.T) {
+	url, name := ParseFleetRepo("smallcase/las-be-flow")
+	if url != "https://github.com/smallcase/las-be-flow.git" {
+		t.Errorf("url = %q", url)
+	}
+	if name != "las-be-flow" {
+		t.Errorf("name = %q, want %q", name, "las-be-flow")
+	}
+}
+
+func TestParseFleetRepoFullURL(t *testing.T) {
+	url, name := ParseFleetRepo("https://github.com/smallcase/las-be-flow.git")
+	if url != "https://github.com/smallcase/las-be-flow.git" {
+		t.Errorf("url = %q", url)
+	}
+	if name != "las-be-flow" {
+		t.Errorf("name = %q, want %q", name, "las-be-flow")
+	}
+}
+
 func TestValidateFleetOrgRequiresAllowRemoteTargets(t *testing.T) {
 	dir := t.TempDir()
-	expectValidateError(t, "--org requires --allow-remote-targets", "fleet", "--out="+dir, "--org=myorg")
+	expectValidateError(t, "require --allow-remote-targets", "fleet", "--out="+dir, "--org=myorg")
 }
 
 func TestValidateFleetOrgAcceptsAllowRemoteTargets(t *testing.T) {

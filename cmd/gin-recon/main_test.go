@@ -15,6 +15,7 @@ import (
 
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
+	"github.com/sagnikhaldar/gin-recon/internal/report"
 )
 
 // TestMain forces isInteractiveTerminalForTests false for the entire test
@@ -1037,6 +1038,54 @@ func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
 // (pushedAt in particular, which changes on every commit anywhere in the
 // org) was part of what got hashed for checkpoint identity. Two --org
 // invocations against a fake GitHub API that returns the identical
+// TestRunFleetOrgUpdateBypassesConflictPrompt is a regression test for
+// docs/adr/0039-fleet-org-update.md's interactive-prompt decision:
+// --update is, on its own, a complete answer to "output already exists
+// here" — it must proceed straight through even non-interactively
+// (matching --force/--resume's own existing behavior), never hitting the
+// hard error/prompt docs/adr/0034 added for the plain no-flag case.
+func TestRunFleetOrgUpdateBypassesConflictPrompt(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	const repoURL = "https://repo-host-not-in-any-allowlist.test/x.git"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal([]map[string]any{
+			{"name": "repo-a", "clone_url": repoURL, "default_branch": "main", "size": 1, "pushed_at": "2026-01-01T00:00:00Z"},
+		})
+		w.Write(body)
+	}))
+	defer srv.Close()
+	fleetGitHubAPIBaseForTests = srv.URL
+	defer func() { fleetGitHubAPIBaseForTests = "" }()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "cfg.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"api.github.com"},{"host":"github.com"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+	args := []string{"fleet", "--org", "myorg", "--config", cfgPath, "--out", outDir, "--allow-remote-targets"}
+
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != cli.ExitSuccess {
+		t.Fatalf("first run: exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	// fleet.json now exists at outDir. A second run with neither --force
+	// nor --resume would normally hard-error (or prompt, interactively);
+	// --update alone must sail through instead.
+	stdout.Reset()
+	stderr.Reset()
+	code := run(append(append([]string{}, args...), "--update"), &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("--update run: exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "already exists") {
+		t.Errorf("--update should bypass the conflict check entirely, got: %s", stderr.String())
+	}
+}
+
 // target set but a different pushed_at each time must both succeed, with
 // the second one actually resuming (not re-scanning) the completed target.
 func TestRunFleetOrgResumeToleratesPushedAtDrift(t *testing.T) {
@@ -1314,6 +1363,127 @@ func TestRunFleetConflictInteractivePromptEOFCancels(t *testing.T) {
 	code := run(args, &stdout, &stderr)
 	if code != cli.ExitOperationalError {
 		t.Fatalf("exit code = %d, want %d", code, cli.ExitOperationalError)
+	}
+}
+
+// TestLoadFleetUpdateState is a unit test for
+// docs/adr/0039-fleet-org-update.md's "read the previous complete run's own
+// state" half, without any real clone or network: writes the same
+// discovered-targets.json/fleet.json shape a real --org run would have
+// left at --out, and checks both maps come back correctly keyed by target
+// name.
+func TestLoadFleetUpdateState(t *testing.T) {
+	outDir := t.TempDir()
+	discovered := `{"version":1,"targets":[
+		{"name":"repo-a","git":{"url":"https://github.com/acme/repo-a.git"},"github":{"pushedAt":"2026-01-01T00:00:00Z"}},
+		{"name":"repo-b","git":{"url":"https://github.com/acme/repo-b.git"},"github":{"pushedAt":"2026-02-02T00:00:00Z"}}
+	]}`
+	if err := os.WriteFile(filepath.Join(outDir, discoveredTargetsFilename), []byte(discovered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agg := fmt.Sprintf(`{"tool":"gin-recon","toolVersion":%q,"targets":[
+		{"name":"repo-a","src":"","status":"ok","complete":true,"routes":5},
+		{"name":"repo-b","src":"","status":"failed"}
+	],"coverage":{"complete":false},"resume":{"requested":false,"reused":0,"checkpoint":false},"update":{"requested":false,"reused":0},"totals":{"routes":0,"proven":0,"public":0,"unknown":0},"authConfig":{"middlewareCount":0,"wrappersCount":0}}`, report.ToolVersion)
+	if err := os.WriteFile(filepath.Join(outDir, fleetAggregateFilename), []byte(agg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	pushedAt, results := loadFleetUpdateState(&cli.Options{OutDir: outDir, Update: true}, &stderr)
+	if pushedAt["repo-a"] != "2026-01-01T00:00:00Z" {
+		t.Errorf("pushedAt[repo-a] = %q", pushedAt["repo-a"])
+	}
+	if pushedAt["repo-b"] != "2026-02-02T00:00:00Z" {
+		t.Errorf("pushedAt[repo-b] = %q", pushedAt["repo-b"])
+	}
+	if results["repo-a"].Status != fleet.StatusOK || results["repo-a"].Routes != 5 {
+		t.Errorf("results[repo-a] = %+v", results["repo-a"])
+	}
+	if results["repo-b"].Status != fleet.StatusFailed {
+		t.Errorf("results[repo-b] = %+v", results["repo-b"])
+	}
+}
+
+// TestLoadFleetUpdateStateEmptyWithoutUpdate confirms the read is skipped
+// entirely (not just empty by coincidence) when --update wasn't passed —
+// matching Aggregate.Update.Requested's own "did the caller even ask"
+// signal downstream.
+func TestLoadFleetUpdateStateEmptyWithoutUpdate(t *testing.T) {
+	outDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outDir, discoveredTargetsFilename), []byte(`{"version":1,"targets":[{"name":"repo-a","github":{"pushedAt":"2026-01-01T00:00:00Z"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	pushedAt, results := loadFleetUpdateState(&cli.Options{OutDir: outDir, Update: false}, &stderr)
+	if len(pushedAt) != 0 || len(results) != 0 {
+		t.Errorf("pushedAt=%v results=%v, want both empty when --update wasn't passed", pushedAt, results)
+	}
+}
+
+// TestLoadFleetUpdateStateRefusesReuseAcrossToolVersions is a regression
+// test for docs/adr/0039-fleet-org-update.md's toolVersion safety check
+// (matching a sibling tool's own real check, confirmed against its
+// source): a previous run classified under a different toolVersion must
+// never be silently reused — the classification rules that produced it
+// may no longer be current.
+func TestLoadFleetUpdateStateRefusesReuseAcrossToolVersions(t *testing.T) {
+	outDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outDir, discoveredTargetsFilename), []byte(`{"version":1,"targets":[{"name":"repo-a","github":{"pushedAt":"2026-01-01T00:00:00Z"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agg := `{"tool":"gin-recon","toolVersion":"0.0.1-old","targets":[
+		{"name":"repo-a","src":"","status":"ok","complete":true,"routes":5}
+	],"coverage":{"complete":false},"resume":{"requested":false,"reused":0,"checkpoint":false},"update":{"requested":false,"reused":0},"totals":{"routes":0,"proven":0,"public":0,"unknown":0},"authConfig":{"middlewareCount":0,"wrappersCount":0}}`
+	if err := os.WriteFile(filepath.Join(outDir, fleetAggregateFilename), []byte(agg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	pushedAt, results := loadFleetUpdateState(&cli.Options{OutDir: outDir, Update: true}, &stderr)
+	if len(pushedAt) != 0 || len(results) != 0 {
+		t.Errorf("pushedAt=%v results=%v, want both empty across a toolVersion mismatch", pushedAt, results)
+	}
+	if !strings.Contains(stderr.String(), "toolVersion") {
+		t.Errorf("stderr = %q, want a toolVersion-mismatch explanation", stderr.String())
+	}
+}
+
+// TestResolveFleetRepoManifestOwnerName is a unit test for
+// docs/adr/0038-fleet-repo-shorthand.md's manifest construction, without a
+// real network clone: an "owner/name" --repo value must produce a
+// one-target manifest expanded against github.com, with --ref carried
+// through as that target's git.ref.
+func TestResolveFleetRepoManifestOwnerName(t *testing.T) {
+	opts := &cli.Options{OutDir: "out", Repo: "smallcase/las-be-flow", Ref: "main"}
+	var stderr bytes.Buffer
+
+	manifestPath, manifest, manifestData, discoveryIncomplete, exitCode := resolveFleetRepoManifest(opts, &stderr)
+	if exitCode != cli.ExitSuccess {
+		t.Fatalf("exitCode = %d, want %d; stderr: %s", exitCode, cli.ExitSuccess, stderr.String())
+	}
+	if discoveryIncomplete {
+		t.Error("discoveryIncomplete = true, want false")
+	}
+	if manifestPath == "" {
+		t.Error("manifestPath is empty")
+	}
+	if len(manifestData) == 0 {
+		t.Error("manifestData is empty")
+	}
+	if len(manifest.Targets) != 1 {
+		t.Fatalf("Targets = %d, want 1", len(manifest.Targets))
+	}
+	target := manifest.Targets[0]
+	if target.Name != "las-be-flow" {
+		t.Errorf("Name = %q, want %q", target.Name, "las-be-flow")
+	}
+	if target.Git == nil || target.Git.URL != "https://github.com/smallcase/las-be-flow.git" {
+		t.Errorf("Git = %+v, want URL https://github.com/smallcase/las-be-flow.git", target.Git)
+	}
+	if target.Git.Ref != "main" {
+		t.Errorf("Ref = %q, want %q", target.Git.Ref, "main")
 	}
 }
 

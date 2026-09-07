@@ -136,13 +136,36 @@ type Options struct {
 	// fleet --org only (docs/adr/0021-fleet-org-enumeration.md): an
 	// alternative to TargetsPath that populates the same manifest shape by
 	// enumerating a GitHub organization instead of reading a hand-written
-	// file. Exactly one of TargetsPath/Org is required.
+	// file. Exactly one of TargetsPath/Org/Repo is required.
 	Org             string
 	MaxRepos        int
 	IncludeArchived bool
 	IncludeForks    bool
 	RepoInclude     []string
 	RepoExclude     []string
+
+	// Repo/Ref are fleet-only (docs/adr/0038-fleet-repo-shorthand.md): a
+	// third alternative to TargetsPath/Org for the common case of auditing
+	// exactly one remote repository, without hand-writing a one-target
+	// manifest file first. Repo is either "owner/name" (expanded against
+	// github.com) or a full "https://" git URL; Ref is optional and
+	// defaults to the remote's own default branch, same as a --targets
+	// manifest's own "git" target. Reuses --targets' entire remote-clone
+	// path (ADR-0019) — --allow-remote-targets and
+	// fleet.allowedRemoteHosts still gate it identically; nothing new is
+	// trusted just because the manifest was built in memory instead of
+	// read from a file.
+	Repo string
+	Ref  string
+
+	// Update is fleet --org only (docs/adr/0039-fleet-org-update.md):
+	// off by default. When set, a target whose GitHub pushedAt hasn't
+	// changed since the previous complete run in the same --out reuses
+	// that run's own result instead of rescanning — the same reuse
+	// mechanism --resume's checkpoint already uses, just keyed off "no new
+	// commits" (this run's own fresh discovery vs the last complete run's)
+	// rather than "already done earlier in this same run."
+	Update bool
 
 	// ExplicitFlags records which flag names the user actually passed on the
 	// command line, as opposed to a field merely holding its default value

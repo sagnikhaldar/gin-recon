@@ -119,6 +119,17 @@ type Aggregate struct {
 		Reused     int  `json:"reused"`
 		Checkpoint bool `json:"checkpoint"`
 	} `json:"resume"`
+	// Update mirrors Resume, for --org --update
+	// (docs/adr/0039-fleet-org-update.md): Reused counts targets whose
+	// GitHub pushedAt was unchanged since the previous complete run in
+	// this same --out, so their prior result was reused instead of
+	// rescanned. Requested is set even when Reused ends up 0 (no prior run
+	// found, or every target actually changed) — the same "did the caller
+	// even ask" transparency Resume.Requested already provides.
+	Update struct {
+		Requested bool `json:"requested"`
+		Reused    int  `json:"reused"`
+	} `json:"update"`
 	// Totals sums every target's own Routes/Proven/Public/Unknown — the
 	// fleet-wide evidence rollup fleet.html's metrics row shows. Computed
 	// once after every target finishes (Run), not recomputed by a later
@@ -228,6 +239,15 @@ type RunOptions struct {
 	// position, and needs no commit/PR/merge into the target's own repo.
 	TargetConfigDir string
 
+	// Preseed is fleet --org --update only (docs/adr/0039-fleet-org-update.md):
+	// already-known results, by target name, for targets cmd/gin-recon has
+	// determined are unchanged since the previous complete run in the same
+	// --out (same GitHub pushedAt now as then). Checked as a fallback after
+	// this run's own checkpoint (cp.Complete) — same reuse mechanism
+	// --resume already uses, just sourced from a prior *complete* run
+	// instead of an in-progress one.
+	Preseed map[string]TargetResult
+
 	// Remote targets (docs/adr/0019-fleet-remote-targets.md). AllowRemote
 	// mirrors --allow-remote-targets: the capability switch. AllowedHosts
 	// is the actual scope, from fleet.allowedRemoteHosts in a reviewed
@@ -305,6 +325,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	targets := opts.Manifest.Targets
 	results := make([]TargetResult, len(targets))
 	reused := 0
+	updateReused := 0
 
 	sem := make(chan struct{}, opts.Concurrency)
 	var wg sync.WaitGroup
@@ -312,18 +333,23 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	completed := 0
 
 	// reportProgress prints one line for a target the moment it's known —
-	// reused from a checkpoint or just finished — so a long fleet run isn't
-	// silent until it exits. Must be called with mu held (it reads/updates
-	// completed itself, so callers pass a pre-locked closure instead of
-	// locking around it, keeping every call site symmetric).
-	reportProgress := func(t Target, res TargetResult, resumed bool) {
+	// reused from a checkpoint or --update comparison, or just finished —
+	// so a long fleet run isn't silent until it exits. Must be called with
+	// mu held (it reads/updates completed itself, so callers pass a
+	// pre-locked closure instead of locking around it, keeping every call
+	// site symmetric). reused, when non-empty, names why no goroutine ran
+	// for this target at all ("resumed" from this run's own checkpoint, or
+	// "unchanged" via --update's previous-run comparison,
+	// docs/adr/0039-fleet-org-update.md) — distinct provenance worth a
+	// reader being able to tell apart, not both collapsed into one label.
+	reportProgress := func(t Target, res TargetResult, reused string) {
 		completed++
 		if opts.Progress == nil {
 			return
 		}
 		suffix := ""
-		if resumed {
-			suffix = " (resumed)"
+		if reused != "" {
+			suffix = " (" + reused + ")"
 		} else if res.Status == StatusOK {
 			suffix = fmt.Sprintf(" (%d routes)", res.Routes)
 		}
@@ -333,13 +359,22 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	for i, t := range targets {
 		mu.Lock()
 		done, ok := cp.Complete[t.Name]
+		reuseReason := "resumed"
+		if !ok && opts.Preseed != nil {
+			done, ok = opts.Preseed[t.Name]
+			reuseReason = "unchanged"
+		}
 		if ok {
-			reportProgress(t, done, true)
+			reportProgress(t, done, reuseReason)
 		}
 		mu.Unlock()
 		if ok {
 			results[i] = done
-			reused++
+			if reuseReason == "unchanged" {
+				updateReused++
+			} else {
+				reused++
+			}
 			continue
 		}
 		i, t := i, t
@@ -353,7 +388,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 			results[i] = res
 
 			mu.Lock()
-			reportProgress(t, res, false)
+			reportProgress(t, res, "")
 			mu.Unlock()
 
 			if res.Status == StatusOK || res.Status == StatusNotGoModule {
@@ -383,6 +418,8 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	agg.Resume.Requested = opts.Resume
 	agg.Resume.Reused = reused
 	agg.Resume.Checkpoint = !agg.Coverage.Complete
+	agg.Update.Requested = opts.Preseed != nil
+	agg.Update.Reused = updateReused
 
 	if agg.Coverage.Complete {
 		if err := removeCheckpoint(opts.OutDir); err != nil && opts.Stderr != nil {

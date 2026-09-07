@@ -635,6 +635,61 @@ func TestRunReportsProgressForResumedTargets(t *testing.T) {
 	}
 }
 
+// TestRunPreseedReusesUnchangedTarget is the core regression test for
+// docs/adr/0039-fleet-org-update.md: a target present in Preseed (cmd/gin-recon's
+// own "unchanged since the previous complete run" determination, based on
+// GitHub pushedAt) must be reused exactly like a --resume checkpoint hit —
+// no goroutine spawned, no rescan — while a target with no Preseed entry
+// still runs normally. Progress must label the two differently ("resumed"
+// vs "unchanged") since they're different provenance.
+func TestRunPreseedReusesUnchangedTarget(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "unchanged", Src: targetDir(t, "fail")}, // would fail if actually rescanned
+		{Name: "changed", Src: targetDir(t, "complete")},
+	}}
+	outDir := t.TempDir()
+	preseededResult := TargetResult{Name: "unchanged", Status: StatusOK, Complete: true, Routes: 9}
+	var progress bytes.Buffer
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       outDir,
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+		Progress:     &progress,
+		Preseed:      map[string]TargetResult{"unchanged": preseededResult},
+	})
+	if err != nil {
+		t.Fatalf("Run: unexpected error: %v", err)
+	}
+
+	if agg.Targets[0] != preseededResult {
+		t.Errorf("Targets[0] = %+v, want the preseeded result verbatim (not rescanned)", agg.Targets[0])
+	}
+	if agg.Targets[1].Status != StatusOK {
+		t.Errorf("Targets[1].Status = %v, want ok: a target with no Preseed entry must still run normally", agg.Targets[1].Status)
+	}
+	if !agg.Update.Requested {
+		t.Error("Update.Requested = false, want true: Preseed was set")
+	}
+	if agg.Update.Reused != 1 {
+		t.Errorf("Update.Reused = %d, want 1", agg.Update.Reused)
+	}
+	if agg.Resume.Reused != 0 {
+		t.Errorf("Resume.Reused = %d, want 0: this wasn't a checkpoint resume", agg.Resume.Reused)
+	}
+
+	want := "[1/2] unchanged: ok (unchanged)\n[2/2] changed: ok (0 routes)\n"
+	if progress.String() != want {
+		t.Errorf("progress output = %q, want %q", progress.String(), want)
+	}
+}
+
 func TestRunResumeRejectsChangedManifest(t *testing.T) {
 	bin := buildFakeAudit(t)
 	outDir := t.TempDir()

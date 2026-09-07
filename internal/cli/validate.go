@@ -58,11 +58,17 @@ func Validate(opts *Options) error {
 	// --fail-on is restricted to the one selector meaningful at fleet scope
 	// today (docs/adr/0018-fleet-scanning.md).
 	if opts.Command == CommandFleet {
-		if (opts.TargetsPath == "") == (opts.Org == "") {
-			return fmt.Errorf("exactly one of --targets or --org is required")
+		selected := 0
+		for _, s := range []string{opts.TargetsPath, opts.Org, opts.Repo} {
+			if s != "" {
+				selected++
+			}
 		}
-		if opts.Org != "" && !opts.AllowRemoteTargets {
-			return fmt.Errorf("--org requires --allow-remote-targets: discovering an organization's repositories is itself a network call")
+		if selected != 1 {
+			return fmt.Errorf("exactly one of --targets, --org, or --repo is required")
+		}
+		if (opts.Org != "" || opts.Repo != "") && !opts.AllowRemoteTargets {
+			return fmt.Errorf("--org/--repo require --allow-remote-targets: fetching a remote repository is itself a network call")
 		}
 		if opts.Org == "" {
 			if opts.MaxRepos != 0 {
@@ -74,8 +80,28 @@ func Validate(opts *Options) error {
 			if len(opts.RepoInclude) > 0 || len(opts.RepoExclude) > 0 {
 				return fmt.Errorf("--repo-include/--repo-exclude are --org only")
 			}
+			if opts.Update {
+				return fmt.Errorf("--update is --org only")
+			}
 		} else if opts.MaxRepos != 0 && (opts.MaxRepos < 1 || opts.MaxRepos > fleet.MaxMaxRepos) {
 			return fmt.Errorf("--max-repos: must be between 1 and %d, got %d", fleet.MaxMaxRepos, opts.MaxRepos)
+		}
+		// --update, --resume, and --force name three different, mutually
+		// exclusive answers to "output already exists here" — reusing
+		// unchanged targets since the last complete run, continuing an
+		// incomplete one from its checkpoint, and starting over — not
+		// something meaningful to combine (docs/adr/0039-fleet-org-update.md,
+		// matching a sibling tool's own identical rule for its own
+		// --resume/--update/--overwrite trio, checked directly against its
+		// source rather than assumed).
+		if opts.Update && opts.Resume {
+			return fmt.Errorf("--update and --resume cannot be used together: --resume continues an incomplete run from its checkpoint, --update starts a fresh run reusing what hasn't changed since the last complete one")
+		}
+		if opts.Update && opts.Force {
+			return fmt.Errorf("--update and --force cannot be used together: --update already means \"proceed, reusing what hasn't changed\"")
+		}
+		if opts.Repo == "" && opts.Ref != "" {
+			return fmt.Errorf("--ref is --repo only")
 		}
 		if opts.OutDir == "" {
 			dir, err := defaultFleetOutDir(opts)
@@ -213,6 +239,30 @@ func Validate(opts *Options) error {
 	return nil
 }
 
+// ParseFleetRepo splits --repo's value (docs/adr/0038-fleet-repo-shorthand.md)
+// into the git clone URL a manifest's own "git.url" would use and a target
+// name valid under fleet's existing `^[A-Za-z0-9._-]+$` name rule. Accepts
+// either "owner/name" (expanded against github.com, the same default --org
+// already assumes) or a full "https://" URL, used exactly as given.
+func ParseFleetRepo(repo string) (url, name string) {
+	if strings.HasPrefix(repo, "https://") {
+		return repo, fleetRepoTargetName(strings.TrimSuffix(repo, ".git"))
+	}
+	return "https://github.com/" + repo + ".git", fleetRepoTargetName(repo)
+}
+
+// fleetRepoTargetName extracts the last path segment of a "owner/name"
+// shorthand or a (`.git`-suffix-trimmed) URL — a GitHub repository name
+// already satisfies fleet's own target-name rule, so no further sanitizing
+// is needed here.
+func fleetRepoTargetName(repo string) string {
+	repo = strings.TrimSuffix(repo, "/")
+	if i := strings.LastIndex(repo, "/"); i >= 0 {
+		return repo[i+1:]
+	}
+	return repo
+}
+
 // defaultFleetOutDir computes fleet's --out when the caller didn't pass one,
 // so `fleet --org <name> --allow-remote-targets` or `fleet --targets <path>`
 // works with no --out at all — docs/adr/0028-gin-recon-default-output-directory.md,
@@ -229,6 +279,9 @@ func defaultFleetOutDir(opts *Options) (string, error) {
 	}
 	if opts.Org != "" {
 		return filepath.Join(".gin-recon", strings.ToLower(opts.Org)), nil
+	}
+	if opts.Repo != "" {
+		return filepath.Join(".gin-recon", strings.ToLower(fleetRepoTargetName(opts.Repo))), nil
 	}
 	name := strings.TrimSuffix(filepath.Base(opts.TargetsPath), filepath.Ext(opts.TargetsPath))
 	if name == "" {
