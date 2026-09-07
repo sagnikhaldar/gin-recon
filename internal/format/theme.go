@@ -2,13 +2,9 @@
 // page it produces (api.html, fleet.html, and any future one). One design
 // system, defined once, so every gin-recon HTML output reads as the same
 // tool rather than several differently-styled pages that happen to share a
-// binary. Deliberately gin-recon's own: its own accent color, its own
-// CSS-only mark (a magnifying glass — "recon" — built from a border and a
-// pseudo-element, the same zero-asset technique a sibling tool's own brand
-// mark uses for its own unrelated shape), never a copied palette or
-// literal markup. Still zero network, zero external font/icon/asset, per
-// ADR 0009 — a brand mark that needed an image file would be the one part
-// of this page reaching outside itself.
+// binary. Deliberately gin-recon's own: its teal palette and a broken scan
+// ring crossed by a route graph. The logo is inlined below so generated pages
+// remain zero-network and self-contained per ADR 0009.
 package format
 
 // themeCSS defines the shared :root palette (light and dark), typography,
@@ -83,35 +79,15 @@ const themeCSS = `
   color: var(--gr-ink);
 }
 .gr-brand__mark {
-  position: relative;
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--gr-accent);
-  border-radius: 50%;
+  width: 20px;
+  height: 20px;
   flex: none;
+  overflow: visible;
 }
-.gr-brand__mark::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--gr-accent);
-}
-.gr-brand__mark::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 10px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--gr-accent);
-  transform-origin: 0 50%;
-  transform: rotate(-40deg);
-}
+.gr-brand__scan { fill: none; stroke: var(--gr-accent); }
+.gr-brand__route { fill: none; stroke: var(--gr-ink); }
+.gr-brand__hub { fill: var(--gr-accent); }
+.gr-brand__node { fill: var(--gr-ink); }
 .gr-git-mark { flex: none; vertical-align: -2px; color: var(--gr-muted); }
 .gr-header-meta { color: var(--gr-muted); font-size: 13px; text-align: right; }
 .gr-hero { padding: 28px 24px 8px; }
@@ -180,12 +156,10 @@ const themeCSS = `
 .gr-footer { margin: 24px 24px 32px; color: var(--gr-muted); font-size: 12px; }
 `
 
-// brandMarkHTML is the inline brand mark markup shared by every page's
-// header — a plain <span>, styled entirely by .gr-brand__mark above (a
-// ringed dot with a short angled sweep, evoking a radar/scan ping — gin-recon's
-// own mark, distinct from any other tool's). No image or inline SVG
-// payload to keep in sync with the CSS.
-const brandMarkHTML = `<span class="gr-brand__mark" aria-hidden="true"></span>`
+// brandMarkHTML is the inline form of assets/logo/mark.svg, shared by every
+// generated page header. Keeping the geometry inline preserves the reports'
+// self-contained, offline contract while matching the public project brand.
+const brandMarkHTML = `<svg class="gr-brand__mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="gr-brand__scan" d="M49 15.5A24 24 0 1 0 49 48.5" stroke-width="6" stroke-linecap="round"/><path class="gr-brand__route" d="M29 32H51M31.5 29.5 45 19.5M31.5 34.5 45 44.5" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><circle class="gr-brand__hub" cx="29" cy="32" r="5"/><circle class="gr-brand__node" cx="46" cy="19" r="3.5"/><circle class="gr-brand__node" cx="52" cy="32" r="3.5"/><circle class="gr-brand__node" cx="46" cy="45" r="3.5"/></svg>`
 
 // gitMarkHTML is an inline SVG marking a target's source as a git remote
 // (used next to a --org-discovered target's clone URL) — an original
