@@ -63,7 +63,7 @@ Exit code `2` means the requested gate matched: an expected policy result, not a
 | `audit` | Authentication classification, policy evaluation, findings, and baseline comparison (`--baseline`, `--fail-on new,regression`). |
 | `suggest-auth` | Ranked canonical middleware candidates to help write configuration. Never affects classification. |
 | `render` | Regenerates any output format from an already-saved `routes.json`, with no re-analysis: no source tree, no network, and typically well under a second even on a large repository. |
-| `fleet` | Runs `audit` once per target listed in a manifest, one remote repository (`--repo`), or a whole GitHub organization (`--org`), aggregating results with bounded concurrency, checkpointed resume, and `--update` to skip repositories unchanged since the last complete scan. See [docs/reference.md](docs/reference.md#fleet-options) and the [scheduled org scan example](examples/github-actions/scheduled-org-scan.yml). |
+| `fleet` | Runs `audit` once per target listed in a manifest, one remote repository (`--repo`), or a whole GitHub organization (`--org`), aggregating results with bounded concurrency, checkpointed resume, and `--update` to skip repositories unchanged since the last complete scan. `--suggest-auth` merges every target's own `suggest-auth` candidates into one organization-wide ranked list, for building a reviewed `authMiddleware` config across many repositories at once. See [docs/reference.md](docs/reference.md#fleet-options) and the [scheduled org scan example](examples/github-actions/scheduled-org-scan.yml). |
 | `schema` | Emits the versioned report, configuration, fleet, or fleet-delta JSON Schema. |
 
 Full reference: [docs/reference.md](docs/reference.md) for every flag and the config format.

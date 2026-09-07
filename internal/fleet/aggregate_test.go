@@ -71,6 +71,7 @@ func TestFleetSchemaDeclaresEveryContractField(t *testing.T) {
 		{"scope", reflect.TypeOf(Scope{}), document.Defs["scope"].Properties},
 		{"discovery", reflect.TypeOf(DiscoverySummary{}), document.Defs["discovery"].Properties},
 		{"repositoryDisposition", reflect.TypeOf(RepositoryDisposition{}), document.Defs["repositoryDisposition"].Properties},
+		{"dispositionCount", reflect.TypeOf(DispositionCount{}), document.Defs["dispositionCount"].Properties},
 		{"rateLimit", reflect.TypeOf(RateLimitState{}), document.Defs["rateLimit"].Properties},
 	}
 	for _, contract := range contracts {

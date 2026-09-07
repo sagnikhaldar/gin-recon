@@ -358,6 +358,22 @@ type RunOptions struct {
 	AllowRemote  bool
 	AllowedHosts []AllowedHost
 	Clone        CloneFunc
+
+	// SuggestAuth mirrors --suggest-auth: for every module that scans
+	// successfully, also run `suggest-auth` (never `audit`'s own
+	// classification — suggest-auth ranks candidates without an
+	// authMiddleware allowlist to classify against) into the same staged
+	// output directory routes.json already lands in, so it publishes
+	// alongside it through the identical staging/rename transaction with no
+	// separate handling needed. A per-module suggest-auth failure is
+	// non-fatal — it never changes that module's own Status, since
+	// suggest-auth is enrichment, not the target's primary result. The
+	// aggregation across every target's own suggestions.json into one
+	// fleet-wide ranked list happens one layer up, in cmd/gin-recon (which
+	// already imports internal/analyzer for the candidate type; this
+	// package deliberately does not, matching its existing config/report
+	// import boundary).
+	SuggestAuth bool
 }
 
 func (o RunOptions) allowedHost(host string) (AllowedHost, bool) {
@@ -1018,6 +1034,10 @@ func runModule(ctx context.Context, opts RunOptions, target Target, module modul
 	} else {
 		res.Report = filepath.Join("targets", target.Name, "routes.json")
 	}
+
+	if opts.SuggestAuth {
+		runSuggestAuthEnrichment(ctx, opts, module, moduleOut, targetConfigPath)
+	}
 	if decoded.Summary != nil {
 		res.Routes = decoded.Summary.TotalRoutes
 		res.Proven = decoded.Summary.ProvenByConfirmedShape + decoded.Summary.ProvenByAttestedUnresolved
@@ -1057,6 +1077,29 @@ func runModule(ctx context.Context, opts RunOptions, target Target, module modul
 		}
 	}
 	return res
+}
+
+// runSuggestAuthEnrichment runs `suggest-auth` for one already-successfully-
+// scanned module, writing suggestions.json into moduleOut alongside the
+// routes.json runModule's own audit subprocess just wrote — the same
+// staged directory, published via the identical staging/rename transaction,
+// so this needs no publishing logic of its own. Deliberately silent and
+// non-fatal on any failure: suggest-auth is enrichment for a human/AI
+// reviewer building an authMiddleware allowlist (docs/reference.md), never
+// itself part of a module's primary audit result, so a module whose
+// suggest-auth pass fails simply contributes no candidates to the later
+// fleet-wide aggregation — identical in effect to one that was never asked
+// for at all, not a reason to fail the module's own Status.
+func runSuggestAuthEnrichment(ctx context.Context, opts RunOptions, module moduleRoot, moduleOut, targetConfigPath string) {
+	args := []string{"suggest-auth", "--src", module.AbsPath, "--out", moduleOut, "--force"}
+	if targetConfigPath != "" {
+		args = append(args, "--config", targetConfigPath)
+	}
+	if opts.AllowDownloads {
+		args = append(args, "--allow-downloads")
+	}
+	cmd := exec.CommandContext(ctx, opts.BinaryPath, args...)
+	_ = cmd.Run()
 }
 
 func expectedRawArtifacts(formats []string) []string {

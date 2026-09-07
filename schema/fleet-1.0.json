@@ -68,12 +68,20 @@
         "status": {"enum": ["selected", "skipped", "filtered", "capped"]}, "reason": {"type": "string"}
       }
     },
+    "dispositionCount": {
+      "type": "object", "additionalProperties": false, "required": ["status", "count"],
+      "properties": {
+        "status": {"enum": ["selected", "skipped", "filtered", "capped"]}, "reason": {"type": "string"}, "count": {"type": "integer", "minimum": 0}
+      }
+    },
     "discovery": {
       "type": "object", "additionalProperties": false,
-      "required": ["complete", "pagesFetched", "visibleRepositories", "selectedRepositories", "repositories"],
+      "required": ["complete", "pagesFetched", "visibleRepositories", "selectedRepositories", "repositories", "categories"],
       "properties": {
         "complete": {"type": "boolean"}, "pagesFetched": {"type": "integer", "minimum": 0}, "visibleRepositories": {"type": "integer", "minimum": 0}, "selectedRepositories": {"type": "integer", "minimum": 0},
-        "repositories": {"type": "array", "items": {"$ref": "#/$defs/repositoryDisposition"}}, "diagnostics": {"type": "array", "items": {"type": "string"}}, "rateLimit": {"$ref": "#/$defs/rateLimit"}
+        "repositories": {"type": "array", "items": {"$ref": "#/$defs/repositoryDisposition"}},
+        "categories": {"type": "array", "items": {"$ref": "#/$defs/dispositionCount"}},
+        "diagnostics": {"type": "array", "items": {"type": "string"}}, "rateLimit": {"$ref": "#/$defs/rateLimit"}
       }
     },
     "scope": {

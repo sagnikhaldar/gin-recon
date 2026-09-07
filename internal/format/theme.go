@@ -159,7 +159,7 @@ const themeCSS = `
 // brandMarkHTML is the inline form of assets/logo/mark.svg, shared by every
 // generated page header. Keeping the geometry inline preserves the reports'
 // self-contained, offline contract while matching the public project brand.
-const brandMarkHTML = `<svg class="gr-brand__mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="gr-brand__scan" d="M49 15.5A24 24 0 1 0 49 48.5" stroke-width="6" stroke-linecap="round"/><path class="gr-brand__route" d="M29 32H51M31.5 29.5 45 19.5M31.5 34.5 45 44.5" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><circle class="gr-brand__hub" cx="29" cy="32" r="5"/><circle class="gr-brand__node" cx="46" cy="19" r="3.5"/><circle class="gr-brand__node" cx="52" cy="32" r="3.5"/><circle class="gr-brand__node" cx="46" cy="45" r="3.5"/></svg>`
+const brandMarkHTML = `<svg class="gr-brand__mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="gr-brand__scan" d="M49 15.5A24 24 0 1 0 49 48.5" stroke-width="6" stroke-linecap="round"/><path class="gr-brand__route" d="M29 32H51M31.5 34.5 45 44.5" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><circle class="gr-brand__hub" cx="29" cy="32" r="5"/><circle class="gr-brand__node" cx="52" cy="32" r="3.5"/><circle class="gr-brand__node" cx="46" cy="45" r="3.5"/></svg>`
 
 // gitMarkHTML is an inline SVG marking a target's source as a git remote
 // (used next to a --org-discovered target's clone URL) — an original

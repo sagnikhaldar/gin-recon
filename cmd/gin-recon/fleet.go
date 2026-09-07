@@ -363,6 +363,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		RepoAttempts:    opts.RepoAttempts,
 		RepoTimeout:     opts.RepoTimeout,
 		Preseed:         preseed,
+		SuggestAuth:     opts.SuggestAuth,
 	})
 	if stderrBuf.Len() > 0 {
 		stderr.Write(stderrBuf.Bytes())
@@ -466,6 +467,9 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	if err := fleet.WriteFileAtomic(aggregatePath, data, 0o644); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
+	}
+	if opts.SuggestAuth {
+		writeFleetAuthSuggestions(agg, opts.OutDir, stderr)
 	}
 	if agg.Coverage.Complete {
 		if err := fleet.RemoveCheckpoint(opts.OutDir); err != nil {

@@ -266,6 +266,85 @@ func TestDiscoverOrgReposSkipsDisabledAndEmpty(t *testing.T) {
 	}
 }
 
+// TestDiscoverOrgReposCategoriesSummarizesDispositions is a regression test
+// for a real usability gap: DiscoverySummary.Repositories forced a reader
+// to compute their own status/reason tally (e.g. via jq) just to answer
+// "were all visible repositories accounted for, and why weren't the rest
+// selected." Categories now carries that tally directly in fleet.json.
+func TestDiscoverOrgReposCategoriesSummarizesDispositions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(reposJSON(t, []githubRepo{
+			{Name: "svc-a", FullName: "myorg/svc-a", CloneURL: "https://github.com/myorg/svc-a.git", Size: 1},
+			{Name: "svc-b", FullName: "myorg/svc-b", CloneURL: "https://github.com/myorg/svc-b.git", Size: 1},
+			{Name: "old-a", FullName: "myorg/old-a", CloneURL: "https://github.com/myorg/old-a.git", Size: 1, Archived: true},
+			{Name: "old-b", FullName: "myorg/old-b", CloneURL: "https://github.com/myorg/old-b.git", Size: 1, Archived: true},
+			{Name: "empty-repo", FullName: "myorg/empty-repo", CloneURL: "https://github.com/myorg/empty-repo.git", Size: 0},
+			{Name: "a-fork", FullName: "myorg/a-fork", CloneURL: "https://github.com/myorg/a-fork.git", Size: 1, Fork: true},
+		})))
+	}))
+	defer srv.Close()
+
+	result, err := DiscoverOrgRepos(context.Background(), DiscoverOptions{Org: "myorg", APIBase: srv.URL})
+	if err != nil {
+		t.Fatalf("DiscoverOrgRepos: %v", err)
+	}
+
+	want := []DispositionCount{
+		{Status: "selected", Reason: "", Count: 2},
+		{Status: "skipped", Reason: "archived repositories were excluded", Count: 2},
+		{Status: "skipped", Reason: "forks were excluded", Count: 1},
+		{Status: "skipped", Reason: "repository is empty", Count: 1},
+	}
+	got := result.Summary.Categories
+	if len(got) != len(want) {
+		t.Fatalf("Categories = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Categories[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	total := 0
+	for _, c := range got {
+		total += c.Count
+	}
+	if total != len(result.Summary.Repositories) {
+		t.Errorf("Categories total = %d, want len(Repositories) = %d", total, len(result.Summary.Repositories))
+	}
+}
+
+// TestDiscoverySummaryMarshalsNilRepositoriesAndCategoriesAsEmptyArrays is a
+// regression test for a real gap: an aggregate loaded from a fleet.json
+// written before Categories existed (or, in principle, before Repositories
+// did) has both fields nil in the Go struct, and re-marshaling it — a fleet
+// render over an old document, say — would otherwise emit JSON null where
+// schema/fleet-1.0.json requires a non-nullable array.
+func TestDiscoverySummaryMarshalsNilRepositoriesAndCategoriesAsEmptyArrays(t *testing.T) {
+	var legacy DiscoverySummary
+	if err := json.Unmarshal([]byte(`{"complete":true,"pagesFetched":1,"visibleRepositories":0,"selectedRepositories":0}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Repositories != nil || legacy.Categories != nil {
+		t.Fatalf("expected both fields nil after unmarshaling a document that predates them, got Repositories=%v Categories=%v", legacy.Repositories, legacy.Categories)
+	}
+
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip map[string]json.RawMessage
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if string(roundTrip["repositories"]) != "[]" {
+		t.Errorf(`marshaled "repositories" = %s, want []`, roundTrip["repositories"])
+	}
+	if string(roundTrip["categories"]) != "[]" {
+		t.Errorf(`marshaled "categories" = %s, want []`, roundTrip["categories"])
+	}
+}
+
 func TestDiscoverOrgReposRepoIncludeExclude(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(reposJSON(t, []githubRepo{

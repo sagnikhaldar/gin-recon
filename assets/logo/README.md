@@ -1,6 +1,6 @@
 # gin-recon logo assets
 
-The mark combines a broken scan ring with a three-branch route graph. The
+The mark combines a broken scan ring with a two-branch route graph. The
 negative-space opening gives the ring a subtle `G` silhouette while the graph
 keeps the meaning tied to route discovery rather than a generic search icon.
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,8 +62,45 @@ type DiscoverySummary struct {
 	Visible      int                     `json:"visibleRepositories"`
 	Selected     int                     `json:"selectedRepositories"`
 	Repositories []RepositoryDisposition `json:"repositories"`
-	Diagnostics  []string                `json:"diagnostics,omitempty"`
-	RateLimit    *RateLimitState         `json:"rateLimit,omitempty"`
+	// Categories is Repositories rolled up by (status, reason) with a count —
+	// the same tally a reader would otherwise have to compute themselves
+	// (e.g. via jq) from the full per-repository list, to answer "were all
+	// visible repositories actually accounted for, and why weren't the rest
+	// selected" without leaving the document. Every count sums to
+	// len(Repositories) (which itself is Visible, plus any "duplicate API
+	// entry" disposition — the one case recorded without incrementing
+	// Visible). Sorted by count descending, then status/reason ascending,
+	// for a stable order across runs with identical input.
+	Categories  []DispositionCount `json:"categories"`
+	Diagnostics []string           `json:"diagnostics,omitempty"`
+	RateLimit   *RateLimitState    `json:"rateLimit,omitempty"`
+}
+
+// MarshalJSON defaults nil Repositories/Categories to []; both are
+// schema/fleet-1.0.json's non-nullable required arrays, and an aggregate
+// loaded from a document that predates one of these fields (ParseAggregate
+// never requires it, only the published schema documents it going forward)
+// would otherwise re-marshal it as JSON null if ever written back out — a
+// fleet render over an old fleet.json, say. See internal/model's package
+// doc comment for the general rationale this project already established.
+func (d DiscoverySummary) MarshalJSON() ([]byte, error) {
+	type alias DiscoverySummary
+	x := alias(d)
+	if x.Repositories == nil {
+		x.Repositories = []RepositoryDisposition{}
+	}
+	if x.Categories == nil {
+		x.Categories = []DispositionCount{}
+	}
+	return json.Marshal(x)
+}
+
+// DispositionCount is one (status, reason) bucket's count within
+// DiscoverySummary.Categories.
+type DispositionCount struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+	Count  int    `json:"count"`
 }
 
 type DiscoveryResult struct {
@@ -213,8 +251,33 @@ func DiscoverOrgRepos(ctx context.Context, opts DiscoverOptions) (*DiscoveryResu
 		return nil, fmt.Errorf("fleet: --org %q: no repositories discovered or selected; inspect discovery filters, repository dispositions, and token access", opts.Org)
 	}
 	result.Summary.Selected = len(targets)
+	result.Summary.Categories = tallyDispositions(result.Summary.Repositories)
 	result.Manifest = &Manifest{Version: 1, Targets: targets}
 	return result, nil
+}
+
+// tallyDispositions rolls up repositories by (status, reason) into
+// DiscoverySummary.Categories — see that field's own doc comment.
+func tallyDispositions(repositories []RepositoryDisposition) []DispositionCount {
+	type key struct{ status, reason string }
+	counts := map[key]int{}
+	for _, d := range repositories {
+		counts[key{d.Status, d.Reason}]++
+	}
+	categories := make([]DispositionCount, 0, len(counts))
+	for k, n := range counts {
+		categories = append(categories, DispositionCount{Status: k.status, Reason: k.reason, Count: n})
+	}
+	sort.Slice(categories, func(i, j int) bool {
+		if categories[i].Count != categories[j].Count {
+			return categories[i].Count > categories[j].Count
+		}
+		if categories[i].Status != categories[j].Status {
+			return categories[i].Status < categories[j].Status
+		}
+		return categories[i].Reason < categories[j].Reason
+	})
+	return categories
 }
 
 func repositorySelection(repo githubRepo, opts DiscoverOptions) (status, reason string) {

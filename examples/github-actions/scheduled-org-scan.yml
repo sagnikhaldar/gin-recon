@@ -15,7 +15,13 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # 300 minutes, not 180: a real org this size (smallcase has 1042
+    # repositories as of 2026-09-07, verified against the live GitHub API)
+    # needs real headroom over the optimistic case — --concurrency 8 gets
+    # comfortably under 180m for typical Go services, but --allow-downloads
+    # makes per-repo time genuinely variable (module resolution over the
+    # network), and this runs unattended on a schedule, not interactively.
+    timeout-minutes: 300
     env:
       GIN_RECON_GITHUB_TOKEN: ${{ secrets.GIN_RECON_GITHUB_TOKEN }}
     steps:
@@ -55,10 +61,11 @@ jobs:
             --allow-downloads \
             --config fleet-config.json \
             --update \
-            --max-repos 500 \
+            --max-repos 2000 \
+            --concurrency 8 \
             --repo-attempts 2 \
             --repo-timeout 10m \
-            --fleet-timeout 170m \
+            --fleet-timeout 290m \
             --progress json \
             --render-html \
             --out .gin-recon/scan \

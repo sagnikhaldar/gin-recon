@@ -117,6 +117,17 @@ type Options struct {
 	// a saved fleet.json rather than something fleet decides for them.
 	RenderHTML bool
 
+	// SuggestAuth is fleet-only: off by default. When set, every
+	// successfully-scanned target also runs `suggest-auth`
+	// (docs/reference.md), and fleet writes fleet-auth-candidates.json — a
+	// single, org-wide ranked authMiddleware candidate list aggregated
+	// across every target, so building a reviewed authMiddleware config for
+	// a whole organization doesn't mean running suggest-auth by hand against
+	// hundreds of repositories one at a time. Never affects classification,
+	// same as suggest-auth itself: still purely candidates for a human/AI
+	// reviewer, never auto-applied.
+	SuggestAuth bool
+
 	// UseTargetConfig is fleet-only (docs/adr/0031-fleet-per-target-config.md):
 	// off by default, the same "capability switch, off unless asked"
 	// posture AllowRemoteTargets/AllowDownloads already use for a trust

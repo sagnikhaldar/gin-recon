@@ -83,6 +83,35 @@ organization has been scanned once.
    from the workflow's own `GITHUB_TOKEN`, which can't see other
    repositories in the org.
 
+### Sizing for a large organization
+
+The defaults in this file (`--max-repos 2000`, `--concurrency 8`,
+`timeout-minutes: 300`) are sized for an organization with on the order of a
+thousand repositories, not fifty - check your own organization's real size
+first (`gh api "search/repositories?q=org:<name>" --jq .total_count`, or
+watch the job summary's `visible repositories` row after your first run) and
+adjust:
+
+- **`--max-repos`**: must exceed your organization's actual repository count,
+  with real margin for growth - not exactly today's count. `--max-repos`
+  lower than the true total doesn't fail loudly; it marks `coverage.complete:
+  false` and, combined with `--fail-on incomplete` below, fails the run every
+  single time, silently-in-effect if nobody reads why. Enumeration itself
+  always continues through every page regardless of the cap, so the job
+  summary's `visible repositories` count is always the true organization
+  size, capped at 10,000 (`--max-repos`'s own hard ceiling) - use it to size
+  the next run's cap.
+- **`--concurrency`**: `1` (the CLI default) processes repositories one at a
+  time - fine for a handful, far too slow for hundreds or thousands within
+  any reasonable job timeout. Set it explicitly; `8` is the highest this
+  version accepts.
+- **`timeout-minutes` / `--fleet-timeout`**: real per-repository time is
+  genuinely variable, especially with `--allow-downloads` (network module
+  resolution per repository), so budget real headroom over an optimistic
+  estimate - this runs unattended on a schedule, not interactively, so a
+  generous timeout costs nothing on a quiet week and saves a failed run on a
+  slow one.
+
 ### Why the cache
 
 `--update` only works when the previous run's `fleet.json` and
