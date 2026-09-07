@@ -1,0 +1,65 @@
+name: gin-recon PR gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write # required for the SARIF upload step below
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      - name: Check out PR base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install gin-recon
+        run: go install github.com/sagnikhaldar/gin-recon/cmd/gin-recon@latest
+
+      - name: Audit base branch
+        # Only the base branch's own source is scanned here; the head branch's
+        # reviewed gin-recon.json is reused for both audits on purpose, so a
+        # rename or removal of a real guard shows up as a `stale-auth-config`
+        # finding on the PR side rather than silently changing what "proven"
+        # means between the two runs.
+        run: |
+          gin-recon audit --src base --config head/gin-recon.json \
+            --format json --out base-results
+
+      - name: Audit PR branch against the base baseline
+        # Exit code 2 means the gate matched (a real new-public or
+        # auth-regressed route) and fails this step, which fails the job.
+        # Exit code 1 means gin-recon itself couldn't run — a config error or
+        # an unreadable baseline, not a policy result.
+        run: |
+          gin-recon audit --src head --config head/gin-recon.json \
+            --baseline base-results/routes.json \
+            --format json,md,openapi,sarif --out results \
+            --fail-on new,regression
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results/results.sarif
+
+      - name: Add route summary to the job
+        if: always()
+        run: |
+          if [ -f results/routes.md ]; then
+            cat results/routes.md >> "$GITHUB_STEP_SUMMARY"
+          fi

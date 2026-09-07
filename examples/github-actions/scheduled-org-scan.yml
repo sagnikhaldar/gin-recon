@@ -1,0 +1,149 @@
+name: gin-recon scheduled org scan
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gin-recon-org-${{ vars.GIN_RECON_ORG || github.repository_owner }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GIN_RECON_GITHUB_TOKEN: ${{ secrets.GIN_RECON_GITHUB_TOKEN }}
+    steps:
+      - name: Check out trusted scanner and configuration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.7"
+          cache: true
+
+      # Build the scanner from this exact reviewed workflow commit. Installing
+      # @latest would make a scheduled run non-reproducible.
+      - name: Build the pinned scanner
+        run: go build -trimpath -o "$RUNNER_TEMP/gin-recon" ./cmd/gin-recon
+
+      - name: Restore previous validated scan state
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            .gin-recon/scan
+            .gin-recon/scan-html
+          key: gin-recon-org-scan-${{ vars.GIN_RECON_ORG }}-${{ github.run_id }}
+          restore-keys: |
+            gin-recon-org-scan-${{ vars.GIN_RECON_ORG }}-
+
+      - name: Scan the organization
+        id: scan
+        shell: bash
+        run: |
+          set +e
+          "$RUNNER_TEMP/gin-recon" fleet --org "${{ vars.GIN_RECON_ORG }}" \
+            --allow-remote-targets \
+            --allow-downloads \
+            --config fleet-config.json \
+            --update \
+            --max-repos 500 \
+            --repo-attempts 2 \
+            --repo-timeout 10m \
+            --fleet-timeout 170m \
+            --progress json \
+            --render-html \
+            --out .gin-recon/scan \
+            --fail-on incomplete \
+            2> >(tee scan-progress.log >&2)
+          scan_exit_code=$?
+          set -e
+          echo "exit_code=$scan_exit_code" >> "$GITHUB_OUTPUT"
+
+      # Only exit 0/2 can have reached fleet.json's final atomic commit. Bound
+      # and validate the state before it is eligible for a future --update.
+      - name: Validate resumable state
+        id: state
+        if: always()
+        shell: bash
+        env:
+          SCAN_EXIT_CODE: ${{ steps.scan.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          [[ "$SCAN_EXIT_CODE" =~ ^(0|2)$ ]] || exit 0
+          test -f .gin-recon/scan/fleet.json
+          test -f .gin-recon/scan-html/fleet.html
+          test -z "$(find .gin-recon/scan .gin-recon/scan-html -type l -print -quit)"
+          file_count=$(find .gin-recon/scan .gin-recon/scan-html -type f -print | wc -l)
+          byte_count=$(du -sb .gin-recon/scan .gin-recon/scan-html | awk '{sum += $1} END {print sum}')
+          (( file_count <= 100000 ))
+          (( byte_count <= 2147483648 ))
+          jq -e '
+            .schemaVersion == "1.0" and
+            .kind == "fleet" and
+            .tool == "gin-recon" and
+            (.targets | type == "array") and
+            (.coverage.complete | type == "boolean")
+          ' .gin-recon/scan/fleet.json >/dev/null
+          if [[ -e .gin-recon/scan/checkpoint.json ]]; then
+            jq -e '.version == 2 and (.completed | type == "object")' \
+              .gin-recon/scan/checkpoint.json >/dev/null
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save validated state for the next run
+        if: always() && steps.state.outputs.ready == 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            .gin-recon/scan
+            .gin-recon/scan-html
+          key: gin-recon-org-scan-${{ vars.GIN_RECON_ORG }}-${{ github.run_id }}
+
+      - name: Upload complete review bundle
+        if: always() && steps.state.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gin-recon-org-scan-${{ github.run_id }}
+          path: |
+            .gin-recon/scan
+            .gin-recon/scan-html
+            scan-progress.log
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+          compression-level: 6
+
+      - name: Add scan summary to the job
+        if: always() && steps.state.outputs.ready == 'true'
+        run: |
+          jq -r '
+            "| metric | count |",
+            "| --- | --- |",
+            "| visible repositories | \(.scope.discovery.visibleRepositories // 0) |",
+            "| targets selected | \(.targets | length) |",
+            "| reused | \(.update.reused // 0) |",
+            "| proven routes | \(.totals.proven // 0) |",
+            "| public routes | \(.totals.public // 0) |",
+            "| unknown routes | \(.totals.unknown // 0) |",
+            "| coverage complete | \(.coverage.complete) |"
+          ' .gin-recon/scan/fleet.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce scanner result
+        if: always()
+        shell: bash
+        env:
+          SCAN_EXIT_CODE: ${{ steps.scan.outputs.exit_code }}
+          STATE_READY: ${{ steps.state.outputs.ready }}
+        run: |
+          [[ "$STATE_READY" == "true" ]] || exit 1
+          [[ "$SCAN_EXIT_CODE" == "0" ]] || exit "$SCAN_EXIT_CODE"
