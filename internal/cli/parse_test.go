@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustParse(t *testing.T, args ...string) *Options {
@@ -50,7 +51,7 @@ func TestParseDefaultsForInventory(t *testing.T) {
 }
 
 // TestParseTracksExplicitlySetFlags is the regression for the precedence
-// rule docs/configuration-contract.md requires ("Scalar CLI values override
+// rule docs/reference.md requires ("Scalar CLI values override
 // configuration"): a caller merging config file values on top of parsed
 // Options needs to distinguish "the user actually passed --goos" from "GOOS
 // just holds its runtime.GOOS default," which the resolved value alone
@@ -107,7 +108,7 @@ func TestParseRejectsInapplicableOptionForCommand(t *testing.T) {
 }
 
 // TestParseSuggestAuthAcceptsOutAndForce is the regression for a real
-// contract/implementation mismatch: docs/cli-contract.md states "suggest-auth
+// contract/implementation mismatch: docs/reference.md states "suggest-auth
 // writes JSON to stdout unless --out is supplied", but parseScanCommand only
 // ever registered --out/--force for inventory and audit, so --out silently
 // failed with "flag provided but not defined" for suggest-auth despite the
@@ -141,6 +142,15 @@ func TestParseSchemaAcceptsKindConfig(t *testing.T) {
 	opts := mustParse(t, "schema", "--kind=config")
 	if opts.SchemaKind != SchemaKindConfig {
 		t.Errorf("SchemaKind = %q, want %q", opts.SchemaKind, SchemaKindConfig)
+	}
+}
+
+func TestParseSchemaAcceptsFleetKinds(t *testing.T) {
+	for _, kind := range []SchemaKind{SchemaKindFleet, SchemaKindFleetDelta} {
+		opts := mustParse(t, "schema", "--kind="+string(kind))
+		if opts.SchemaKind != kind {
+			t.Errorf("SchemaKind = %q, want %q", opts.SchemaKind, kind)
+		}
 	}
 }
 
@@ -207,6 +217,23 @@ func TestParseFleetDefaults(t *testing.T) {
 	if len(opts.Formats) != 1 || opts.Formats[0] != FormatJSON {
 		t.Errorf("Formats = %v, want [json]", opts.Formats)
 	}
+	if opts.RepoAttempts != 2 || opts.RepoTimeout != 10*time.Minute || opts.FleetTimeout != 3*time.Hour {
+		t.Errorf("retry/timeouts = %d/%s/%s, want 2/10m/3h", opts.RepoAttempts, opts.RepoTimeout, opts.FleetTimeout)
+	}
+	if opts.ProgressMode != "plain" {
+		t.Errorf("ProgressMode = %q, want plain", opts.ProgressMode)
+	}
+}
+
+func TestParseFleetRetryAndTimeoutOptions(t *testing.T) {
+	opts := mustParse(t, "fleet", "--targets=/tmp/targets.json", "--repo-attempts=3", "--repo-timeout=4m", "--fleet-timeout=2h", "--progress=json")
+	if opts.RepoAttempts != 3 || opts.RepoTimeout != 4*time.Minute || opts.FleetTimeout != 2*time.Hour {
+		t.Fatalf("retry/timeouts = %d/%s/%s", opts.RepoAttempts, opts.RepoTimeout, opts.FleetTimeout)
+	}
+	if opts.ProgressMode != "json" {
+		t.Fatalf("ProgressMode = %q, want json", opts.ProgressMode)
+	}
+	expectParseError(t, "invalid duration", "fleet", "--targets=/tmp/targets.json", "--fleet-timeout=forever")
 }
 
 func TestParseFleetRejectsScanOnlyOption(t *testing.T) {

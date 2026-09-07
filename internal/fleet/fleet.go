@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Status classifies one target's outcome. A target that isn't a Go module at
@@ -23,21 +24,93 @@ import (
 type Status string
 
 const (
-	StatusOK          Status = "ok"
-	StatusNotGoModule Status = "not-go-module"
-	StatusFailed      Status = "failed"
+	StatusOK           Status = "ok"
+	StatusNotGoModule  Status = "not-go-module"
+	StatusInconclusive Status = "inconclusive"
+	StatusFailed       Status = "failed"
 )
+
+// Artifact records the integrity metadata required before a completed result
+// may be reused from checkpoint or update state.
+type Artifact struct {
+	Tree   string `json:"tree,omitempty"`
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+// ModuleKind separates repositories that are not Gin applications from Gin
+// dependencies where no mounted routes were discovered. A zero-route Gin
+// library is not silently counted as an application with perfect coverage.
+type ModuleKind string
+
+const (
+	ModuleGo             ModuleKind = "go-module"
+	ModuleGinNoRoutes    ModuleKind = "gin-module-no-routes"
+	ModuleGinApplication ModuleKind = "gin-application"
+)
+
+// ModuleResult is one independently analyzed Go module within a repository.
+// ID is stable for the module's repository-relative path and is safe for use
+// in output paths; Path remains the human-readable repository-relative path.
+type ModuleResult struct {
+	ID         string     `json:"id"`
+	Path       string     `json:"path"`
+	ModulePath string     `json:"modulePath"`
+	Kind       ModuleKind `json:"kind"`
+	Status     Status     `json:"status"`
+	Error      string     `json:"error,omitempty"`
+	Complete   bool       `json:"complete"`
+	Report     string     `json:"report,omitempty"`
+	APIHTML    string     `json:"apiHtml,omitempty"`
+	Routes     int        `json:"routes,omitempty"`
+	Proven     int        `json:"proven,omitempty"`
+	Public     int        `json:"public,omitempty"`
+	Unknown    int        `json:"unknown,omitempty"`
+	Artifacts  []Artifact `json:"artifacts,omitempty"`
+}
+
+type RepositoryInventory struct {
+	Kind        RepositoryKind `json:"kind"`
+	Complete    bool           `json:"complete"`
+	GoFiles     int            `json:"goFiles"`
+	Modules     int            `json:"modules"`
+	Directories int            `json:"directories"`
+	Files       int            `json:"files"`
+	Bytes       int64          `json:"bytes"`
+	HasGoWork   bool           `json:"hasGoWork,omitempty"`
+}
+
+type RepositoryProvenance struct {
+	ID            int64  `json:"id,omitempty"`
+	FullName      string `json:"fullName,omitempty"`
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	PushedAt      string `json:"pushedAt,omitempty"`
+	Private       bool   `json:"private,omitempty"`
+	Visibility    string `json:"visibility,omitempty"`
+	Archived      bool   `json:"archived,omitempty"`
+	Fork          bool   `json:"fork,omitempty"`
+	ScannedCommit string `json:"scannedCommit,omitempty"`
+}
 
 // TargetResult is one target's outcome in the aggregate.
 type TargetResult struct {
-	Name     string `json:"name"`
-	Src      string `json:"src"`
-	GitURL   string `json:"gitUrl,omitempty"` // the manifest's original git.url, for a remote target only — Src is its (already-removed) clone path, not useful to display
-	Status   Status `json:"status"`
-	Error    string `json:"error,omitempty"`
-	Complete bool   `json:"complete"`
-	Report   string `json:"report,omitempty"`  // path to this target's own routes.json, relative to --out (the raw directory)
-	APIHTML  string `json:"apiHtml,omitempty"` // path to this target's own api.html, relative to --out-html (docs/adr/0023-fleet-raw-rendered-split.md) — set only when this target's own --format included openapi
+	Name              string                `json:"name"`
+	Src               string                `json:"src"`
+	GitURL            string                `json:"gitUrl,omitempty"` // the manifest's original git.url, for a remote target only — Src is its (already-removed) clone path, not useful to display
+	Status            Status                `json:"status"`
+	Error             string                `json:"error,omitempty"`
+	Complete          bool                  `json:"complete"`
+	Report            string                `json:"report,omitempty"`  // path to this target's own routes.json, relative to --out (the raw directory)
+	APIHTML           string                `json:"apiHtml,omitempty"` // path to this target's own api.html, relative to --out-html (docs/adr/0023-fleet-raw-rendered-split.md) — set only when this target's own --format included openapi
+	Inventory         RepositoryInventory   `json:"inventory"`
+	Repository        *RepositoryProvenance `json:"repository,omitempty"`
+	Modules           []ModuleResult        `json:"modules,omitempty"`
+	Artifacts         []Artifact            `json:"artifacts,omitempty"`
+	SourceFingerprint string                `json:"sourceFingerprint,omitempty"`
+	Attempts          int                   `json:"attempts,omitempty"`
+	DurationMS        int64                 `json:"durationMs,omitempty"`
 
 	// Routes/Proven/Public/Unknown are this target's own routes.json
 	// summary, copied up so fleet.html can show each target's assurance
@@ -101,17 +174,20 @@ type Scope struct {
 	// than being trusted on its own (docs/adr/0030-fleet-html-auth-config-visibility.md).
 	// Left untouched by render, which never redoes discovery and so has no
 	// way to learn this about a run it didn't perform.
-	DiscoveryComplete      bool `json:"discoveryComplete,omitempty"`
-	DiscoveryCompleteKnown bool `json:"discoveryCompleteKnown,omitempty"`
+	DiscoveryComplete      bool              `json:"discoveryComplete,omitempty"`
+	DiscoveryCompleteKnown bool              `json:"discoveryCompleteKnown,omitempty"`
+	Discovery              *DiscoverySummary `json:"discovery,omitempty"`
 }
 
 // Aggregate is the fleet.json shape.
 type Aggregate struct {
-	Tool        string         `json:"tool"`
-	ToolVersion string         `json:"toolVersion"`
-	Targets     []TargetResult `json:"targets"`
-	Scope       *Scope         `json:"scope,omitempty"`
-	Coverage    struct {
+	SchemaVersion string         `json:"schemaVersion"`
+	Kind          string         `json:"kind"`
+	Tool          string         `json:"tool"`
+	ToolVersion   string         `json:"toolVersion"`
+	Targets       []TargetResult `json:"targets"`
+	Scope         *Scope         `json:"scope,omitempty"`
+	Coverage      struct {
 		Complete bool `json:"complete"`
 	} `json:"coverage"`
 	Resume struct {
@@ -130,6 +206,26 @@ type Aggregate struct {
 		Requested bool `json:"requested"`
 		Reused    int  `json:"reused"`
 	} `json:"update"`
+
+	// ConfigHash/Formats are this run's own identity (the same fields
+	// --resume's checkpoint already computes, checkpoint.go's identity
+	// struct) — persisted here too, unlike the checkpoint itself (deleted
+	// once a run completes), so a *later* --update run has something to
+	// compare its own current identity against. Before this field existed,
+	// --update could only ever detect a toolVersion change; a --config or
+	// --format change between two runs was invisible to it, silently
+	// reusing a target's classification under what could by then be a
+	// stale auth config.
+	ConfigHash       string   `json:"configHash"`
+	Formats          []string `json:"formats"`
+	ScopeFingerprint string   `json:"scopeFingerprint"`
+	ScanFingerprint  string   `json:"scanFingerprint"`
+	TargetConfigHash string   `json:"targetConfigHash,omitempty"`
+	AllowDownloads   bool     `json:"allowDownloads"`
+	UseTargetConfig  bool     `json:"useTargetConfig"`
+	RenderHTML       bool     `json:"renderHtml"`
+	RepoAttempts     int      `json:"repoAttempts"`
+	RepoTimeout      string   `json:"repoTimeout"`
 	// Totals sums every target's own Routes/Proven/Public/Unknown — the
 	// fleet-wide evidence rollup fleet.html's metrics row shows. Computed
 	// once after every target finishes (Run), not recomputed by a later
@@ -217,6 +313,9 @@ type RunOptions struct {
 	// writes from every target's own goroutine — guarded by the same mu
 	// that already serializes checkpoint saves below.
 	Progress io.Writer
+	// ProgressFormat is "plain" (default) or "json". Callers disable
+	// progress by leaving Progress nil.
+	ProgressFormat string
 
 	// UseTargetConfig mirrors --use-target-config
 	// (docs/adr/0031-fleet-per-target-config.md): when true, a target whose
@@ -238,6 +337,8 @@ type RunOptions struct {
 	// operator running fleet controls directly, a strictly stronger trust
 	// position, and needs no commit/PR/merge into the target's own repo.
 	TargetConfigDir string
+	RepoAttempts    int
+	RepoTimeout     time.Duration
 
 	// Preseed is fleet --org --update only (docs/adr/0039-fleet-org-update.md):
 	// already-known results, by target name, for targets cmd/gin-recon has
@@ -297,7 +398,13 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	if opts.Concurrency < 1 {
 		opts.Concurrency = 1
 	}
-	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
+	if opts.RepoAttempts < 1 {
+		opts.RepoAttempts = 1
+	}
+	if opts.RepoTimeout <= 0 {
+		opts.RepoTimeout = 10 * time.Minute
+	}
+	if err := ensureDirectoryNoSymlink(opts.OutDir, 0o755); err != nil {
 		return nil, fmt.Errorf("fleet: creating --out: %w", err)
 	}
 
@@ -305,10 +412,21 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	if err != nil {
 		return nil, err
 	}
+	targetConfigHash, err := hashConfigDirectory(opts.TargetConfigDir)
+	if err != nil {
+		return nil, err
+	}
 	want := identity{
-		ManifestHash: hashBytes(opts.ManifestData),
-		ConfigHash:   configHash,
-		Formats:      append([]string{}, opts.Formats...),
+		ManifestHash:     hashBytes(opts.ManifestData),
+		ConfigHash:       configHash,
+		Formats:          append([]string{}, opts.Formats...),
+		ToolVersion:      opts.ToolVersion,
+		TargetConfigHash: targetConfigHash,
+		AllowDownloads:   opts.AllowDownloads,
+		UseTargetConfig:  opts.UseTargetConfig,
+		RenderHTML:       opts.HTMLOutDir != "",
+		RepoAttempts:     opts.RepoAttempts,
+		RepoTimeout:      opts.RepoTimeout.String(),
 	}
 
 	var cp *checkpoint
@@ -318,7 +436,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 			return nil, err
 		}
 	} else {
-		cp = &checkpoint{Version: 1, Identity: want, Complete: map[string]TargetResult{}}
+		cp = &checkpoint{Version: 2, Identity: want, Complete: map[string]TargetResult{}}
 	}
 
 	manifestDir := filepath.Dir(opts.ManifestPath)
@@ -331,6 +449,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex // guards cp, saveCheckpoint, and completed/opts.Progress below
 	completed := 0
+	var checkpointErr error
 
 	// reportProgress prints one line for a target the moment it's known —
 	// reused from a checkpoint or --update comparison, or just finished —
@@ -345,6 +464,23 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	reportProgress := func(t Target, res TargetResult, reused string) {
 		completed++
 		if opts.Progress == nil {
+			return
+		}
+		if opts.ProgressFormat == "json" {
+			line := struct {
+				Kind       string `json:"kind"`
+				Current    int    `json:"current"`
+				Total      int    `json:"total"`
+				Target     string `json:"target"`
+				Status     Status `json:"status"`
+				Reuse      string `json:"reuse,omitempty"`
+				Routes     int    `json:"routes"`
+				Complete   bool   `json:"complete"`
+				Attempts   int    `json:"attempts,omitempty"`
+				DurationMS int64  `json:"durationMs,omitempty"`
+			}{"fleet-progress", completed, len(targets), t.Name, res.Status, reused, res.Routes, res.Complete, res.Attempts, res.DurationMS}
+			data, _ := json.Marshal(line)
+			fmt.Fprintln(opts.Progress, string(data))
 			return
 		}
 		suffix := ""
@@ -365,6 +501,39 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 			reuseReason = "unchanged"
 		}
 		if ok {
+			currentFingerprint := targetFingerprint(t)
+			var fingerprintErr error
+			if done.Name != t.Name {
+				fingerprintErr = fmt.Errorf("saved result name %q does not match target %q", done.Name, t.Name)
+			}
+			if t.Git == nil && fingerprintErr == nil {
+				src, resolveErr := resolveLocalSource(manifestDir, t.Src)
+				if resolveErr != nil {
+					fingerprintErr = resolveErr
+				}
+				var currentDiscovery repositoryDiscovery
+				if fingerprintErr == nil {
+					currentDiscovery, fingerprintErr = discoverRepositoryContext(ctx, src)
+				}
+				if fingerprintErr == nil {
+					currentFingerprint = resolvedSourceFingerprint(t, currentDiscovery.Fingerprint)
+				}
+			}
+			if fingerprintErr != nil {
+				if opts.Stderr != nil {
+					fmt.Fprintf(opts.Stderr, "gin-recon: fleet: target %s source identity could not be verified (%v); rescanning\n", t.Name, fingerprintErr)
+				}
+				delete(cp.Complete, t.Name)
+				ok = false
+			} else if err := reusableTarget(opts.OutDir, opts.HTMLOutDir, done, currentFingerprint, opts.Formats, opts.HTMLOutDir != ""); err != nil {
+				if opts.Stderr != nil {
+					fmt.Fprintf(opts.Stderr, "gin-recon: fleet: target %s saved result is not reusable (%v); rescanning\n", t.Name, err)
+				}
+				delete(cp.Complete, t.Name)
+				ok = false
+			}
+		}
+		if ok {
 			reportProgress(t, done, reuseReason)
 		}
 		mu.Unlock()
@@ -378,8 +547,23 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 			continue
 		}
 		i, t := i, t
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			result := TargetResult{
+				Name: t.Name, Src: t.Src, Status: StatusInconclusive, Complete: false,
+				SourceFingerprint: targetFingerprint(t), Error: fmt.Sprintf("fleet deadline reached before target started: %v", ctx.Err()),
+			}
+			if t.Git != nil {
+				result.GitURL = t.Git.URL
+			}
+			results[i] = result
+			mu.Lock()
+			reportProgress(t, result, "")
+			mu.Unlock()
+			continue
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -391,23 +575,37 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 			reportProgress(t, res, "")
 			mu.Unlock()
 
-			if res.Status == StatusOK || res.Status == StatusNotGoModule {
+			if res.Complete && (res.Status == StatusOK || res.Status == StatusNotGoModule) {
 				mu.Lock()
 				cp.Complete[t.Name] = res
 				saveErr := saveCheckpoint(opts.OutDir, cp)
-				mu.Unlock()
-				if saveErr != nil && opts.Stderr != nil {
-					fmt.Fprintf(opts.Stderr, "gin-recon: fleet: %v\n", saveErr)
+				if saveErr != nil && checkpointErr == nil {
+					checkpointErr = saveErr
 				}
+				mu.Unlock()
 			}
 		}()
 	}
 	wg.Wait()
+	if checkpointErr != nil {
+		return nil, checkpointErr
+	}
 
-	agg := &Aggregate{Tool: "gin-recon", ToolVersion: opts.ToolVersion, Targets: results}
+	scanIdentity := want
+	scanIdentity.ManifestHash = ""
+	identityData, _ := json.Marshal(scanIdentity)
+	agg := &Aggregate{
+		SchemaVersion: "1.0", Kind: "fleet", Tool: "gin-recon",
+		ToolVersion: opts.ToolVersion, Targets: results,
+		ConfigHash: want.ConfigHash, Formats: want.Formats,
+		ScanFingerprint:  hashBytes(identityData),
+		TargetConfigHash: want.TargetConfigHash, AllowDownloads: want.AllowDownloads,
+		UseTargetConfig: want.UseTargetConfig, RenderHTML: want.RenderHTML,
+		RepoAttempts: want.RepoAttempts, RepoTimeout: want.RepoTimeout,
+	}
 	agg.Coverage.Complete = true
 	for _, r := range results {
-		if r.Status == StatusFailed || (r.Status == StatusOK && !r.Complete) {
+		if r.Status == StatusFailed || r.Status == StatusInconclusive || !r.Complete {
 			agg.Coverage.Complete = false
 		}
 		agg.Totals.Routes += r.Routes
@@ -421,14 +619,28 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	agg.Update.Requested = opts.Preseed != nil
 	agg.Update.Reused = updateReused
 
-	if agg.Coverage.Complete {
-		if err := removeCheckpoint(opts.OutDir); err != nil && opts.Stderr != nil {
-			fmt.Fprintf(opts.Stderr, "gin-recon: fleet: %v\n", err)
-		}
-	}
-
 	sortByManifestOrder(agg.Targets, targets)
 	return agg, nil
+}
+
+// RefreshScanFingerprint re-derives the aggregate's scan identity after an
+// offline render changes identity-bearing output choices such as Formats or
+// RenderHTML. Manifest membership is intentionally absent, matching Run's
+// fingerprint: scope compatibility is checked separately.
+func RefreshScanFingerprint(agg *Aggregate) {
+	scanIdentity := identity{
+		ConfigHash:       agg.ConfigHash,
+		Formats:          append([]string{}, agg.Formats...),
+		ToolVersion:      agg.ToolVersion,
+		TargetConfigHash: agg.TargetConfigHash,
+		AllowDownloads:   agg.AllowDownloads,
+		UseTargetConfig:  agg.UseTargetConfig,
+		RenderHTML:       agg.RenderHTML,
+		RepoAttempts:     agg.RepoAttempts,
+		RepoTimeout:      agg.RepoTimeout,
+	}
+	identityData, _ := json.Marshal(scanIdentity)
+	agg.ScanFingerprint = hashBytes(identityData)
 }
 
 func sortByManifestOrder(results []TargetResult, targets []Target) {
@@ -446,9 +658,50 @@ func sortByManifestOrder(results []TargetResult, targets []Target) {
 // into internal/analyzer anywhere in this package, per ADR 0018's isolation
 // decision.
 func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Target) TargetResult {
+	started := time.Now()
+	timeout := opts.RepoTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+	targetContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	attempts := opts.RepoAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	var result TargetResult
+	for attempt := 1; attempt <= attempts; attempt++ {
+		result = runOneTargetAttempt(targetContext, opts, manifestDir, t)
+		result.Attempts = attempt
+		if result.Status != StatusFailed || t.Git == nil || attempt == attempts || targetContext.Err() != nil {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt) * 200 * time.Millisecond)
+		select {
+		case <-targetContext.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+	if targetContext.Err() != nil && result.Status == StatusFailed {
+		result.Error = fmt.Sprintf("repository deadline exceeded after %s: %s", timeout, result.Error)
+	}
+	result.DurationMS = time.Since(started).Milliseconds()
+	return result
+}
+
+func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir string, t Target) TargetResult {
 	res := TargetResult{Name: t.Name}
 	if t.Git != nil {
 		res.GitURL = t.Git.URL
+	}
+	if t.GitHub != nil {
+		res.Repository = &RepositoryProvenance{
+			ID: t.GitHub.ID, FullName: t.GitHub.FullName,
+			DefaultBranch: t.GitHub.DefaultBranch, PushedAt: t.GitHub.PushedAt,
+			Private: t.GitHub.Private, Visibility: t.GitHub.Visibility,
+			Archived: t.GitHub.Archived, Fork: t.GitHub.Fork,
+		}
 	}
 
 	src, cleanup, err := resolveSource(ctx, opts, manifestDir, t)
@@ -461,18 +714,80 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 		defer cleanup()
 	}
 	res.Src = src
+	if t.Git != nil {
+		if res.Repository == nil {
+			res.Repository = &RepositoryProvenance{}
+		}
+		res.Repository.Ref = t.Git.Ref
+		commit, commitErr := sourceCommit(ctx, src)
+		if commitErr != nil && opts.Clone == nil {
+			res.Status = StatusFailed
+			res.Error = fmt.Sprintf("resolving checked-out commit: %v", commitErr)
+			return res
+		}
+		if commitErr == nil {
+			res.Repository.ScannedCommit = commit
+		}
+	}
 
-	if _, err := os.Stat(filepath.Join(src, "go.mod")); err != nil {
+	discovery, err := discoverRepositoryContext(ctx, src)
+	if err != nil {
+		res.Status = StatusInconclusive
+		res.Error = err.Error()
+		res.Complete = false
+		return res
+	}
+	res.SourceFingerprint = resolvedSourceFingerprint(t, discovery.Fingerprint)
+	res.Inventory = RepositoryInventory{
+		Kind: discovery.Kind, Complete: true, GoFiles: discovery.GoFiles,
+		Modules: len(discovery.Modules), Directories: discovery.Directories,
+		Files: discovery.Files, Bytes: discovery.Bytes, HasGoWork: discovery.HasGoWork,
+	}
+	if len(discovery.Modules) == 0 {
 		res.Status = StatusNotGoModule
 		res.Complete = true
 		return res
 	}
 
-	targetOut := filepath.Join(opts.OutDir, "targets", t.Name)
-	if err := os.MkdirAll(targetOut, 0o755); err != nil {
+	targetOut, err := SafeTargetDir(opts.OutDir, t.Name)
+	if err != nil {
 		res.Status = StatusFailed
 		res.Error = err.Error()
 		return res
+	}
+	if err := ensureDirectoryNoSymlink(filepath.Dir(targetOut), 0o755); err != nil {
+		res.Status = StatusFailed
+		res.Error = err.Error()
+		return res
+	}
+	stagedRaw, err := os.MkdirTemp(filepath.Dir(targetOut), "."+t.Name+"-stage-*")
+	if err != nil {
+		res.Status = StatusFailed
+		res.Error = fmt.Sprintf("creating target staging directory: %v", err)
+		return res
+	}
+	defer os.RemoveAll(stagedRaw)
+
+	var targetHTMLOut, stagedHTML string
+	if opts.HTMLOutDir != "" {
+		targetHTMLOut, err = SafeTargetDir(opts.HTMLOutDir, t.Name)
+		if err != nil {
+			res.Status = StatusFailed
+			res.Error = err.Error()
+			return res
+		}
+		if err := ensureDirectoryNoSymlink(filepath.Dir(targetHTMLOut), 0o755); err != nil {
+			res.Status = StatusFailed
+			res.Error = err.Error()
+			return res
+		}
+		stagedHTML, err = os.MkdirTemp(filepath.Dir(targetHTMLOut), "."+t.Name+"-stage-*")
+		if err != nil {
+			res.Status = StatusFailed
+			res.Error = fmt.Sprintf("creating target HTML staging directory: %v", err)
+			return res
+		}
+		defer os.RemoveAll(stagedHTML)
 	}
 
 	targetConfigPath := opts.ConfigPath
@@ -493,9 +808,163 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 			}
 		}
 	}
+	if res.TargetConfig {
+		frozenConfig, cleanupConfig, err := freezeTargetConfigFile(targetConfigPath)
+		if err != nil {
+			res.Status = StatusFailed
+			res.Error = fmt.Sprintf("freezing repository-provided target config: %v", err)
+			return res
+		}
+		defer cleanupConfig()
+		targetConfigPath = frozenConfig
+	}
 
+	res.Status = StatusOK
+	res.Complete = true
+	for _, module := range discovery.Modules {
+		moduleOut := stagedRaw
+		moduleHTMLOut := stagedHTML
+		if len(discovery.Modules) > 1 {
+			moduleOut = filepath.Join(stagedRaw, "modules", module.ID)
+			if stagedHTML != "" {
+				moduleHTMLOut = filepath.Join(stagedHTML, "modules", module.ID)
+			}
+		}
+		mr := runModule(ctx, opts, t, module, moduleOut, moduleHTMLOut, targetConfigPath, len(discovery.Modules) > 1)
+		res.Modules = append(res.Modules, mr)
+		res.Routes += mr.Routes
+		res.Proven += mr.Proven
+		res.Public += mr.Public
+		res.Unknown += mr.Unknown
+		if mr.Status != StatusOK {
+			res.Status = StatusFailed
+			res.Complete = false
+			if res.Error == "" {
+				res.Error = fmt.Sprintf("module %s: %s", mr.Path, mr.Error)
+			}
+		} else if !mr.Complete {
+			res.Complete = false
+		}
+	}
+	if res.Status != StatusOK {
+		for i := range res.Modules {
+			res.Modules[i].Report = ""
+			res.Modules[i].APIHTML = ""
+			res.Modules[i].Artifacts = nil
+		}
+		return res
+	}
+	if t.Git == nil {
+		after, err := discoverRepositoryContext(ctx, src)
+		if err != nil || after.Fingerprint != discovery.Fingerprint {
+			res.Status = StatusInconclusive
+			res.Complete = false
+			if err != nil {
+				res.Error = fmt.Sprintf("verifying source stability after analysis: %v", err)
+			} else {
+				res.Error = "local source changed while analysis was running; staged evidence was not published"
+			}
+			for i := range res.Modules {
+				res.Modules[i].Report = ""
+				res.Modules[i].APIHTML = ""
+			}
+			return res
+		}
+	}
+	clearEvidence := func() {
+		res.Artifacts = nil
+		res.Report = ""
+		res.APIHTML = ""
+		for i := range res.Modules {
+			res.Modules[i].Artifacts = nil
+			res.Modules[i].Report = ""
+			res.Modules[i].APIHTML = ""
+		}
+	}
 	formats := formatsWithJSON(opts.Formats)
-	args := []string{"audit", "--src", src, "--format", strings.Join(formats, ","), "--out", targetOut, "--force"}
+	for i := range res.Modules {
+		stagedModuleDir := ""
+		if len(res.Modules) > 1 {
+			stagedModuleDir = filepath.Join("modules", res.Modules[i].ID)
+		}
+		for _, name := range expectedRawArtifacts(formats) {
+			stagedRel := filepath.Join(stagedModuleDir, name)
+			finalRel := filepath.Join(filepath.Dir(res.Modules[i].Report), name)
+			artifact, err := artifactForStagedTree("", stagedRaw, stagedRel, finalRel)
+			if err != nil {
+				res.Status = StatusFailed
+				res.Complete = false
+				res.Error = fmt.Sprintf("validating staged artifact %s: %v", name, err)
+				clearEvidence()
+				return res
+			}
+			res.Modules[i].Artifacts = append(res.Modules[i].Artifacts, artifact)
+			res.Artifacts = append(res.Artifacts, artifact)
+		}
+		if res.Modules[i].APIHTML != "" {
+			stagedRel := filepath.Join(stagedModuleDir, "api.html")
+			artifact, err := artifactForStagedTree("html", stagedHTML, stagedRel, res.Modules[i].APIHTML)
+			if err != nil {
+				res.Status = StatusFailed
+				res.Complete = false
+				res.Error = fmt.Sprintf("validating staged HTML artifact: %v", err)
+				clearEvidence()
+				return res
+			}
+			res.Modules[i].Artifacts = append(res.Modules[i].Artifacts, artifact)
+			res.Artifacts = append(res.Artifacts, artifact)
+		}
+	}
+	publications := []directoryPublication{{staged: stagedRaw, destination: targetOut}}
+	if stagedHTML != "" {
+		publications = append(publications, directoryPublication{staged: stagedHTML, destination: targetHTMLOut})
+	}
+	if err := publishDirectories(publications...); err != nil {
+		res.Status = StatusFailed
+		res.Complete = false
+		res.Error = fmt.Sprintf("publishing target artifacts: %v", err)
+		clearEvidence()
+		return res
+	}
+	// Publication moved both staging trees; deferred cleanup becomes a no-op.
+	stagedRaw = ""
+	if stagedHTML != "" {
+		stagedHTML = ""
+	}
+	if len(res.Modules) == 1 {
+		res.Report = res.Modules[0].Report
+		res.APIHTML = res.Modules[0].APIHTML
+	}
+	return res
+}
+
+func freezeTargetConfigFile(path string) (string, func(), error) {
+	data, err := ReadBoundedFile(path)
+	if err != nil {
+		return "", func() {}, err
+	}
+	dir, err := os.MkdirTemp("", "gin-recon-target-config-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	destination := filepath.Join(dir, "config"+filepath.Ext(path))
+	if err := WriteFileAtomic(destination, data, 0o600); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return destination, cleanup, nil
+}
+
+func runModule(ctx context.Context, opts RunOptions, target Target, module moduleRoot, moduleOut, moduleHTMLOut, targetConfigPath string, nestedOutput bool) ModuleResult {
+	res := ModuleResult{ID: module.ID, Path: module.RelPath, ModulePath: module.ModulePath, Kind: ModuleGo}
+	if err := ensureDirectoryNoSymlink(moduleOut, 0o755); err != nil {
+		res.Status = StatusFailed
+		res.Error = err.Error()
+		return res
+	}
+	formats := formatsWithJSON(opts.Formats)
+	args := []string{"audit", "--src", module.AbsPath, "--format", strings.Join(formats, ","), "--out", moduleOut, "--force"}
 	if targetConfigPath != "" {
 		args = append(args, "--config", targetConfigPath)
 	}
@@ -517,8 +986,8 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 		return res
 	}
 
-	reportPath := filepath.Join(targetOut, "routes.json")
-	data, err := os.ReadFile(reportPath)
+	reportPath := filepath.Join(moduleOut, "routes.json")
+	data, err := ReadBoundedFile(reportPath)
 	if err != nil {
 		res.Status = StatusFailed
 		res.Error = fmt.Sprintf("audit exited 0 but %s could not be read: %v", reportPath, err)
@@ -544,35 +1013,75 @@ func runOneTarget(ctx context.Context, opts RunOptions, manifestDir string, t Ta
 
 	res.Status = StatusOK
 	res.Complete = decoded.ScanCoverage.Complete
-	res.Report = filepath.Join("targets", t.Name, "routes.json")
+	if nestedOutput {
+		res.Report = filepath.Join("targets", target.Name, "modules", module.ID, "routes.json")
+	} else {
+		res.Report = filepath.Join("targets", target.Name, "routes.json")
+	}
 	if decoded.Summary != nil {
 		res.Routes = decoded.Summary.TotalRoutes
 		res.Proven = decoded.Summary.ProvenByConfirmedShape + decoded.Summary.ProvenByAttestedUnresolved
 		res.Public = decoded.Summary.Public
 		res.Unknown = decoded.Summary.Unknown
 	}
+	if res.Routes > 0 {
+		res.Kind = ModuleGinApplication
+	} else if module.UsesGin {
+		res.Kind = ModuleGinNoRoutes
+	}
 
-	// api.html (written alongside openapi.json in targetOut, if "openapi"
-	// was requested) moves into the sibling rendered tree — a plain file
-	// move, not a second scan, per docs/adr/0023-fleet-raw-rendered-split.md.
-	// A failed move degrades silently (res.APIHTML just stays empty, and
-	// fleet.html renders that target with no rendered-view link) rather
-	// than surfacing an error here: runOneTarget runs concurrently across
-	// goroutines with no lock of its own, and opts.Stderr is only ever
-	// safely written from within Run's own mutex-guarded section.
-	if opts.HTMLOutDir != "" {
-		srcHTML := filepath.Join(targetOut, "api.html")
+	// api.html is staged alongside this target's raw tree and only published
+	// after every module has completed, so an interrupted update cannot mix
+	// old and new module artifacts.
+	if moduleHTMLOut != "" {
+		srcHTML := filepath.Join(moduleOut, "api.html")
 		if _, statErr := os.Stat(srcHTML); statErr == nil {
-			destDir := filepath.Join(opts.HTMLOutDir, "targets", t.Name)
-			if err := os.MkdirAll(destDir, 0o755); err == nil {
-				destHTML := filepath.Join(destDir, "api.html")
-				if err := os.Rename(srcHTML, destHTML); err == nil {
-					res.APIHTML = filepath.Join("targets", t.Name, "api.html")
-				}
+			if err := ensureDirectoryNoSymlink(moduleHTMLOut, 0o755); err != nil {
+				res.Status = StatusFailed
+				res.Complete = false
+				res.Error = fmt.Sprintf("staging HTML output: %v", err)
+				return res
+			}
+			destHTML := filepath.Join(moduleHTMLOut, "api.html")
+			if err := os.Rename(srcHTML, destHTML); err != nil {
+				res.Status = StatusFailed
+				res.Complete = false
+				res.Error = fmt.Sprintf("staging HTML output: %v", err)
+				return res
+			}
+			if nestedOutput {
+				res.APIHTML = filepath.Join("targets", target.Name, "modules", module.ID, "api.html")
+			} else {
+				res.APIHTML = filepath.Join("targets", target.Name, "api.html")
 			}
 		}
 	}
 	return res
+}
+
+func expectedRawArtifacts(formats []string) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, format := range formats {
+		name := ""
+		switch format {
+		case "json":
+			name = "routes.json"
+		case "md":
+			name = "routes.md"
+		case "openapi":
+			name = "openapi.json"
+		case "sarif":
+			name = "results.sarif"
+		case "pretty":
+			name = "routes.txt"
+		}
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // formatsWithJSON returns formats with "json" included exactly once —
@@ -594,11 +1103,8 @@ func formatsWithJSON(formats []string) []string {
 // remote targets never exceeds one clone per concurrency slot at a time.
 func resolveSource(ctx context.Context, opts RunOptions, manifestDir string, t Target) (src string, cleanup func(), err error) {
 	if t.Git == nil {
-		src = t.Src
-		if !filepath.IsAbs(src) {
-			src = filepath.Join(manifestDir, src)
-		}
-		return src, nil, nil
+		src, err = resolveLocalSource(manifestDir, t.Src)
+		return src, nil, err
 	}
 
 	if !opts.AllowRemote {
@@ -617,22 +1123,95 @@ func resolveSource(ctx context.Context, opts RunOptions, manifestDir string, t T
 		}
 	}
 
-	destDir := filepath.Join(opts.OutDir, ".clones", t.Name)
+	clonesRoot := filepath.Join(opts.OutDir, ".clones")
+	if err := ensureDirectoryNoSymlink(clonesRoot, 0o700); err != nil {
+		return "", nil, fmt.Errorf("target %q: preparing clone scratch root: %w", t.Name, err)
+	}
+	destDir := filepath.Join(clonesRoot, t.Name)
 	if err := os.RemoveAll(destDir); err != nil {
 		return "", nil, fmt.Errorf("target %q: clearing clone scratch directory: %w", t.Name, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(destDir), 0o755); err != nil {
-		return "", nil, fmt.Errorf("target %q: preparing clone scratch directory: %w", t.Name, err)
-	}
-
 	clone := opts.Clone
 	if clone == nil {
 		clone = gitClone
 	}
 	if err := clone(ctx, t.Git.URL, t.Git.Ref, destDir, token); err != nil {
+		_ = os.RemoveAll(destDir)
+		return "", nil, fmt.Errorf("target %q: %w", t.Name, err)
+	}
+	if err := validateGitMetadataBounds(destDir); err != nil {
+		_ = os.RemoveAll(destDir)
 		return "", nil, fmt.Errorf("target %q: %w", t.Name, err)
 	}
 	return destDir, func() { os.RemoveAll(destDir) }, nil
+}
+
+func resolveLocalSource(manifestDir, source string) (string, error) {
+	if !filepath.IsAbs(source) {
+		source = filepath.Join(manifestDir, source)
+	}
+	absolute, err := filepath.Abs(source)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolving local source %q: %w", source, err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("local source %q is not a directory", source)
+	}
+	return real, nil
+}
+
+const maxGitMetadataBytes int64 = 1 << 30
+
+func validateGitMetadataBounds(repository string) error {
+	gitDir := filepath.Join(repository, ".git")
+	if _, err := os.Lstat(gitDir); os.IsNotExist(err) {
+		// Injected Clone functions are allowed in tests and embeddings; the
+		// production gitClone always creates .git and is independently checked
+		// for an exact HEAD before analysis.
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("checking git metadata: %w", err)
+	}
+	var files int
+	var bytes int64
+	if err := filepath.WalkDir(gitDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("git metadata contains symlink %s", path)
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("git metadata contains non-regular file %s", path)
+		}
+		files++
+		if files > maxDiscoveryFiles {
+			return fmt.Errorf("git metadata contains more than %d files", maxDiscoveryFiles)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		bytes += info.Size()
+		if bytes > maxGitMetadataBytes {
+			return fmt.Errorf("git metadata exceeds %d bytes", maxGitMetadataBytes)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("validating bounded git metadata: %w", err)
+	}
+	return nil
 }
 
 // gitClone is CloneFunc's default implementation: a shallow, single-branch,
@@ -645,6 +1224,11 @@ func resolveSource(ctx context.Context, opts RunOptions, manifestDir string, t T
 // failure text.
 func gitClone(ctx context.Context, gitURL, ref, destDir, token string) error {
 	args := []string{}
+	env := []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_LFS_SKIP_SMUDGE=1",
+		"GIT_CONFIG_NOSYSTEM=1",
+	}
 	if token != "" {
 		header := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
 		u, err := url.Parse(gitURL)
@@ -652,9 +1236,13 @@ func gitClone(ctx context.Context, gitURL, ref, destDir, token string) error {
 			return fmt.Errorf("git clone: %w", err)
 		}
 		scope := u.Scheme + "://" + u.Host + "/"
-		args = append(args, "-c", "http."+scope+".extraHeader="+header)
+		env = append(env,
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=http."+scope+".extraHeader",
+			"GIT_CONFIG_VALUE_0="+header,
+		)
 	}
-	args = append(args, "clone", "--depth", "1", "--single-branch")
+	args = append(args, "clone", "--depth", "1", "--single-branch", "--filter=blob:limit=10485760")
 	if ref != "" {
 		args = append(args, "--branch", ref)
 	}
@@ -667,23 +1255,34 @@ func gitClone(ctx context.Context, gitURL, ref, destDir, token string) error {
 	defer os.RemoveAll(home)
 
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = []string{
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_LFS_SKIP_SMUDGE=1",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"HOME=" + home,
-		"PATH=" + os.Getenv("PATH"),
-	}
+	cmd.Env = append(env,
+		"HOME="+home,
+		"PATH="+os.Getenv("PATH"),
+	)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		msg := tail(stderr.String(), stderrTailLimit)
+		msg := sanitizeDiagnostic(tail(stderr.String(), stderrTailLimit), token)
 		if msg == "" {
 			msg = err.Error()
 		}
 		return fmt.Errorf("git clone: %s", msg)
 	}
 	return nil
+}
+
+func sanitizeDiagnostic(message, secret string) string {
+	if secret != "" {
+		message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		encoded := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + secret))
+		message = strings.ReplaceAll(message, encoded, "[REDACTED]")
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r >= 0x20 {
+			return r
+		}
+		return -1
+	}, message)
 }
 
 func tail(s string, limit int) string {

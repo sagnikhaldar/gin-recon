@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
@@ -174,6 +175,20 @@ func resolveFleetConflictInteractively(conflictPath string, stdout io.Writer) fl
 // buildFleetScope each own one concern so this function reads as the
 // stages of a fleet run, not an undifferentiated block.
 func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
+	fleetContext, cancelFleet := context.WithTimeout(context.Background(), opts.FleetTimeout)
+	defer cancelFleet()
+	effectiveConfigPath, configSnapshot, cleanupConfig, err := freezeFleetConfig(opts.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: freezing --config: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	defer cleanupConfig()
+	effectiveTargetConfigDir, cleanupTargetConfigs, err := freezeFleetTargetConfigDir(opts.TargetConfigDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: freezing --target-config-dir: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	defer cleanupTargetConfigs()
 	// The shared --config is loaded up front (in addition to being passed
 	// through to each target's own audit subprocess) to read
 	// fleet.allowedRemoteHosts — docs/adr/0019-fleet-remote-targets.md's
@@ -185,28 +200,27 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	// second-guesses it. --org needs this resolved before anything else,
 	// since discovering an organization's repositories is itself a network
 	// call authorized the same way (docs/adr/0021-fleet-org-enumeration.md).
-	cfg, err := loadConfig(opts.ConfigPath)
+	cfg, err := loadConfig(effectiveConfigPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}
 	allowedHosts := buildFleetAllowedHosts(cfg)
 
-	// Read before resolveFleetManifest overwrites discovered-targets.json
-	// with this run's own fresh discovery (docs/adr/0039-fleet-org-update.md)
-	// — --update compares the two, so the "before" side has to be captured
-	// first. A no-op, empty result when --update wasn't passed or no prior
-	// complete run exists at this --out (first run ever, or one that never
-	// finished): every target then falls through to a real scan, same as
-	// today.
-	oldPushedAt, oldResults := loadFleetUpdateState(opts, stderr)
+	// Capture the last committed aggregate before this run's fresh discovery
+	// (docs/adr/0039-fleet-org-update.md). The aggregate—not the separately
+	// written discovered-targets.json—is authoritative for prior pushedAt and
+	// result data. A no-op, empty result when --update wasn't passed or no
+	// prior complete run exists at this --out makes every target fall through
+	// to a real scan.
+	scanOpts := *opts
+	scanOpts.ConfigPath = effectiveConfigPath
+	scanOpts.TargetConfigDir = effectiveTargetConfigDir
+	oldPushedAt, oldResults := loadFleetUpdateState(&scanOpts, stderr)
 
-	manifestPath, manifest, manifestData, discoveryIncomplete, exitCode := resolveFleetManifest(opts, allowedHosts, stderr)
+	manifestPath, manifest, manifestData, discoverySummary, exitCode := resolveFleetManifest(fleetContext, opts, allowedHosts, stderr)
 	if exitCode != cli.ExitSuccess {
 		return exitCode
-	}
-	if code := writeFleetConfigSnapshot(opts, stderr); code != cli.ExitSuccess {
-		return code
 	}
 
 	// Loaded now, before anything below writes a single byte of this run's
@@ -309,24 +323,28 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	if opts.Update {
 		preseed = map[string]fleet.TargetResult{}
 		for _, t := range manifest.Targets {
-			if t.GitHub == nil || t.GitHub.PushedAt == "" {
-				continue
-			}
-			old, ok := oldResults[t.Name]
-			if !ok || (old.Status != fleet.StatusOK && old.Status != fleet.StatusNotGoModule) {
-				continue
-			}
-			if oldPushedAt[t.Name] == t.GitHub.PushedAt {
+			if old, ok := shouldPreseedTarget(opts.OutDir, targetHTMLOutDir, targetFormats, opts.RenderHTML, t, oldPushedAt, oldResults); ok {
 				preseed[t.Name] = old
 			}
 		}
 	}
 	var stderrBuf bytes.Buffer
-	agg, err := fleet.Run(context.Background(), fleet.RunOptions{
+	progressWriter := io.Writer(stderr)
+	progressFormat := opts.ProgressMode
+	if progressFormat == "none" {
+		progressWriter = nil
+	} else if progressFormat == "auto" {
+		if isInteractiveTerminal() {
+			progressFormat = "plain"
+		} else {
+			progressFormat = "json"
+		}
+	}
+	agg, err := fleet.Run(fleetContext, fleet.RunOptions{
 		ManifestPath:    manifestPath,
 		Manifest:        manifest,
 		ManifestData:    manifestData,
-		ConfigPath:      opts.ConfigPath,
+		ConfigPath:      effectiveConfigPath,
 		Formats:         targetFormats,
 		OutDir:          opts.OutDir,
 		HTMLOutDir:      targetHTMLOutDir,
@@ -335,12 +353,15 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		BinaryPath:      binaryPath,
 		ToolVersion:     report.ToolVersion,
 		Stderr:          &stderrBuf,
-		Progress:        stderr,
+		Progress:        progressWriter,
+		ProgressFormat:  progressFormat,
 		AllowRemote:     opts.AllowRemoteTargets,
 		AllowedHosts:    allowedHosts,
 		AllowDownloads:  opts.AllowDownloads,
 		UseTargetConfig: opts.UseTargetConfig,
-		TargetConfigDir: opts.TargetConfigDir,
+		TargetConfigDir: effectiveTargetConfigDir,
+		RepoAttempts:    opts.RepoAttempts,
+		RepoTimeout:     opts.RepoTimeout,
 		Preseed:         preseed,
 	})
 	if stderrBuf.Len() > 0 {
@@ -358,13 +379,20 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 	// still doesn't cover the organization. docs/adr/0021-fleet-org-enumeration.md
 	// says this should read as coverage.complete: false; fold it in here so
 	// --fail-on incomplete (and fleet.json/fleet.html) actually reflect it.
+	discoveryIncomplete := discoverySummary != nil && !discoverySummary.Complete
 	if discoveryIncomplete {
 		agg.Coverage.Complete = false
 	}
 	// Recorded on the aggregate itself, not just used to render fleet.html
 	// in this same run — see buildFleetScope's own doc comment
 	// (docs/adr/0024-fleet-render.md).
-	agg.Scope = buildFleetScope(opts, discoveryIncomplete)
+	agg.Scope = buildFleetScope(opts, discoverySummary)
+	if scopeFingerprint, err := fleetScopeFingerprint(opts); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: computing scope fingerprint: %v\n", err)
+		return cli.ExitOperationalError
+	} else {
+		agg.ScopeFingerprint = scopeFingerprint
+	}
 	agg.AuthConfig.MiddlewareCount = len(cfg.AuthMiddleware)
 	agg.AuthConfig.WrappersCount = len(cfg.AuthWrappers)
 	if cfg.Analysis != nil {
@@ -376,14 +404,21 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gin-recon: fleet: encoding fleet.json: %v\n", err)
 		return cli.ExitOperationalError
 	}
-	if err := os.WriteFile(aggregatePath, data, 0o644); err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return cli.ExitOperationalError
-	}
 
 	var fleetDelta *fleet.FleetDelta
+	// Discovery/config snapshots are companion artifacts, not control state.
+	// Write them only after scanning succeeds far enough to build an aggregate;
+	// fleet.json remains the final commit marker below.
+	if opts.Org != "" {
+		if code := writeFleetDiscoveredTargets(opts, manifest, stderr); code != cli.ExitSuccess {
+			return code
+		}
+		if code := writeFleetConfigSnapshot(opts, configSnapshot, stderr); code != cli.ExitSuccess {
+			return code
+		}
+	}
 	if opts.Baseline != "" {
-		fleetDelta, err = fleet.CompareBaseline(baseline, opts.OutDir, agg.Targets)
+		fleetDelta, err = fleet.CompareFleetBaseline(baseline, opts.OutDir, agg)
 		if err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 			return cli.ExitOperationalError
@@ -393,7 +428,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "gin-recon: fleet: encoding fleet-delta.json: %v\n", err)
 			return cli.ExitOperationalError
 		}
-		if err := os.WriteFile(filepath.Join(opts.OutDir, fleetDeltaFilename), deltaData, 0o644); err != nil {
+		if err := fleet.WriteFileAtomic(filepath.Join(opts.OutDir, fleetDeltaFilename), deltaData, 0o644); err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 			return cli.ExitOperationalError
 		}
@@ -418,16 +453,35 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "gin-recon: fleet: rendering fleet.html: %v\n", err)
 			return cli.ExitOperationalError
 		}
-		if err := os.WriteFile(htmlPath, htmlData, 0o644); err != nil {
+		if err := fleet.WriteFileAtomic(htmlPath, htmlData, 0o644); err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 			return cli.ExitOperationalError
 		}
 	}
 
+	// fleet.json is the commit marker for the run and is therefore written
+	// last. A delta/render failure leaves the checkpoint available for a
+	// retry and cannot publish a new aggregate that points at incomplete
+	// companion artifacts.
+	if err := fleet.WriteFileAtomic(aggregatePath, data, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if agg.Coverage.Complete {
+		if err := fleet.RemoveCheckpoint(opts.OutDir); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return cli.ExitOperationalError
+		}
+	}
+	if err := fleetContext.Err(); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet deadline exceeded after %s: %v\n", opts.FleetTimeout, err)
+		return cli.ExitOperationalError
+	}
+
 	for _, sel := range opts.FailOn {
 		switch sel {
 		case "incomplete":
-			if !agg.Coverage.Complete {
+			if !agg.Coverage.Complete || (fleetDelta != nil && !fleetDelta.Coverage.Complete) {
 				return cli.ExitGate
 			}
 		case "new":
@@ -463,7 +517,7 @@ func buildFleetAllowedHosts(cfg *config.Config) []fleet.AllowedHost {
 // Aggregate itself (docs/adr/0024-fleet-render.md) so a later render pass
 // over a saved fleet.json can restore this panel without still having the
 // original CLI flags available.
-func buildFleetScope(opts *cli.Options, discoveryIncomplete bool) *fleet.Scope {
+func buildFleetScope(opts *cli.Options, discovery *fleet.DiscoverySummary) *fleet.Scope {
 	if opts.Org == "" {
 		return nil
 	}
@@ -475,8 +529,9 @@ func buildFleetScope(opts *cli.Options, discoveryIncomplete bool) *fleet.Scope {
 		IncludeForks:           opts.IncludeForks,
 		RepoInclude:            opts.RepoInclude,
 		RepoExclude:            opts.RepoExclude,
-		DiscoveryComplete:      !discoveryIncomplete,
+		DiscoveryComplete:      discovery == nil || discovery.Complete,
 		DiscoveryCompleteKnown: true,
+		Discovery:              discovery,
 	}
 	if scope.MaxRepos == 0 {
 		scope.MaxRepos = fleet.DefaultMaxRepos
@@ -484,21 +539,62 @@ func buildFleetScope(opts *cli.Options, discoveryIncomplete bool) *fleet.Scope {
 	return scope
 }
 
+func fleetScopeFingerprint(opts *cli.Options) (string, error) {
+	type scopeIdentity struct {
+		Mode            string   `json:"mode"`
+		Organization    string   `json:"organization,omitempty"`
+		ManifestPath    string   `json:"manifestPath,omitempty"`
+		Repository      string   `json:"repository,omitempty"`
+		Ref             string   `json:"ref,omitempty"`
+		MaxRepos        int      `json:"maxRepos,omitempty"`
+		IncludeArchived bool     `json:"includeArchived,omitempty"`
+		IncludeForks    bool     `json:"includeForks,omitempty"`
+		RepoInclude     []string `json:"repoInclude,omitempty"`
+		RepoExclude     []string `json:"repoExclude,omitempty"`
+	}
+	identity := scopeIdentity{
+		MaxRepos: opts.MaxRepos, IncludeArchived: opts.IncludeArchived,
+		IncludeForks: opts.IncludeForks, RepoInclude: opts.RepoInclude, RepoExclude: opts.RepoExclude,
+	}
+	switch {
+	case opts.Org != "":
+		identity.Mode, identity.Organization = "github-org", strings.ToLower(opts.Org)
+		if identity.MaxRepos == 0 {
+			identity.MaxRepos = fleet.DefaultMaxRepos
+		}
+	case opts.Repo != "":
+		identity.Mode, identity.Repository, identity.Ref = "repository", opts.Repo, opts.Ref
+	default:
+		identity.Mode = "manifest"
+		path, err := filepath.Abs(opts.TargetsPath)
+		if err != nil {
+			return "", err
+		}
+		identity.ManifestPath = filepath.Clean(path)
+	}
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	return fleet.FingerprintBytes(data), nil
+}
+
 // resolveFleetManifest implements cli.Validate's already-enforced "exactly
 // one of --targets or --org" rule: it loads a hand-written manifest, or
 // discovers one from a GitHub organization and persists it, so the rest of
 // runFleet never needs to know which one happened.
-func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, stderr io.Writer) (manifestPath string, manifest *fleet.Manifest, manifestData []byte, discoveryIncomplete bool, exitCode int) {
+func resolveFleetManifest(ctx context.Context, opts *cli.Options, allowedHosts []fleet.AllowedHost, stderr io.Writer) (manifestPath string, manifest *fleet.Manifest, manifestData []byte, discovery *fleet.DiscoverySummary, exitCode int) {
 	if opts.Repo != "" {
-		return resolveFleetRepoManifest(opts, stderr)
+		path, m, data, _, code := resolveFleetRepoManifest(opts, stderr)
+		return path, m, data, nil, code
 	}
 	if opts.Org == "" {
 		manifest, manifestData, err := fleet.LoadManifest(opts.TargetsPath)
 		if err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-			return "", nil, nil, false, cli.ExitOperationalError
+			return "", nil, nil, nil, cli.ExitOperationalError
 		}
-		return opts.TargetsPath, manifest, manifestData, false, cli.ExitSuccess
+		return opts.TargetsPath, manifest, manifestData, nil, cli.ExitSuccess
 	}
 
 	// --org's own network call is gated by the identical two-part rule
@@ -517,17 +613,17 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 			token, ok = os.LookupEnv(h.TokenEnv)
 			if !ok {
 				fmt.Fprintf(stderr, "gin-recon: --org: environment variable %q named by fleet.allowedRemoteHosts is not set\n", h.TokenEnv)
-				return "", nil, nil, false, cli.ExitOperationalError
+				return "", nil, nil, nil, cli.ExitOperationalError
 			}
 		}
 		break
 	}
 	if !found {
 		fmt.Fprintf(stderr, "gin-recon: --org: \"api.github.com\" is not in fleet.allowedRemoteHosts (required to enumerate an organization's repositories)\n")
-		return "", nil, nil, false, cli.ExitOperationalError
+		return "", nil, nil, nil, cli.ExitOperationalError
 	}
 
-	result, err := fleet.DiscoverOrgRepos(context.Background(), fleet.DiscoverOptions{
+	result, err := fleet.DiscoverOrgRepos(ctx, fleet.DiscoverOptions{
 		Org:             opts.Org,
 		IncludeArchived: opts.IncludeArchived,
 		IncludeForks:    opts.IncludeForks,
@@ -539,7 +635,7 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return "", nil, nil, false, cli.ExitOperationalError
+		return "", nil, nil, nil, cli.ExitOperationalError
 	}
 	if result.Incomplete {
 		fmt.Fprintf(stderr, "gin-recon: --org %s: discovery is incomplete (--max-repos or the page cap was reached); rerun with a higher --max-repos for full coverage\n", opts.Org)
@@ -554,26 +650,26 @@ func resolveFleetManifest(opts *cli.Options, allowedHosts []fleet.AllowedHost, s
 		fmt.Fprintf(stderr, "gin-recon: --org %s: skipped %d empty repositories\n", opts.Org, len(result.SkippedEmpty))
 	}
 
-	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return "", nil, nil, false, cli.ExitOperationalError
-	}
-	data, err := json.MarshalIndent(result.Manifest, "", "  ")
-	if err != nil {
-		fmt.Fprintf(stderr, "gin-recon: --org: encoding discovered manifest: %v\n", err)
-		return "", nil, nil, false, cli.ExitOperationalError
-	}
 	discoveredPath := filepath.Join(opts.OutDir, discoveredTargetsFilename)
-	if err := os.WriteFile(discoveredPath, data, 0o644); err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return "", nil, nil, false, cli.ExitOperationalError
-	}
 	identityData, err := fleetManifestIdentityData(result.Manifest)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: --org: %v\n", err)
-		return "", nil, nil, false, cli.ExitOperationalError
+		return "", nil, nil, nil, cli.ExitOperationalError
 	}
-	return discoveredPath, result.Manifest, identityData, result.Incomplete, cli.ExitSuccess
+	return discoveredPath, result.Manifest, identityData, &result.Summary, cli.ExitSuccess
+}
+
+func writeFleetDiscoveredTargets(opts *cli.Options, manifest *fleet.Manifest, stderr io.Writer) int {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: --org: encoding discovered manifest: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if err := fleet.WriteFileAtomic(filepath.Join(opts.OutDir, discoveredTargetsFilename), data, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	return cli.ExitSuccess
 }
 
 // resolveFleetRepoManifest builds a one-target manifest in memory for
@@ -618,27 +714,26 @@ func fleetManifestIdentityData(m *fleet.Manifest) ([]byte, error) {
 	return json.Marshal(stripped)
 }
 
-// loadFleetUpdateState reads whatever a previous complete run already left
-// at opts.OutDir — the discovered manifest's per-target GitHub pushedAt,
-// and fleet.json's own per-target results — before resolveFleetManifest
-// overwrites the former with this run's fresh discovery
-// (docs/adr/0039-fleet-org-update.md). Both returned maps are simply empty
-// (never an error) when --update wasn't requested, no prior run exists at
-// this --out, or either file fails to parse — a missing "before" state
-// just means every target falls through to a real scan, the same
-// behavior as today.
+// loadFleetUpdateState reads the last complete fleet.json at opts.OutDir.
+// Both GitHub pushedAt provenance and per-target results come from that one
+// committed document; discovered-targets.json is only an audit companion and
+// is never trusted as update control state (docs/adr/0039-fleet-org-update.md).
+// Both returned maps are empty when --update was not requested, no prior run
+// exists, or the prior state cannot be validated, making every target fall
+// through to a real scan.
 func loadFleetUpdateState(opts *cli.Options, stderr io.Writer) (pushedAt map[string]string, results map[string]fleet.TargetResult) {
 	pushedAt = map[string]string{}
 	results = map[string]fleet.TargetResult{}
 	if !opts.Update {
 		return pushedAt, results
 	}
-	data, err := os.ReadFile(filepath.Join(opts.OutDir, fleetAggregateFilename))
+	data, err := fleet.ReadBoundedFile(filepath.Join(opts.OutDir, fleetAggregateFilename))
 	if err != nil {
 		return pushedAt, results
 	}
-	var agg fleet.Aggregate
-	if json.Unmarshal(data, &agg) != nil {
+	agg, parseErr := fleet.ParseAggregate(data, true)
+	if parseErr != nil {
+		fmt.Fprintf(stderr, "gin-recon: --update: previous fleet aggregate at %q is invalid (%v); performing a full rescan\n", opts.OutDir, parseErr)
 		return pushedAt, results
 	}
 	// A prior run under a different toolVersion may have classified routes
@@ -652,20 +747,76 @@ func loadFleetUpdateState(opts *cli.Options, stderr io.Writer) (pushedAt map[str
 		fmt.Fprintf(stderr, "gin-recon: --update: previous run at %q used toolVersion %s, this binary is %s; performing a full rescan\n", opts.OutDir, agg.ToolVersion, report.ToolVersion)
 		return pushedAt, results
 	}
-	for _, t := range agg.Targets {
-		results[t.Name] = t
+	// A --config change between the previous run and this one may mean a
+	// route's proven/public/unknown classification is now stale — reusing it
+	// unchanged would silently present an outdated classification as current.
+	// A --format change means the previous run's own artifacts may not even
+	// cover what this run was asked to produce (e.g. openapi newly added).
+	// Both refuse every reuse, the same whole-run "refuse rather than guess"
+	// toolVersion already applies above, mirroring --resume's identical
+	// checkpoint-identity check (checkpoint.go's loadCheckpoint) — a
+	// pre-fix fleet.json (empty ConfigHash/Formats) is treated as unknown,
+	// also refusing reuse, once rather than every run after upgrading.
+	currentConfigHash, hashErr := fleet.HashConfigFile(opts.ConfigPath)
+	targetFormats := make([]string, len(opts.Formats))
+	for i, f := range opts.Formats {
+		targetFormats[i] = string(f)
 	}
-	if data, err := os.ReadFile(filepath.Join(opts.OutDir, discoveredTargetsFilename)); err == nil {
-		var m fleet.Manifest
-		if json.Unmarshal(data, &m) == nil {
-			for _, t := range m.Targets {
-				if t.GitHub != nil {
-					pushedAt[t.Name] = t.GitHub.PushedAt
-				}
-			}
+	if hashErr != nil || agg.ConfigHash != currentConfigHash {
+		fmt.Fprintf(stderr, "gin-recon: --update: --config has changed since the previous run at %q; performing a full rescan\n", opts.OutDir)
+		return pushedAt, results
+	}
+	if !slices.Equal(agg.Formats, targetFormats) {
+		fmt.Fprintf(stderr, "gin-recon: --update: --format has changed since the previous run at %q; performing a full rescan\n", opts.OutDir)
+		return pushedAt, results
+	}
+	targetConfigHash, hashErr := fleet.HashTargetConfigDirectory(opts.TargetConfigDir)
+	if hashErr != nil || agg.TargetConfigHash != targetConfigHash || agg.AllowDownloads != opts.AllowDownloads || agg.UseTargetConfig != opts.UseTargetConfig || agg.RenderHTML != opts.RenderHTML || agg.RepoAttempts != opts.RepoAttempts || agg.RepoTimeout != opts.RepoTimeout.String() {
+		fmt.Fprintf(stderr, "gin-recon: --update: scan or target-config options changed since the previous run at %q; performing a full rescan\n", opts.OutDir)
+		return pushedAt, results
+	}
+	if agg.SchemaVersion != "1.0" || agg.Kind != "fleet" || agg.Tool != "gin-recon" || !agg.Coverage.Complete {
+		fmt.Fprintf(stderr, "gin-recon: --update: previous fleet aggregate at %q is incompatible or incomplete; performing a full rescan\n", opts.OutDir)
+		return pushedAt, results
+	}
+	seen := make(map[string]bool, len(agg.Targets))
+	for _, t := range agg.Targets {
+		if err := fleet.ValidTargetName(t.Name); err != nil || seen[t.Name] {
+			fmt.Fprintf(stderr, "gin-recon: --update: previous fleet aggregate at %q has invalid or duplicate targets; performing a full rescan\n", opts.OutDir)
+			return map[string]string{}, map[string]fleet.TargetResult{}
+		}
+		seen[t.Name] = true
+		results[t.Name] = t
+		if t.Repository != nil && t.Repository.PushedAt != "" {
+			pushedAt[t.Name] = t.Repository.PushedAt
 		}
 	}
 	return pushedAt, results
+}
+
+// shouldPreseedTarget decides whether t's previous result (from oldResults,
+// keyed by the same --update state loadFleetUpdateState produces) should be
+// reused instead of rescanning t: t must be an --org-discovered target
+// (t.GitHub set) whose GitHub pushedAt exactly matches what it was at the
+// previous complete run, whose previous status was ok or not-go-module, and
+// whose exact artifact set for the requested formats still passes size and
+// SHA-256 verification. Someone deleting or modifying part of --out's target
+// tree must never produce a "complete" reused result with stale evidence.
+func shouldPreseedTarget(outDir, htmlOutDir string, formats []string, renderHTML bool, t fleet.Target, oldPushedAt map[string]string, oldResults map[string]fleet.TargetResult) (fleet.TargetResult, bool) {
+	if t.GitHub == nil || t.GitHub.PushedAt == "" {
+		return fleet.TargetResult{}, false
+	}
+	old, ok := oldResults[t.Name]
+	if !ok || (old.Status != fleet.StatusOK && old.Status != fleet.StatusNotGoModule) {
+		return fleet.TargetResult{}, false
+	}
+	if oldPushedAt[t.Name] != t.GitHub.PushedAt {
+		return fleet.TargetResult{}, false
+	}
+	if err := fleet.ValidateReusableTarget(outDir, htmlOutDir, old, t, formats, renderHTML); err != nil {
+		return fleet.TargetResult{}, false
+	}
+	return old, true
 }
 
 // writeFleetConfigSnapshot copies opts.ConfigPath's exact bytes into --out
@@ -675,25 +826,94 @@ func loadFleetUpdateState(opts *cli.Options, stderr io.Writer) (pushedAt map[str
 // A no-op for a --targets run (its own manifest/config are expected to
 // already be version-controlled together) or when --config wasn't given
 // (--config is optional for fleet; nothing to snapshot).
-func writeFleetConfigSnapshot(opts *cli.Options, stderr io.Writer) int {
+func writeFleetConfigSnapshot(opts *cli.Options, data []byte, stderr io.Writer) int {
 	if opts.Org == "" || opts.ConfigPath == "" {
 		return cli.ExitSuccess
-	}
-	data, err := os.ReadFile(opts.ConfigPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return cli.ExitOperationalError
 	}
 	ext := filepath.Ext(opts.ConfigPath)
 	if ext == "" {
 		ext = ".json"
 	}
 	dest := filepath.Join(opts.OutDir, configSnapshotBasename+ext)
-	if err := os.WriteFile(dest, data, 0o644); err != nil {
+	if err := fleet.WriteFileAtomic(dest, data, 0o644); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}
 	return cli.ExitSuccess
+}
+
+func freezeFleetConfig(path string) (effective string, data []byte, cleanup func(), err error) {
+	if path == "" {
+		return "", nil, func() {}, nil
+	}
+	data, err = fleet.ReadBoundedFile(path)
+	if err != nil {
+		return "", nil, func() {}, err
+	}
+	dir, err := os.MkdirTemp("", "gin-recon-fleet-config-*")
+	if err != nil {
+		return "", nil, func() {}, err
+	}
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	effective = filepath.Join(dir, "config"+filepath.Ext(path))
+	if err := fleet.WriteFileAtomic(effective, data, 0o600); err != nil {
+		cleanup()
+		return "", nil, func() {}, err
+	}
+	return effective, data, cleanup, nil
+}
+
+func freezeFleetTargetConfigDir(path string) (effective string, cleanup func(), err error) {
+	if path == "" {
+		return "", func() {}, nil
+	}
+	tempRoot, err := os.MkdirTemp("", "gin-recon-fleet-target-configs-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup = func() { _ = os.RemoveAll(tempRoot) }
+	effective = filepath.Join(tempRoot, "configs")
+	const maxFiles = 10_000
+	const maxBytes int64 = 100 << 20
+	files := 0
+	var bytes int64
+	err = filepath.WalkDir(path, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", current)
+		}
+		rel, err := filepath.Rel(path, current)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("%s escapes the target config directory", current)
+		}
+		destination := filepath.Join(effective, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o700)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", current)
+		}
+		files++
+		if files > maxFiles {
+			return fmt.Errorf("directory exceeds %d files", maxFiles)
+		}
+		data, err := fleet.ReadBoundedFile(current)
+		if err != nil {
+			return err
+		}
+		bytes += int64(len(data))
+		if bytes > maxBytes {
+			return fmt.Errorf("directory exceeds %d bytes", maxBytes)
+		}
+		return fleet.WriteFileAtomic(destination, data, 0o600)
+	})
+	if err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return effective, cleanup, nil
 }
 
 // runFleetRender re-renders every target recorded `ok` in a saved
@@ -721,11 +941,12 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 		fmt.Fprintf(stderr, "gin-recon: fleet render: --force is required — a fleet render always overwrites each target's own previously rendered output\n")
 		return cli.ExitOperationalError
 	}
-	var agg fleet.Aggregate
-	if err := json.Unmarshal(data, &agg); err != nil {
+	aggPtr, err := fleet.ParseAggregate(data, true)
+	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: --report: decoding fleet.json: %v\n", err)
 		return cli.ExitOperationalError
 	}
+	agg := *aggPtr
 
 	cfg, err := loadConfig(opts.ConfigPath)
 	if err != nil {
@@ -763,60 +984,171 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 	// fleet.CompareBaseline already uses for a --baseline's targets.
 	fleetJSONDir := filepath.Dir(opts.ReportPath)
 
+	// --report is an arbitrary, potentially untrusted file (docs/threat-model.md
+	// treats every scanned-repo/report input as adversarial): every target's
+	// Name is validated up front, before any of it is used to build a
+	// filesystem path below, and duplicates are rejected outright rather than
+	// letting two targets silently clobber the same output directory.
+	seenNames := make(map[string]bool, len(agg.Targets))
+	for _, t := range agg.Targets {
+		if err := fleet.ValidTargetName(t.Name); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: --report: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		if seenNames[t.Name] {
+			fmt.Fprintf(stderr, "gin-recon: --report: duplicate target name %q\n", t.Name)
+			return cli.ExitOperationalError
+		}
+		seenNames[t.Name] = true
+	}
+
+	// A saved fleet always retains routes.json as its canonical evidence,
+	// even when this render asks only for a presentation format. This also
+	// makes rendering to a different --out self-contained instead of leaving
+	// its new fleet.json pointing back at the input tree.
+	renderFormats := []cli.OutputFormat{cli.FormatJSON}
+	for _, f := range opts.Formats {
+		if f != cli.FormatJSON {
+			renderFormats = append(renderFormats, f)
+		}
+	}
+	hasOpenAPI := slices.Contains(renderFormats, cli.FormatOpenAPI)
+
 	for i, t := range agg.Targets {
 		if t.Status != fleet.StatusOK {
-			continue // render reformats what exists; it does not retry a failed or not-go-module target
+			continue // render reformats what exists; it does not retry a failed or non-module target
 		}
 
-		rep, err := loadReportFile(filepath.Join(fleetJSONDir, "targets", t.Name, "routes.json"))
-		if err != nil {
-			fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
-			return cli.ExitOperationalError
+		modules := append([]fleet.ModuleResult(nil), t.Modules...)
+		if len(modules) == 0 {
+			// Upgrade a pre-module-schema aggregate in memory. New aggregates
+			// already carry this record even for a one-module repository.
+			modules = []fleet.ModuleResult{{ID: "root", Path: ".", Status: t.Status, Complete: t.Complete, Report: t.Report}}
 		}
-		if err := validateRenderedReport(rep); err != nil {
-			fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
-			return cli.ExitOperationalError
-		}
+		multiModule := len(modules) > 1
 
-		// Refreshed from this target's own already-computed routes.json —
-		// not recomputed, and not a second scan — so a fleet.json written
-		// before docs/adr/0028-gin-recon-default-output-directory.md's
-		// fleet.html redesign (Routes/Proven/Public/Unknown all zero) picks
-		// up real values the next time it's rendered.
-		if rep.Summary != nil {
-			agg.Targets[i].Routes = rep.Summary.TotalRoutes
-			agg.Targets[i].Proven = rep.Summary.ProvenByConfirmedShape + rep.Summary.ProvenByAttestedUnresolved
-			agg.Targets[i].Public = rep.Summary.Public
-			agg.Targets[i].Unknown = rep.Summary.Unknown
-		}
+		agg.Targets[i].Routes, agg.Targets[i].Proven = 0, 0
+		agg.Targets[i].Public, agg.Targets[i].Unknown = 0, 0
+		agg.Targets[i].Report, agg.Targets[i].APIHTML = "", ""
+		agg.Targets[i].Artifacts = nil
 
-		targetRawOut := filepath.Join(rawDir, "targets", t.Name)
-		targetOpts := &cli.Options{Command: cli.CommandRender, OutDir: targetRawOut, Formats: opts.Formats, Force: true}
-		if code := writeReport(rep, targetOpts, cfg, stdout, stderr, cli.ExitSuccess); code != cli.ExitSuccess {
-			return code
-		}
+		for moduleIndex := range modules {
+			moduleResult := &modules[moduleIndex]
+			if multiModule {
+				if err := fleet.ValidModuleID(moduleResult.ID); err != nil {
+					fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+					return cli.ExitOperationalError
+				}
+			}
 
-		// api.html moves into the rendered tree exactly the way a live
-		// fleet run already moves it (docs/adr/0023-fleet-raw-rendered-split.md)
-		// — render's own output must be indistinguishable from what a live
-		// run with the same --format would have produced.
-		srcHTML := filepath.Join(targetRawOut, htmlCompanionFilename)
-		if _, statErr := os.Stat(srcHTML); statErr == nil {
-			destDir := filepath.Join(htmlOutDir, "targets", t.Name)
-			if err := os.MkdirAll(destDir, 0o755); err != nil {
-				fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			reportRel := filepath.Join("targets", t.Name, "routes.json")
+			if multiModule {
+				reportRel = filepath.Join("targets", t.Name, "modules", moduleResult.ID, "routes.json")
+			}
+			if moduleResult.Report != "" && filepath.Clean(filepath.FromSlash(moduleResult.Report)) != reportRel {
+				fmt.Fprintf(stderr, "gin-recon: fleet render: target %q module %q has non-canonical report path %q\n", t.Name, moduleResult.ID, moduleResult.Report)
 				return cli.ExitOperationalError
 			}
-			destHTML := filepath.Join(destDir, htmlCompanionFilename)
-			if err := os.Rename(srcHTML, destHTML); err != nil {
-				fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			routesPath, err := fleet.ResolveArtifactPath(fleetJSONDir, reportRel)
+			if err != nil {
+				fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
 				return cli.ExitOperationalError
 			}
-			agg.Targets[i].APIHTML = filepath.Join("targets", t.Name, htmlCompanionFilename)
-		} else {
-			// --format on this render no longer includes openapi: any
-			// previously-recorded link would now point at nothing.
-			agg.Targets[i].APIHTML = ""
+			if err := fleet.RegularFileNoSymlink(routesPath); err != nil {
+				fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+				return cli.ExitOperationalError
+			}
+			rep, err := loadReportFile(routesPath)
+			if err != nil {
+				fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+				return cli.ExitOperationalError
+			}
+			if err := validateRenderedReport(rep); err != nil {
+				fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+				return cli.ExitOperationalError
+			}
+
+			moduleResult.Routes, moduleResult.Proven = 0, 0
+			moduleResult.Public, moduleResult.Unknown = 0, 0
+			if rep.Summary != nil {
+				moduleResult.Routes = rep.Summary.TotalRoutes
+				moduleResult.Proven = rep.Summary.ProvenByConfirmedShape + rep.Summary.ProvenByAttestedUnresolved
+				moduleResult.Public = rep.Summary.Public
+				moduleResult.Unknown = rep.Summary.Unknown
+			}
+			moduleResult.Report = filepath.ToSlash(reportRel)
+			moduleResult.APIHTML = ""
+			moduleResult.Artifacts = nil
+
+			targetRawOut, err := fleet.ResolveArtifactPath(rawDir, filepath.Dir(reportRel))
+			if err != nil {
+				fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+				return cli.ExitOperationalError
+			}
+			targetOpts := &cli.Options{Command: cli.CommandRender, OutDir: targetRawOut, Formats: renderFormats, Force: true}
+			if code := writeReport(rep, targetOpts, cfg, stdout, stderr, cli.ExitSuccess); code != cli.ExitSuccess {
+				return code
+			}
+
+			if hasOpenAPI {
+				srcHTML := filepath.Join(targetRawOut, htmlCompanionFilename)
+				htmlRel := filepath.Join(filepath.Dir(reportRel), htmlCompanionFilename)
+				htmlData, err := fleet.ReadBoundedFile(srcHTML)
+				if err != nil {
+					fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: reading rendered HTML: %v\n", t.Name, err)
+					return cli.ExitOperationalError
+				}
+				destHTML, err := fleet.ResolveArtifactPath(htmlOutDir, htmlRel)
+				if err != nil {
+					fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
+					return cli.ExitOperationalError
+				}
+				if err := fleet.WriteFileAtomic(destHTML, htmlData, 0o644); err != nil {
+					fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+					return cli.ExitOperationalError
+				}
+				if err := os.Remove(srcHTML); err != nil {
+					fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+					return cli.ExitOperationalError
+				}
+				moduleResult.APIHTML = filepath.ToSlash(htmlRel)
+			}
+
+			seenArtifacts := map[string]bool{}
+			for _, f := range renderFormats {
+				name := formatFilename(f)
+				if seenArtifacts[name] {
+					continue
+				}
+				seenArtifacts[name] = true
+				artifactRel := filepath.Join(filepath.Dir(reportRel), name)
+				artifact, err := fleet.RecordArtifact("raw", rawDir, artifactRel)
+				if err != nil {
+					fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: recording %s integrity: %v\n", t.Name, name, err)
+					return cli.ExitOperationalError
+				}
+				moduleResult.Artifacts = append(moduleResult.Artifacts, artifact)
+			}
+			if moduleResult.APIHTML != "" {
+				artifact, err := fleet.RecordArtifact("html", htmlOutDir, moduleResult.APIHTML)
+				if err != nil {
+					fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: recording HTML integrity: %v\n", t.Name, err)
+					return cli.ExitOperationalError
+				}
+				moduleResult.Artifacts = append(moduleResult.Artifacts, artifact)
+			}
+
+			agg.Targets[i].Routes += moduleResult.Routes
+			agg.Targets[i].Proven += moduleResult.Proven
+			agg.Targets[i].Public += moduleResult.Public
+			agg.Targets[i].Unknown += moduleResult.Unknown
+			agg.Targets[i].Artifacts = append(agg.Targets[i].Artifacts, moduleResult.Artifacts...)
+		}
+
+		agg.Targets[i].Modules = modules
+		if len(modules) == 1 {
+			agg.Targets[i].Report = modules[0].Report
+			agg.Targets[i].APIHTML = modules[0].APIHTML
 		}
 	}
 
@@ -827,6 +1159,12 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 		agg.Totals.Public += t.Public
 		agg.Totals.Unknown += t.Unknown
 	}
+	agg.Formats = make([]string, len(opts.Formats))
+	for i, f := range opts.Formats {
+		agg.Formats[i] = string(f)
+	}
+	agg.RenderHTML = true
+	fleet.RefreshScanFingerprint(&agg)
 
 	// fleet.json itself is updated too, not just fleet.html — each target's
 	// APIHTML just changed, and docs/adr/0024-fleet-render.md's whole
@@ -837,17 +1175,18 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 		fmt.Fprintf(stderr, "gin-recon: fleet render: encoding fleet.json: %v\n", err)
 		return cli.ExitOperationalError
 	}
-	if err := os.WriteFile(filepath.Join(rawDir, fleetAggregateFilename), aggData, 0o644); err != nil {
-		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
-		return cli.ExitOperationalError
-	}
-
 	htmlData, err := format.FleetHTML(&agg, nil, agg.Scope, rawDirLink)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: fleet render: rendering fleet.html: %v\n", err)
 		return cli.ExitOperationalError
 	}
-	if err := os.WriteFile(filepath.Join(htmlOutDir, fleetHTMLFilename), htmlData, 0o644); err != nil {
+	if err := fleet.WriteFileAtomic(filepath.Join(htmlOutDir, fleetHTMLFilename), htmlData, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	// fleet.json is the render commit marker and is written only after every
+	// target artifact and fleet.html have been durably replaced.
+	if err := fleet.WriteFileAtomic(filepath.Join(rawDir, fleetAggregateFilename), aggData, 0o644); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}

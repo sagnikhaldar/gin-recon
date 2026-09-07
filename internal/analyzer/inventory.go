@@ -177,7 +177,7 @@ func applySwagAnnotations(result *InventoryResult, funcIndex map[*types.Func]gin
 
 // relativizeSource rewrites a single model.Source.File from the absolute
 // path go/packages naturally produces into a root-relative, slash-separated
-// path, per docs/cli-contract.md: "Reports store root-relative
+// path, per docs/reference.md: "Reports store root-relative
 // slash-separated paths, never absolute checkout paths." internal/analyzer/gin's
 // Discover and AnalyzeEngineSecurity have no concept of "the scan root" (they
 // only ever see a *token.FileSet), so this conversion can only happen in
@@ -357,7 +357,7 @@ func modulePathOf(pkgs []*packages.Package) string {
 }
 
 // normalize sorts every slice into a stable, deterministic order per
-// docs/report-contract.md's "Deterministically ordered routes,
+// docs/reference.md's "Deterministically ordered routes,
 // globalMiddleware, and fallbackSurfaces" — required so two runs over
 // identical source produce byte-identical JSON regardless of incidental
 // go/packages file-visitation order.

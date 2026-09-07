@@ -113,6 +113,20 @@ func Validate(opts *Options) error {
 		if opts.Concurrency < 1 || opts.Concurrency > 8 {
 			return fmt.Errorf("--concurrency: must be between 1 and 8, got %d", opts.Concurrency)
 		}
+		if opts.RepoAttempts < 1 || opts.RepoAttempts > 3 {
+			return fmt.Errorf("--repo-attempts: must be between 1 and 3, got %d", opts.RepoAttempts)
+		}
+		if opts.RepoTimeout <= 0 {
+			return fmt.Errorf("--repo-timeout: must be positive, got %s", opts.RepoTimeout)
+		}
+		if opts.FleetTimeout <= 0 {
+			return fmt.Errorf("--fleet-timeout: must be positive, got %s", opts.FleetTimeout)
+		}
+		switch opts.ProgressMode {
+		case "auto", "plain", "json", "none":
+		default:
+			return fmt.Errorf("--progress: must be auto, plain, json, or none, got %q", opts.ProgressMode)
+		}
 		if opts.TargetConfigDir != "" {
 			fi, err := os.Stat(opts.TargetConfigDir)
 			if err != nil || !fi.IsDir() {
@@ -230,9 +244,9 @@ func Validate(opts *Options) error {
 	switch opts.Command {
 	case CommandSchema:
 		switch opts.SchemaKind {
-		case SchemaKindReport, SchemaKindConfig:
+		case SchemaKindReport, SchemaKindConfig, SchemaKindFleet, SchemaKindFleetDelta:
 		default:
-			return fmt.Errorf("schema --kind: must be \"report\" or \"config\", got %q", opts.SchemaKind)
+			return fmt.Errorf("schema --kind: must be \"report\", \"config\", \"fleet\", or \"fleet-delta\", got %q", opts.SchemaKind)
 		}
 	}
 
@@ -290,7 +304,7 @@ func defaultFleetOutDir(opts *Options) (string, error) {
 	return filepath.Join(".gin-recon", name), nil
 }
 
-// requireUnderSrc enforces docs/cli-contract.md's "the path must remain under
+// requireUnderSrc enforces docs/reference.md's "the path must remain under
 // --src" rule for a single path field. src must already be absolute (Validate
 // resolves opts.Src before calling this).
 func requireUnderSrc(src, path, field string) error {

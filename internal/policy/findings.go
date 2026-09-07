@@ -12,7 +12,7 @@ import (
 // newPolicyFinding builds a policy-violation finding. Fingerprints hash rule
 // identity, the policy ID, and normalized route identity — excluding source
 // line and absolute checkout path, matching the same stability rule
-// internal/classify's fingerprints follow (docs/report-contract.md).
+// internal/classify's fingerprints follow (docs/reference.md).
 func newPolicyFinding(policyID string, route model.Route) report.Finding {
 	routeIdentity := route.Method + " " + route.NormalizedPath
 	h := sha256.New()

@@ -12,7 +12,7 @@ import (
 // sel. An empty/omitted field always matches (it narrows nothing); a
 // populated field matches if the route satisfies at least one of its listed
 // values — fields AND together, values within a field OR together, matching
-// docs/configuration-contract.md's "Policy selectors may use methods, path
+// docs/reference.md's "Policy selectors may use methods, path
 // globs, auth statuses, tags, roles, scopes, canonical package prefixes, and
 // surface kinds."
 func matchesSelector(route model.Route, sel config.PolicySelector) bool {
@@ -96,7 +96,7 @@ func hasAny(have, want []string) bool {
 // anyPackagePrefixMatch checks the route's final handler canonical symbol's
 // package path (falling back to any middleware's, in registration order)
 // against each pattern as a prefix — "canonical package prefixes" per
-// docs/configuration-contract.md.
+// docs/reference.md.
 func anyPackagePrefixMatch(patterns []string, route model.Route) bool {
 	symbols := make([]string, 0, len(route.Middleware)+1)
 	if route.FinalHandler.CanonicalSymbol != nil {

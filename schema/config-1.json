@@ -63,6 +63,24 @@
         "maxCallDepth": { "type": "integer", "minimum": 1, "maximum": 128 }
       }
     },
+    "fleet": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedRemoteHosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["host"],
+            "properties": {
+              "host": { "type": "string" },
+              "tokenEnv": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "openapi": {
       "type": "object",
       "additionalProperties": false,

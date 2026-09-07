@@ -1,6 +1,6 @@
 // Package format implements gin-recon's output formats. Every formatter
 // takes the same immutable *report.Report and must not mutate, reclassify,
-// or silently discard evidence — docs/report-contract.md's "Output
+// or silently discard evidence — docs/reference.md's "Output
 // Guarantees" applies to every formatter equally, pretty included.
 package format
 

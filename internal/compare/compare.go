@@ -1,5 +1,5 @@
 // Package compare implements baseline report comparison (--baseline,
-// --fail-on new|regression) per docs/report-contract.md. Product semantics
+// --fail-on new|regression) per docs/reference.md. Product semantics
 // (risk ordering, route-key deduplication to the least-safe view,
 // structural regression explanations) are ported from express-recon's
 // src/compare.js by explicit instruction, adapted to gin-recon's richer
@@ -30,7 +30,7 @@ var authRisk = map[model.AuthStatus]int{
 }
 
 // Compatible checks whether baseline can be meaningfully compared against
-// current, per docs/report-contract.md: "Require compatible schema major,
+// current, per docs/reference.md: "Require compatible schema major,
 // analysis profile, route normalization, and build context." Route
 // normalization has no version field of its own — it changes only when the
 // report schema's own major version does, so a schema-major check already

@@ -12,7 +12,7 @@ import (
 )
 
 // newFinding builds a Finding with a stable fingerprint. Per
-// docs/report-contract.md, the fingerprint hashes rule identity plus
+// docs/reference.md, the fingerprint hashes rule identity plus
 // normalized route identity and excludes source line and absolute checkout
 // path — Source is attached for human navigation but deliberately excluded
 // from the hash input, so moving a registration to a different line in the
@@ -72,7 +72,7 @@ func ClassifyAll(routes []model.Route, in Inputs) AllResult {
 	// "matched but unresolvable" — a distinction syntax-only cannot make,
 	// since every one of its routes has a nil CanonicalSymbol by
 	// construction (see Inputs.Profile's doc comment). Suppressing it here
-	// for syntax-only, per docs/report-contract.md, avoids every configured
+	// for syntax-only, per docs/reference.md, avoids every configured
 	// authMiddleware/authWrappers entry spuriously reporting stale on every
 	// syntax-only audit; internal/analyzer.AuditSyntax emits a single
 	// coverage diagnostic in its place when auth config is configured at all.
@@ -85,17 +85,28 @@ func ClassifyAll(routes []model.Route, in Inputs) AllResult {
 	return AllResult{Findings: findings}
 }
 
-// staleAuthConfigFindings implements docs/report-contract.md's
+// staleAuthConfigFindings implements docs/reference.md's
 // "stale-auth-config fires once per configured authMiddleware ... canonical
 // symbol that is never matched against any resolved call site" — surfacing a
 // target-side rename or removal as its own signal rather than only as routes
 // silently becoming unknown.
 func staleAuthConfigFindings(cfg *config.Config, seenSymbols map[string]bool) []report.Finding {
-	var findings []report.Finding
+	var stale []string
 	for symbol := range cfg.AuthMiddleware {
-		if seenSymbols[symbol] {
-			continue
+		if !seenSymbols[symbol] {
+			stale = append(stale, symbol)
 		}
+	}
+	// cfg.AuthMiddleware is a map — iterating it directly would make one run's
+	// finding order differ from the next run's on byte-identical source
+	// (docs/reference.md's "two runs against unchanged source always
+	// produce byte-identical JSON"). Sorting by the symbol itself, rather
+	// than by a derived fingerprint, keeps the order legible to a reader of
+	// the JSON too.
+	sort.Strings(stale)
+
+	var findings []report.Finding
+	for _, symbol := range stale {
 		sym := symbol
 		fp := fingerprint(string(report.RuleStaleAuthConfig), symbol)
 		rec := "Remove this entry from authMiddleware, or check whether the symbol was renamed or moved."
@@ -149,7 +160,7 @@ func staleBaselineFindings(routes []model.Route, cfg *config.Config) []report.Fi
 	return findings
 }
 
-// perVerbGapFindings implements docs/report-contract.md's built-in
+// perVerbGapFindings implements docs/reference.md's built-in
 // per-verb-gap rule: the same normalized path registered with more than one
 // distinct AuthStatus across its HTTP methods, which often indicates a
 // guard applied to some verbs on a resource but missed on others — a

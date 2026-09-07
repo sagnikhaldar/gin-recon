@@ -148,6 +148,78 @@ func TestDiscoverOrgReposMaxReposMarksIncomplete(t *testing.T) {
 	if !result.Incomplete {
 		t.Error("Incomplete = false, want true: 3 repos exist but MaxRepos capped at 2")
 	}
+	if result.Summary.Visible != 3 || len(result.Summary.Repositories) != 3 || result.Summary.Repositories[2].Status != "capped" {
+		t.Fatalf("discovery denominator/dispositions = %+v", result.Summary)
+	}
+}
+
+func TestDiscoverOrgReposNeverFollowsCrossOriginLink(t *testing.T) {
+	attackerCalled := false
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attackerCalled = true
+		if r.Header.Get("Authorization") != "" {
+			t.Error("authorization leaked to Link-header origin")
+		}
+		w.Write([]byte("[]"))
+	}))
+	defer attacker.Close()
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "" {
+			w.Header().Set("Link", fmt.Sprintf(`<%s/steal>; rel="next"`, attacker.URL))
+			w.Write([]byte(reposJSON(t, []githubRepo{{Name: "a", FullName: "myorg/a", CloneURL: "https://github.com/myorg/a.git", Size: 1}})))
+			return
+		}
+		w.Write([]byte(reposJSON(t, []githubRepo{{Name: "b", FullName: "myorg/b", CloneURL: "https://github.com/myorg/b.git", Size: 1}})))
+	}))
+	defer api.Close()
+
+	result, err := DiscoverOrgRepos(context.Background(), DiscoverOptions{Org: "myorg", APIBase: api.URL, Token: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attackerCalled || len(result.Manifest.Targets) != 2 {
+		t.Fatalf("attackerCalled=%v targets=%+v", attackerCalled, result.Manifest.Targets)
+	}
+}
+
+func TestDiscoverOrgReposRetainsPartialEnumerationAfterLaterPageFailure(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "" {
+			w.Header().Set("Link", `<https://example.invalid/page/2>; rel="next"`)
+			w.Write([]byte(reposJSON(t, []githubRepo{{Name: "a", FullName: "myorg/a", CloneURL: "https://github.com/myorg/a.git", Size: 1}})))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer api.Close()
+
+	result, err := DiscoverOrgRepos(context.Background(), DiscoverOptions{Org: "myorg", APIBase: api.URL})
+	if err != nil {
+		t.Fatalf("later page should produce partial inventory, not discard page 1: %v", err)
+	}
+	if !result.Incomplete || result.Summary.Complete || len(result.Manifest.Targets) != 1 || len(result.Summary.Diagnostics) == 0 {
+		t.Fatalf("partial result = %+v", result)
+	}
+}
+
+func TestDiscoverOrgReposDeduplicatesRepositoriesAcrossPages(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		repo := githubRepo{Name: "a", FullName: "myorg/a", CloneURL: "https://github.com/myorg/a.git", Size: 1}
+		if r.URL.Query().Get("page") == "" {
+			w.Header().Set("Link", `<https://example.invalid/page/2>; rel="next"`)
+		}
+		w.Write([]byte(reposJSON(t, []githubRepo{repo})))
+	}))
+	defer api.Close()
+
+	result, err := DiscoverOrgRepos(context.Background(), DiscoverOptions{Org: "myorg", APIBase: api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Manifest.Targets) != 1 || result.Summary.Visible != 1 || len(result.Summary.Repositories) != 2 || result.Summary.Repositories[1].Reason != "duplicate API entry" {
+		t.Fatalf("deduplicated result = %+v", result)
+	}
 }
 
 func TestDiscoverOrgReposSkipsBadNames(t *testing.T) {
@@ -230,6 +302,29 @@ func TestDiscoverOrgReposRejectsRedirect(t *testing.T) {
 	_, err := DiscoverOrgRepos(context.Background(), DiscoverOptions{Org: "myorg", APIBase: redirector.URL})
 	if err == nil || !strings.Contains(err.Error(), "refusing to follow a redirect") {
 		t.Fatalf("err = %v, want a redirect-refusal complaint", err)
+	}
+}
+
+func TestDiscoverOrgReposOverridesInjectedClientRedirectPolicy(t *testing.T) {
+	var receivedAuthorization bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuthorization = r.Header.Get("Authorization") != ""
+		w.Write([]byte(`[]`))
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	_, err := DiscoverOrgRepos(context.Background(), DiscoverOptions{
+		Org: "myorg", APIBase: redirector.URL, Token: "secret", HTTPClient: &http.Client{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "refusing to follow a redirect") {
+		t.Fatalf("err = %v, want redirect refusal", err)
+	}
+	if receivedAuthorization {
+		t.Fatal("authorization reached redirect destination")
 	}
 }
 

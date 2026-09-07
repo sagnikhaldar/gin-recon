@@ -54,7 +54,7 @@ func TestValidateRejectsEmptyAuthMiddlewareKey(t *testing.T) {
 
 func TestValidateRejectsEmptyExplicitTagsArray(t *testing.T) {
 	// An absent "tags" is fine (no tags); an explicit empty array is treated
-	// as a likely mistake, per docs/configuration-contract.md's minItems: 1.
+	// as a likely mistake, per docs/reference.md's minItems: 1.
 	expectDecodeError(t, FormatJSON, `{
 		"version": 1,
 		"authMiddleware": {"example.com/auth.Require": {"tags": []}}

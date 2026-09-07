@@ -58,7 +58,7 @@ func TestInventoryWithoutFollowModulesLeavesCrossModuleRegistrarUnresolved(t *te
 // applies) must be fully resolved, with a Source that is a stable
 // "module@version/relative/path" label — never a raw absolute filesystem
 // path, which would leak local module-cache layout and violate
-// docs/cli-contract.md's "never absolute checkout paths" for a path that
+// docs/reference.md's "never absolute checkout paths" for a path that
 // was never under --src to begin with.
 func TestInventoryWithFollowModulesResolvesCrossModuleRegistrar(t *testing.T) {
 	loaded := loadCrossModuleTarget(t, []string{"gin-recon-fixtures/cross-module-library"})

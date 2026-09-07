@@ -24,7 +24,7 @@ const (
 // language-specific object tags, custom application tags, anything not part
 // of the YAML core schema — is rejected before the document is even
 // structurally decoded. This is what
-// docs/configuration-contract.md#format-and-validation means by "custom tags
+// docs/reference.md#format-and-validation means by "custom tags
 // are rejected": the underlying YAML library does not execute a custom tag's
 // semantics itself, but silently accepting one would let a byte-identical
 // configuration file mean something different to a different YAML processor,
@@ -48,7 +48,7 @@ var yamlCoreSchemaTags = map[string]bool{
 // Decode never executes anything found in data — see the package doc comment
 // and ADR 0003. On success the returned Config has every documented default
 // applied (see Validate/applyDefaults) and is guaranteed to satisfy every
-// rule in docs/configuration-contract.md.
+// rule in docs/reference.md.
 func Decode(format Format, data []byte) (*Config, error) {
 	var cfg Config
 	switch format {
@@ -81,7 +81,7 @@ func DecodeReader(format Format, r io.Reader) (*Config, error) {
 }
 
 // decodeJSON relies on encoding/json's own grammar to satisfy
-// docs/configuration-contract.md#format-and-validation's "non-finite numbers
+// docs/reference.md#format-and-validation's "non-finite numbers
 // ... fail before scanning" rule for JSON: standard JSON text has no
 // representation for NaN or Infinity at all (Go's own json.Marshal must be
 // asked to break spec to emit them), so a config file containing one is

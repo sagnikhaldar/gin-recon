@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sagnikhaldar/gin-recon/internal/model"
@@ -199,6 +200,45 @@ func TestLoadBaselineSurvivesOverwriteOfSourcePath(t *testing.T) {
 	}
 }
 
+// TestLoadBaselineRejectsPathTraversalTargetName is a regression test for a
+// real path-traversal read: --baseline is an arbitrary file, and before this
+// fix a target's Name field was used to build the path to its routes.json
+// with no validation — a crafted name like "../../../../etc/passwd" would
+// have loadTargetReport attempt to read arbitrary files outside the
+// baseline's own directory tree as if they were a target's report.
+func TestLoadBaselineRejectsPathTraversalTargetName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fleet.json")
+	fleetJSON := `{"targets":[{"name":"../../../../etc/passwd","status":"ok"}]}`
+	if err := os.WriteFile(path, []byte(fleetJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadBaseline(path); err == nil {
+		t.Fatal("LoadBaseline succeeded with a path-traversal target name, want an error")
+	} else if !strings.Contains(err.Error(), "must match") {
+		t.Errorf("LoadBaseline error = %v, want it to reject the invalid target name", err)
+	}
+}
+
+// TestLoadBaselineRejectsDuplicateTargetNames guards against two targets in
+// one --baseline file sharing a name, which would otherwise let the second
+// silently shadow the first in Baseline.Reports.
+func TestLoadBaselineRejectsDuplicateTargetNames(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fleet.json")
+	fleetJSON := `{"targets":[{"name":"svc-a","status":"ok"},{"name":"svc-a","status":"ok"}]}`
+	if err := os.WriteFile(path, []byte(fleetJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadBaseline(path); err == nil {
+		t.Fatal("LoadBaseline succeeded with duplicate target names, want an error")
+	} else if !strings.Contains(err.Error(), "duplicate target name") {
+		t.Errorf("LoadBaseline error = %v, want it to reject the duplicate target name", err)
+	}
+}
+
 func TestCompareBaselineMarksIncompatibleReportsIncomparable(t *testing.T) {
 	baselineDir := t.TempDir()
 	baselineReport := auditReportWithRoutes(provenRoute("GET", "/a"))
@@ -225,5 +265,111 @@ func TestCompareBaselineMarksIncompatibleReportsIncomparable(t *testing.T) {
 	}
 	if fd.Summary.IncomparableTargets != 1 {
 		t.Errorf("IncomparableTargets = %d, want 1", fd.Summary.IncomparableTargets)
+	}
+}
+
+func TestCompareBaselineRecordsStatusTransitionAsIncomparable(t *testing.T) {
+	baselineDir := t.TempDir()
+	baselinePath := writeBaselineFleetJSON(t, baselineDir, []TargetResult{{
+		Name: "svc-a", Status: StatusFailed, Complete: false,
+	}})
+	baseline, err := LoadBaseline(baselinePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := CompareBaseline(baseline, t.TempDir(), []TargetResult{{
+		Name: "svc-a", Status: StatusNotGoModule, Complete: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fd.Targets) != 1 || fd.Targets[0].Status != TargetStatusChanged {
+		t.Fatalf("targets = %+v, want explicit status change", fd.Targets)
+	}
+	if fd.Targets[0].BeforeStatus != StatusFailed || fd.Targets[0].AfterStatus != StatusNotGoModule {
+		t.Fatalf("status transition = %+v", fd.Targets[0])
+	}
+	if fd.Coverage.Complete || fd.Summary.IncomparableTargets != 1 || fd.Summary.StatusChanges != 1 {
+		t.Fatalf("coverage/summary = %+v / %+v", fd.Coverage, fd.Summary)
+	}
+}
+
+func TestCompareFleetBaselineRejectsScopeOrScanMismatch(t *testing.T) {
+	baseline := &Baseline{Aggregate: &Aggregate{ScopeFingerprint: "org-a", ScanFingerprint: "scan-a"}, Reports: map[string]*report.Report{}}
+	for _, current := range []*Aggregate{
+		{ScopeFingerprint: "org-b", ScanFingerprint: "scan-a"},
+		{ScopeFingerprint: "org-a", ScanFingerprint: "scan-b"},
+	} {
+		if _, err := CompareFleetBaseline(baseline, t.TempDir(), current); err == nil {
+			t.Fatalf("comparison accepted mismatched fingerprints: %+v", current)
+		}
+	}
+}
+
+func TestCompareFleetBaselineKeepsModuleRouteIdentitiesSeparate(t *testing.T) {
+	baselineDir := t.TempDir()
+	currentDir := t.TempDir()
+	beforeModules := []ModuleResult{
+		{ID: "module-0123456789abcdef", Path: "apps/a", Status: StatusOK, Complete: true, Report: "targets/repo/modules/module-0123456789abcdef/routes.json"},
+		{ID: "module-fedcba9876543210", Path: "apps/b", Status: StatusOK, Complete: true, Report: "targets/repo/modules/module-fedcba9876543210/routes.json"},
+	}
+	afterModules := append([]ModuleResult(nil), beforeModules...)
+	for _, fixture := range []struct {
+		root string
+		path string
+		rep  *report.Report
+	}{
+		{baselineDir, beforeModules[0].Report, auditReportWithRoutes(provenRoute("GET", "/same"))},
+		{baselineDir, beforeModules[1].Report, auditReportWithRoutes(provenRoute("GET", "/same"))},
+		{currentDir, afterModules[0].Report, auditReportWithRoutes(publicRoute("GET", "/same"))},
+		{currentDir, afterModules[1].Report, auditReportWithRoutes(provenRoute("GET", "/same"))},
+	} {
+		path := filepath.Join(fixture.root, filepath.FromSlash(fixture.path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(fixture.rep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseAgg := &Aggregate{Targets: []TargetResult{{Name: "repo", Status: StatusOK, Complete: true, Modules: beforeModules}}}
+	baseData, _ := json.Marshal(baseAgg)
+	basePath := filepath.Join(baselineDir, "fleet.json")
+	if err := os.WriteFile(basePath, baseData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := LoadBaseline(basePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := &Aggregate{Targets: []TargetResult{{Name: "repo", Status: StatusOK, Complete: true, Modules: afterModules}}}
+	fd, err := CompareFleetBaseline(baseline, currentDir, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fd.Summary.AuthRegressions != 1 || len(fd.Targets[0].Modules) != 2 {
+		t.Fatalf("module-aware delta = %+v", fd)
+	}
+}
+
+func TestCompareFleetBaselineTreatsZeroRouteModuleAdditionAsNew(t *testing.T) {
+	baseline := &Baseline{
+		Aggregate: &Aggregate{Targets: []TargetResult{{Name: "repo", Status: StatusOK, Complete: true}}},
+		Reports:   map[string]*report.Report{},
+	}
+	current := &Aggregate{Targets: []TargetResult{{
+		Name: "repo", Status: StatusOK, Complete: true,
+		Modules: []ModuleResult{{ID: "module-0123456789abcdef", Path: "worker", Status: StatusOK, Complete: true}},
+	}}}
+	delta, err := CompareFleetBaseline(baseline, t.TempDir(), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta.Summary.AddedModules != 1 || !delta.HasNew() {
+		t.Fatalf("module addition was not classified as new: %+v", delta)
 	}
 }

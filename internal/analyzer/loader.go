@@ -35,7 +35,7 @@ type LoadOptions struct {
 
 	// Include/Exclude are root-relative "*"/"**" globs (see internal/globmatch)
 	// scoping the scan to a subset of the target's own source files, per
-	// docs/cli-contract.md's --include/--exclude (the caller is responsible
+	// docs/reference.md's --include/--exclude (the caller is responsible
 	// for folding an --ignore-file's patterns into Exclude — this package has
 	// no filesystem-path concept of "the ignore file", only the resolved glob
 	// list). An excluded file is removed from the scan as completely as if it
@@ -49,6 +49,13 @@ type LoadOptions struct {
 	// files regardless of Include.
 	Include []string
 	Exclude []string
+
+	// IncludeTests, when true, scans _test.go files alongside the target's
+	// regular source (docs/reference.md's --include-tests) — off by
+	// default, matching packages.Config.Tests's own zero value, so a route
+	// only ever registered inside a test helper (a common httptest setup) is
+	// invisible unless explicitly opted into.
+	IncludeTests bool
 
 	// FollowModules is a list of Go module import-path glob patterns
 	// (internal/globmatch) that registrar-following is explicitly permitted
@@ -93,7 +100,7 @@ func Load(ctx context.Context, opts LoadOptions) (*Loaded, error) {
 			packages.NeedImports | packages.NeedDeps |
 			packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo |
 			packages.NeedModule,
-		Tests: false,
+		Tests: opts.IncludeTests,
 	}
 
 	pkgs, err := packages.Load(cfg, "./...")
@@ -104,7 +111,7 @@ func Load(ctx context.Context, opts LoadOptions) (*Loaded, error) {
 	// packages.Load frequently reports a fatal condition (no go.mod, no Go
 	// files, a directory outside any module) not through its own err return
 	// but as a single synthetic package whose Errors describe the failure —
-	// docs/report-contract.md's "Fatal inability to load the requested root"
+	// docs/reference.md's "Fatal inability to load the requested root"
 	// must exit 1, not silently produce an empty "successful" report for a
 	// root that was never actually analyzable at all.
 	if allPackagesFailed(pkgs) {
@@ -226,7 +233,7 @@ func workspaceMode(workspace string) model.WorkspaceMode {
 	return model.WorkspaceWorkspace
 }
 
-// ResolveModuleMode applies docs/cli-contract.md's default: "--module-mode
+// ResolveModuleMode applies docs/reference.md's default: "--module-mode
 // readonly|vendor: default vendor when a valid root-contained vendor tree
 // exists, otherwise readonly." given is returned unchanged when it is
 // already set explicitly (e.g. from --module-mode); only an empty value is

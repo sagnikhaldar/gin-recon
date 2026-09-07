@@ -1,6 +1,8 @@
 package fleet
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -23,7 +25,7 @@ func TestLoadCheckpointMissingReturnsEmpty(t *testing.T) {
 func TestSaveAndLoadCheckpointRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	want := identity{ManifestHash: "abc", ConfigHash: "def", Formats: []string{"json"}}
-	cp := &checkpoint{Version: 1, Identity: want, Complete: map[string]TargetResult{
+	cp := &checkpoint{Version: 2, Identity: want, Complete: map[string]TargetResult{
 		"a": {Name: "a", Status: StatusOK, Complete: true},
 	}}
 	if err := saveCheckpoint(dir, cp); err != nil {
@@ -42,7 +44,7 @@ func TestSaveAndLoadCheckpointRoundTrip(t *testing.T) {
 func TestLoadCheckpointRejectsManifestMismatch(t *testing.T) {
 	dir := t.TempDir()
 	original := identity{ManifestHash: "abc", Formats: []string{"json"}}
-	if err := saveCheckpoint(dir, &checkpoint{Version: 1, Identity: original, Complete: map[string]TargetResult{}}); err != nil {
+	if err := saveCheckpoint(dir, &checkpoint{Version: 2, Identity: original, Complete: map[string]TargetResult{}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,7 +57,7 @@ func TestLoadCheckpointRejectsManifestMismatch(t *testing.T) {
 func TestLoadCheckpointRejectsConfigMismatch(t *testing.T) {
 	dir := t.TempDir()
 	original := identity{ManifestHash: "abc", ConfigHash: "x", Formats: []string{"json"}}
-	if err := saveCheckpoint(dir, &checkpoint{Version: 1, Identity: original, Complete: map[string]TargetResult{}}); err != nil {
+	if err := saveCheckpoint(dir, &checkpoint{Version: 2, Identity: original, Complete: map[string]TargetResult{}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,7 +70,7 @@ func TestLoadCheckpointRejectsConfigMismatch(t *testing.T) {
 func TestLoadCheckpointRejectsFormatMismatch(t *testing.T) {
 	dir := t.TempDir()
 	original := identity{ManifestHash: "abc", Formats: []string{"json"}}
-	if err := saveCheckpoint(dir, &checkpoint{Version: 1, Identity: original, Complete: map[string]TargetResult{}}); err != nil {
+	if err := saveCheckpoint(dir, &checkpoint{Version: 2, Identity: original, Complete: map[string]TargetResult{}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -82,5 +84,20 @@ func TestRemoveCheckpointIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	if err := removeCheckpoint(dir); err != nil {
 		t.Fatalf("removing a nonexistent checkpoint should not error: %v", err)
+	}
+}
+
+func TestSaveCheckpointUsesPrivateMode(t *testing.T) {
+	dir := t.TempDir()
+	cp := &checkpoint{Version: 2, Identity: identity{ToolVersion: "test"}, Complete: map[string]TargetResult{}}
+	if err := saveCheckpoint(dir, cp); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, CheckpointFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("checkpoint mode = %o, want 600", got)
 	}
 }

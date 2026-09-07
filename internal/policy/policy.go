@@ -1,4 +1,4 @@
-// Package policy evaluates docs/configuration-contract.md's configured
+// Package policy evaluates docs/reference.md's configured
 // policies against already-classified routes (internal/classify runs first;
 // policy evaluation only ever reads model.Route.Auth, it never sets it).
 // This separation matters: a policy can require "auth: proven", but it

@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/lockup-dark.svg">
+    <img src="assets/logo/lockup-light.svg" alt="gin-recon" width="300">
+  </picture>
+</p>
+
 # gin-recon
 
 Offline-first route inventory, authentication audit, and OpenAPI documentation for Gin. It parses Go source without executing the target application, and gives developers, CI jobs, and AI agents the same versioned evidence contract.
@@ -56,8 +63,8 @@ Exit code `2` means the requested gate matched: an expected policy result, not a
 | `audit` | Authentication classification, policy evaluation, findings, and baseline comparison (`--baseline`, `--fail-on new,regression`). |
 | `suggest-auth` | Ranked canonical middleware candidates to help write configuration. Never affects classification. |
 | `render` | Regenerates any output format from an already-saved `routes.json`, with no re-analysis: no source tree, no network, and typically well under a second even on a large repository. |
-| `fleet` | Runs `audit` once per target listed in a manifest (or discovered from a GitHub organization with `--org`), aggregating results with bounded concurrency and checkpointed resume. See [docs/reference.md](docs/reference.md#fleet-options). |
-| `schema` | Emits the versioned report or configuration JSON Schema. |
+| `fleet` | Runs `audit` once per target listed in a manifest, one remote repository (`--repo`), or a whole GitHub organization (`--org`), aggregating results with bounded concurrency, checkpointed resume, and `--update` to skip repositories unchanged since the last complete scan. See [docs/reference.md](docs/reference.md#fleet-options) and the [scheduled org scan example](examples/github-actions/scheduled-org-scan.yml). |
+| `schema` | Emits the versioned report, configuration, fleet, or fleet-delta JSON Schema. |
 
 Full reference: [docs/reference.md](docs/reference.md) for every flag and the config format.
 
@@ -70,7 +77,7 @@ gin-recon keeps what it observed and what it concludes in two different places, 
 - A route is never treated as authenticated just because analysis is incomplete, a middleware name sounds security-related, or evidence is missing. This conservative-classification stance is deliberate: a silently-optimistic guess is worse than a route reported `unknown`.
 - Configured authentication evidence is a reviewer-backed assertion, not formal verification.
 
-Two runs against unchanged source always produce byte-identical JSON, and the schema version travels with every report. Run `gin-recon schema` to get that schema directly.
+Two runs against unchanged source always produce byte-identical JSON, and the schema version travels with every report. Run `gin-recon schema --kind report|config|fleet|fleet-delta` to get the corresponding contract directly.
 
 ## OpenAPI documentation
 
@@ -101,7 +108,7 @@ gin-recon audit --src ./current --config gin-recon.json \
   --fail-on new,regression
 ```
 
-If the two reports were produced under different scan-scope fingerprints, the comparison refuses to run rather than guess. Keep the config and ignore rules identical across the two revisions you're comparing.
+The comparison refuses to run rather than guess when the two reports have an incompatible schema major, command, analysis profile, or build context (GOOS/GOARCH/tags). It does not yet detect a `--config`, `--include`/`--exclude`, or ignore-file difference between the two runs — keep those identical yourself across the two revisions you're comparing, since a scope change there would currently compare silently rather than being refused.
 
 A ready-to-copy GitHub Actions workflow doing exactly this, with SARIF wired into Code Scanning, is at [examples/github-actions](examples/github-actions).
 

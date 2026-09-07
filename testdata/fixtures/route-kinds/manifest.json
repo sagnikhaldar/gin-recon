@@ -10,6 +10,8 @@
     { "method": "DELETE", "normalizedPath": "/wildcard" },
     { "method": "HEAD", "normalizedPath": "/wildcard" },
     { "method": "OPTIONS", "normalizedPath": "/wildcard" },
+    { "method": "CONNECT", "normalizedPath": "/wildcard" },
+    { "method": "TRACE", "normalizedPath": "/wildcard" },
     { "method": "GET", "normalizedPath": "/matched" },
     { "method": "POST", "normalizedPath": "/matched" },
     { "method": "GET", "normalizedPath": "/assets/*filepath" },

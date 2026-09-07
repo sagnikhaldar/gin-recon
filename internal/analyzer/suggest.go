@@ -1,5 +1,5 @@
 // Package analyzer's SuggestAuth implements the `suggest-auth` command
-// (docs/cli-contract.md: "emit ranked canonical middleware candidates as
+// (docs/reference.md: "emit ranked canonical middleware candidates as
 // JSON; suggestions never change classification"). It runs Inventory (never
 // Audit — suggest-auth has no notion of a configured authMiddleware list to
 // classify against) and ranks every distinct, canonically-resolved

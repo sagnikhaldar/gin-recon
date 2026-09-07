@@ -188,7 +188,7 @@ func TestOverwritingTopLevelSlicesWithNilStillMarshalsAsEmptyArrays(t *testing.T
 }
 
 // TestDeltaOmittedWithoutBaseline confirms delta only appears when a baseline
-// comparison actually produced one, per docs/report-contract.md.
+// comparison actually produced one, per docs/reference.md.
 func TestDeltaOmittedWithoutBaseline(t *testing.T) {
 	r := NewInventoryReport(model.ProfileTyped, testTarget())
 	data, err := json.Marshal(r)

@@ -114,7 +114,10 @@ func LoadSyntax(ctx context.Context, opts LoadOptions) (*LoadedSyntax, error) {
 			return nil
 		}
 
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") && !opts.IncludeTests {
 			return nil
 		}
 		rel, relErr := filepath.Rel(opts.Src, path)

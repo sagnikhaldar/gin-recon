@@ -6,7 +6,7 @@ import (
 )
 
 // onceString is a flag.Value that errors if set more than once, so
-// docs/cli-contract.md's "duplicate scalar options ... fail" rule is
+// docs/reference.md's "duplicate scalar options ... fail" rule is
 // enforced uniformly instead of Go's flag package default of silent
 // last-value-wins.
 type onceString struct {
@@ -69,7 +69,7 @@ func (o *onceBool) Set(v string) error {
 }
 
 // repeatableList accumulates values across repeated flag occurrences and
-// also splits each occurrence on commas, matching docs/cli-contract.md's
+// also splits each occurrence on commas, matching docs/reference.md's
 // "repeatable or comma-separated" options (--include, --exclude, --format,
 // --fail-on) and the plain comma-list option (--tags).
 type repeatableList struct {

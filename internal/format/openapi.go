@@ -267,7 +267,7 @@ type ginReconExt struct {
 // The returned diagnostics (non-representable methods, conflicting
 // registrations) are discovered only during formatting, not during the
 // original scan — report.Report's own Diagnostics slice is immutable
-// evidence from that scan (docs/report-contract.md: "Formatters must not
+// evidence from that scan (docs/reference.md: "Formatters must not
 // mutate... evidence"), so these cannot be spliced back into it. Callers
 // are responsible for surfacing them (cmd/gin-recon writes them to stderr).
 func OpenAPI(rep *report.Report, cfg *config.Config) ([]byte, []model.Diagnostic, error) {

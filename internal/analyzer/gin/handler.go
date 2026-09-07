@@ -19,7 +19,7 @@ type callable struct {
 
 // resolveCallable classifies one handler/middleware argument expression.
 // It deliberately never inspects or records a *ast.CallExpr's Args — only
-// the callee — per docs/configuration-contract.md's "its arguments are never
+// the callee — per docs/reference.md's "its arguments are never
 // recorded" and the threat model's prohibition on middleware arguments
 // appearing in reports at all. Anything it cannot resolve to a name or a
 // known shape becomes CallableUnknown with no display text derived from
@@ -45,7 +45,7 @@ func resolveCallable(info *types.Info, expr ast.Expr) callable {
 	case *ast.IndexExpr:
 		// A generic function instantiation with one type argument,
 		// "pkg.Func[T]" — e.g. middlewares.BindAndValidate[dtos.Foo]("body").
-		// Per docs/configuration-contract.md: "Generic instantiation
+		// Per docs/reference.md: "Generic instantiation
 		// arguments... are not part of identity," so this resolves straight
 		// through to the base function/selector, discarding the type
 		// argument entirely rather than trying to fold it into the symbol.
@@ -148,7 +148,7 @@ func selectorDisplayName(sel *ast.SelectorExpr) string {
 func FuncCanonicalSymbol(fn *types.Func) string { return funcCanonicalSymbol(fn) }
 
 // funcCanonicalSymbol formats a *types.Func per
-// docs/configuration-contract.md#canonical-symbols-and-assurance:
+// docs/reference.md#canonical-symbols-and-assurance:
 // "pkg/path.Func" for a plain function, "pkg/path.(*Type).Method" or
 // "pkg/path.(Type).Method" for a method, matching pointer-vs-value receiver
 // exactly as declared.
@@ -176,7 +176,7 @@ func funcCanonicalSymbol(fn *types.Func) string {
 // isPackageScopeVar reports whether v was declared directly at package
 // scope (a top-level `var`), as opposed to a local variable or function
 // parameter — only the former has the kind of stable identity
-// docs/configuration-contract.md's "Value with function type" canonical
+// docs/reference.md's "Value with function type" canonical
 // symbol format describes.
 func isPackageScopeVar(v *types.Var) bool {
 	return v.Pkg() != nil && v.Parent() == v.Pkg().Scope()
@@ -200,7 +200,7 @@ const maxWrapperHops = 3
 // unchanged; only call sites building a middleware-position callableRef
 // need this, never a route's final handler position, since only middleware
 // is ever a wrapper-following candidate for
-// docs/configuration-contract.md's authWrappers.
+// docs/reference.md's authWrappers.
 func resolveMiddlewareCallable(info *types.Info, expr ast.Expr) callable {
 	c := resolveCallable(info, expr)
 	c.WrappedSymbols = wrappedSymbolChain(info, expr, maxWrapperHops)

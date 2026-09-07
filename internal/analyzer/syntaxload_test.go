@@ -212,7 +212,7 @@ func main() {}
 }
 
 // TestLoadSyntaxFailsOnRootWithNoGoFiles mirrors typed Load's own "fatal
-// inability to load the requested root" behavior (docs/report-contract.md).
+// inability to load the requested root" behavior (docs/reference.md).
 func TestLoadSyntaxFailsOnRootWithNoGoFiles(t *testing.T) {
 	root := t.TempDir()
 	if _, err := LoadSyntax(context.Background(), syntaxOpts(root)); err == nil {

@@ -12,7 +12,7 @@ import (
 
 // Parse parses a full argument list (not including the program name, e.g.
 // os.Args[1:]) into Options. It returns an error for anything
-// docs/cli-contract.md says must fail before analysis: an unknown command,
+// docs/reference.md says must fail before analysis: an unknown command,
 // an unknown or inapplicable option for the given command, a duplicate
 // scalar option, a missing value, or a malformed duration. Parse does not
 // touch the filesystem — see Validate for path resolution and containment
@@ -43,11 +43,11 @@ func Parse(args []string) (*Options, error) {
 
 // parseScanCommand handles inventory, audit, and suggest-auth, which share
 // every common option. --out/--force additionally apply to suggest-auth
-// (docs/cli-contract.md: "suggest-auth writes JSON to stdout unless --out is
+// (docs/reference.md: "suggest-auth writes JSON to stdout unless --out is
 // supplied"), but --format does not — suggest-auth's output has no format
 // choice to make. --baseline/--fail-on remain audit-only. suggest-auth
 // explicitly does not register --format/--baseline/--fail-on, per
-// docs/cli-contract.md ("does not accept baseline, fail-on, SARIF, or
+// docs/reference.md ("does not accept baseline, fail-on, SARIF, or
 // OpenAPI options") — they are simply never defined on its FlagSet, so the
 // flag package's own "flag provided but not defined" error enforces
 // inapplicability for us.
@@ -86,7 +86,7 @@ func parseScanCommand(cmd Command, args []string) (*Options, error) {
 	if cmd == CommandInventory || cmd == CommandAudit {
 		fs.Var(&repeatableList{&formats}, "format", "repeatable or comma-separated output format")
 	}
-	// --out/--force apply to suggest-auth too (docs/cli-contract.md:
+	// --out/--force apply to suggest-auth too (docs/reference.md:
 	// "suggest-auth writes JSON to stdout unless --out is supplied") — only
 	// --format is inventory/audit-only, since suggest-auth's output has no
 	// format choice to make (always JSON).
@@ -190,7 +190,7 @@ func parseFleet(args []string) (*Options, error) {
 	fs := flag.NewFlagSet(string(CommandFleet), flag.ContinueOnError)
 	fs.SetOutput(discardWriter{})
 
-	opts := &Options{Command: CommandFleet, Concurrency: 1}
+	opts := &Options{Command: CommandFleet, Concurrency: 1, RepoAttempts: 2, RepoTimeout: 10 * time.Minute, FleetTimeout: 3 * time.Hour, ProgressMode: "plain"}
 
 	registerOnceString(fs, "targets", &opts.TargetsPath)
 	registerOnceString(fs, "org", &opts.Org)
@@ -211,9 +211,13 @@ func parseFleet(args []string) (*Options, error) {
 	registerOnceBool(fs, "include-forks", &opts.IncludeForks)
 	fs.Var(&repeatableList{&opts.RepoInclude}, "repo-include", "repeatable or comma-separated repository name glob")
 	fs.Var(&repeatableList{&opts.RepoExclude}, "repo-exclude", "repeatable or comma-separated repository name glob")
-	var concurrency, maxRepos string
+	var concurrency, maxRepos, repoAttempts, repoTimeout, fleetTimeout string
 	registerOnceString(fs, "concurrency", &concurrency)
 	registerOnceString(fs, "max-repos", &maxRepos)
+	registerOnceString(fs, "repo-attempts", &repoAttempts)
+	registerOnceString(fs, "repo-timeout", &repoTimeout)
+	registerOnceString(fs, "fleet-timeout", &fleetTimeout)
+	registerOnceString(fs, "progress", &opts.ProgressMode)
 	fs.Var(&repeatableList{&opts.FailOn}, "fail-on", "repeatable or comma-separated gate selector")
 	var formats []string
 	fs.Var(&repeatableList{&formats}, "format", "repeatable or comma-separated output format")
@@ -241,6 +245,27 @@ func parseFleet(args []string) (*Options, error) {
 			return nil, fmt.Errorf("--max-repos: invalid integer %q", maxRepos)
 		}
 		opts.MaxRepos = n
+	}
+	if repoAttempts != "" {
+		n, err := strconv.Atoi(repoAttempts)
+		if err != nil {
+			return nil, fmt.Errorf("--repo-attempts: invalid integer %q", repoAttempts)
+		}
+		opts.RepoAttempts = n
+	}
+	if repoTimeout != "" {
+		d, err := time.ParseDuration(repoTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("--repo-timeout: invalid duration %q: %w", repoTimeout, err)
+		}
+		opts.RepoTimeout = d
+	}
+	if fleetTimeout != "" {
+		d, err := time.ParseDuration(fleetTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("--fleet-timeout: invalid duration %q: %w", fleetTimeout, err)
+		}
+		opts.FleetTimeout = d
 	}
 	for _, f := range formats {
 		opts.Formats = append(opts.Formats, OutputFormat(f))

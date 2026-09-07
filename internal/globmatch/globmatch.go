@@ -1,5 +1,5 @@
 // Package globmatch implements the "*"/"**" path-glob matching
-// docs/configuration-contract.md's policy selectors document (e.g.
+// docs/reference.md's policy selectors document (e.g.
 // "/admin/**") — extracted from internal/policy, which introduced it first,
 // so internal/analyzer's scan scoping (--include/--exclude/ignoreFile) can
 // share the exact same matching rules rather than a second, potentially
@@ -51,7 +51,7 @@ func matchSegments(pattern, target []string) bool {
 	}
 	// A bare "*" already matches any single segment via path.Match, but
 	// segmentMatches also handles a partial-segment pattern combining a
-	// wildcard with a literal — "*.go" — which docs/configuration-contract.md's
+	// wildcard with a literal — "*.go" — which docs/reference.md's
 	// own example ("**/*.go") requires and a whole-segment-only "*" check
 	// cannot express.
 	if !segmentMatches(head, target[0]) {

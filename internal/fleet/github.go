@@ -6,68 +6,72 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sagnikhaldar/gin-recon/internal/globmatch"
 )
 
-// githubAPIBase is the default GitHub REST API host. Overridable in
-// DiscoverOptions purely for tests — production callers never set it.
-const githubAPIBase = "https://api.github.com"
-
-// maxDiscoveryPages bounds pagination independent of MaxRepos
-// (docs/adr/0021-fleet-org-enumeration.md): 100 pages at up to 100
-// repositories per page is 10,000 repositories, regardless of how a
-// pathological or hostile response might try to keep a Link header going.
-const maxDiscoveryPages = 100
-
-const perPage = 100
-
-// maxAPIResponseBytes bounds one page's response body, read via
-// io.LimitReader(..., maxAPIResponseBytes+1) so an oversized response is
-// detected and reported clearly rather than silently truncated into a
-// confusing JSON-decode error.
-const maxAPIResponseBytes = 16 << 20
-
-// discoveryUserAgent identifies fleet's own GitHub API calls, per GitHub's
-// own API guidance and so a response ever needing follow-up is attributable
-// to this specific caller rather than a generic HTTP client string.
-const discoveryUserAgent = "gin-recon-fleet"
+const (
+	githubAPIBase           = "https://api.github.com"
+	maxDiscoveryPages       = 100
+	perPage                 = 100
+	maxAPIResponseBytes     = 16 << 20
+	discoveryUserAgent      = "gin-recon-fleet"
+	discoveryRequestTimeout = 30 * time.Second
+	discoveryAttempts       = 3
+	DefaultMaxRepos         = 100
+	MaxMaxRepos             = 10_000
+)
 
 var orgNamePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,99})$`)
 
-// DiscoverOptions configures one --org enumeration pass.
 type DiscoverOptions struct {
 	Org             string
 	IncludeArchived bool
 	IncludeForks    bool
-	RepoInclude     []string // glob against repo name and "org/name"; empty means include all
+	RepoInclude     []string
 	RepoExclude     []string
-	MaxRepos        int // 0 means DefaultMaxRepos
+	MaxRepos        int
 	Token           string
-	HTTPClient      *http.Client // nil builds a redirect-rejecting client (see newDiscoveryClient)
-	APIBase         string       // "" uses githubAPIBase
+	HTTPClient      *http.Client
+	APIBase         string
 }
 
-// DefaultMaxRepos and MaxMaxRepos are --max-repos's default and hard cap
-// (docs/adr/0021-fleet-org-enumeration.md).
-const (
-	DefaultMaxRepos = 100
-	MaxMaxRepos     = 1000
-)
+type RepositoryDisposition struct {
+	ID            int64  `json:"id,omitempty"`
+	FullName      string `json:"fullName"`
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	PushedAt      string `json:"pushedAt,omitempty"`
+	Status        string `json:"status"`
+	Reason        string `json:"reason,omitempty"`
+}
 
-// DiscoveryResult is a --org enumeration's outcome: a Manifest in the exact
-// shape LoadManifest already produces from a hand-written file, plus
-// whether the discovered list is known to be partial and which
-// repositories were left out and why.
+type RateLimitState struct {
+	Remaining int    `json:"remaining"`
+	Reset     string `json:"reset,omitempty"`
+}
+
+type DiscoverySummary struct {
+	Complete     bool                    `json:"complete"`
+	PagesFetched int                     `json:"pagesFetched"`
+	Visible      int                     `json:"visibleRepositories"`
+	Selected     int                     `json:"selectedRepositories"`
+	Repositories []RepositoryDisposition `json:"repositories"`
+	Diagnostics  []string                `json:"diagnostics,omitempty"`
+	RateLimit    *RateLimitState         `json:"rateLimit,omitempty"`
+}
+
 type DiscoveryResult struct {
 	Manifest        *Manifest
 	Incomplete      bool
-	SkippedBadName  []string // repository full names skipped: name doesn't fit a target name
-	SkippedDisabled []string // repository full names skipped: GitHub has disabled the repository
-	SkippedEmpty    []string // repository full names skipped: zero content, nothing to clone
+	SkippedBadName  []string
+	SkippedDisabled []string
+	SkippedEmpty    []string
+	Summary         DiscoverySummary
 }
 
 type githubRepo struct {
@@ -80,18 +84,24 @@ type githubRepo struct {
 	Archived      bool   `json:"archived"`
 	Disabled      bool   `json:"disabled"`
 	Fork          bool   `json:"fork"`
-	Size          int64  `json:"size"` // KB; 0 means an empty repository
+	Size          int64  `json:"size"`
 	CloneURL      string `json:"clone_url"`
 	DefaultBranch string `json:"default_branch"`
 }
 
-// DiscoverOrgRepos enumerates a GitHub organization's repositories and
-// turns each into a git Target, per docs/adr/0021-fleet-org-enumeration.md.
-// It performs its own network calls directly — the caller is responsible
-// for having already checked --allow-remote-targets and that
-// fleet.allowedRemoteHosts actually authorizes api.github.com before ever
-// calling this, the same two-gate rule ADR 0019 established for the clones
-// this discovery result will go on to request.
+type pageResult struct {
+	repositories []githubRepo
+	hasNext      bool
+	rateLimit    *RateLimitState
+}
+
+type discoveryHTTPError struct {
+	message   string
+	retryable bool
+}
+
+func (e *discoveryHTTPError) Error() string { return e.message }
+
 func DiscoverOrgRepos(ctx context.Context, opts DiscoverOptions) (*DiscoveryResult, error) {
 	if !orgNamePattern.MatchString(opts.Org) {
 		return nil, fmt.Errorf("fleet: --org: %q must contain only letters, numbers, or interior hyphens", opts.Org)
@@ -107,98 +117,187 @@ func DiscoverOrgRepos(ctx context.Context, opts DiscoverOptions) (*DiscoveryResu
 	client := opts.HTTPClient
 	if client == nil {
 		client = newDiscoveryClient()
+	} else {
+		// Do not trust an injected client's redirect policy: Authorization is
+		// attached below, so following even a same-looking 3xx could forward a
+		// workspace token outside the configured API origin.
+		clone := *client
+		clone.CheckRedirect = refuseDiscoveryRedirect
+		client = &clone
 	}
 	base := opts.APIBase
 	if base == "" {
 		base = githubAPIBase
 	}
+	baseURL, err := url.Parse(base)
+	if err != nil || baseURL.Scheme == "" || baseURL.Host == "" {
+		return nil, fmt.Errorf("fleet: --org: invalid GitHub API base %q", base)
+	}
 
-	var targets []Target
 	result := &DiscoveryResult{}
-
-	url := fmt.Sprintf("%s/orgs/%s/repos?per_page=%d&sort=full_name", base, opts.Org, perPage)
-	for page := 0; url != "" && page < maxDiscoveryPages && len(targets) < maxRepos; page++ {
-		repos, next, err := fetchRepoPage(ctx, client, url, opts.Token)
+	result.Summary.Complete = true
+	seen := make(map[string]bool)
+	var targets []Target
+	hasNext := true
+	for page := 1; page <= maxDiscoveryPages && hasNext; page++ {
+		pageURL := repositoryPageURL(baseURL, opts.Org, page)
+		fetched, err := fetchRepoPageWithRetry(ctx, client, pageURL, opts.Token)
 		if err != nil {
-			return nil, err
+			if page == 1 {
+				return nil, err
+			}
+			result.Incomplete = true
+			result.Summary.Complete = false
+			result.Summary.Diagnostics = append(result.Summary.Diagnostics, fmt.Sprintf("page %d: %v", page, err))
+			break
 		}
-		for _, r := range repos {
-			if r.Disabled {
-				result.SkippedDisabled = append(result.SkippedDisabled, r.FullName)
+		result.Summary.PagesFetched++
+		result.Summary.RateLimit = fetched.rateLimit
+		hasNext = fetched.hasNext
+
+		for _, repo := range fetched.repositories {
+			identity := strings.ToLower(repo.FullName)
+			if identity == "" {
+				identity = strings.ToLower(opts.Org + "/" + repo.Name)
+			}
+			if seen[identity] {
+				result.Summary.Repositories = append(result.Summary.Repositories, disposition(repo, "skipped", "duplicate API entry"))
 				continue
 			}
-			if r.Size == 0 {
-				result.SkippedEmpty = append(result.SkippedEmpty, r.FullName)
-				continue
+			seen[identity] = true
+			result.Summary.Visible++
+
+			status, reason := repositorySelection(repo, opts)
+			gitSource := &GitSource{URL: repo.CloneURL, Ref: repo.DefaultBranch}
+			if status == "selected" {
+				if err := validateGitSource(repo.Name, gitSource); err != nil {
+					status, reason = "skipped", "repository source metadata is invalid"
+					result.Incomplete = true
+					result.Summary.Complete = false
+				}
 			}
-			if r.Archived && !opts.IncludeArchived {
-				continue
-			}
-			if r.Fork && !opts.IncludeForks {
-				continue
-			}
-			if len(opts.RepoInclude) > 0 && !globmatch.Any(opts.RepoInclude, r.Name) && !globmatch.Any(opts.RepoInclude, r.FullName) {
-				continue
-			}
-			if globmatch.Any(opts.RepoExclude, r.Name) || globmatch.Any(opts.RepoExclude, r.FullName) {
-				continue
-			}
-			if len(targets) >= maxRepos {
+			if status == "selected" && len(targets) >= maxRepos {
+				status, reason = "capped", fmt.Sprintf("selected repository cap %d reached", maxRepos)
 				result.Incomplete = true
-				break
+				result.Summary.Complete = false
 			}
-			if !validTargetName.MatchString(r.Name) {
-				result.SkippedBadName = append(result.SkippedBadName, r.FullName)
+			result.Summary.Repositories = append(result.Summary.Repositories, disposition(repo, status, reason))
+			switch reason {
+			case "repository is disabled":
+				result.SkippedDisabled = append(result.SkippedDisabled, repo.FullName)
+			case "repository is empty":
+				result.SkippedEmpty = append(result.SkippedEmpty, repo.FullName)
+			case "repository name is not a safe fleet target name":
+				result.SkippedBadName = append(result.SkippedBadName, repo.FullName)
+			}
+			if status != "selected" {
 				continue
 			}
 			targets = append(targets, Target{
-				Name: r.Name,
-				Git:  &GitSource{URL: r.CloneURL, Ref: r.DefaultBranch},
+				Name: repo.Name,
+				Git:  gitSource,
 				GitHub: &GitHubMeta{
-					ID:         r.ID,
-					FullName:   r.FullName,
-					Private:    r.Private,
-					Visibility: r.Visibility,
-					PushedAt:   r.PushedAt,
-					Archived:   r.Archived,
-					Fork:       r.Fork,
+					ID: repo.ID, FullName: repo.FullName, DefaultBranch: repo.DefaultBranch,
+					Private: repo.Private, Visibility: repo.Visibility, PushedAt: repo.PushedAt,
+					Archived: repo.Archived, Fork: repo.Fork,
 				},
 			})
 		}
-		url = next
 	}
-	if url != "" {
+	if hasNext && result.Summary.PagesFetched == maxDiscoveryPages {
 		result.Incomplete = true
+		result.Summary.Complete = false
+		result.Summary.Diagnostics = append(result.Summary.Diagnostics, fmt.Sprintf("enumeration exceeded %d pages", maxDiscoveryPages))
 	}
-
 	if len(targets) == 0 {
-		return nil, fmt.Errorf("fleet: --org %q: no repositories discovered (check the organization name, --include-archived/--include-forks/--repo-include/--repo-exclude, and that the token in fleet.allowedRemoteHosts has access)", opts.Org)
+		return nil, fmt.Errorf("fleet: --org %q: no repositories discovered or selected; inspect discovery filters, repository dispositions, and token access", opts.Org)
 	}
-
+	result.Summary.Selected = len(targets)
 	result.Manifest = &Manifest{Version: 1, Targets: targets}
 	return result, nil
 }
 
-// newDiscoveryClient rejects redirects rather than following them. A
-// redirected GitHub API response would otherwise be silently retried
-// against whatever host the redirect names, bypassing the whole point of
-// requiring api.github.com in fleet.allowedRemoteHosts
-// (docs/adr/0019-fleet-remote-targets.md's two-gate model): the allowlist
-// only means something if this client actually stops at the host it names.
-func newDiscoveryClient() *http.Client {
-	return &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return fmt.Errorf("fleet: --org: refusing to follow a redirect from the GitHub API (to %s)", req.URL)
-		},
+func repositorySelection(repo githubRepo, opts DiscoverOptions) (status, reason string) {
+	switch {
+	case repo.Disabled:
+		return "skipped", "repository is disabled"
+	case repo.Size == 0:
+		return "skipped", "repository is empty"
+	case repo.Archived && !opts.IncludeArchived:
+		return "skipped", "archived repositories were excluded"
+	case repo.Fork && !opts.IncludeForks:
+		return "skipped", "forks were excluded"
+	case len(opts.RepoInclude) > 0 && !globmatch.Any(opts.RepoInclude, repo.Name) && !globmatch.Any(opts.RepoInclude, repo.FullName):
+		return "filtered", "repository did not match --repo-include"
+	case globmatch.Any(opts.RepoExclude, repo.Name) || globmatch.Any(opts.RepoExclude, repo.FullName):
+		return "filtered", "repository matched --repo-exclude"
+	case ValidTargetName(repo.Name) != nil:
+		return "skipped", "repository name is not a safe fleet target name"
+	case repo.CloneURL == "":
+		return "skipped", "repository lacks clone URL"
+	default:
+		return "selected", ""
 	}
 }
 
-// fetchRepoPage performs one paginated GitHub API request, returning the
-// decoded repositories and the next page's URL (empty when there is none).
-func fetchRepoPage(ctx context.Context, client *http.Client, url, token string) ([]githubRepo, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func disposition(repo githubRepo, status, reason string) RepositoryDisposition {
+	return RepositoryDisposition{ID: repo.ID, FullName: repo.FullName, DefaultBranch: repo.DefaultBranch, PushedAt: repo.PushedAt, Status: status, Reason: reason}
+}
+
+func repositoryPageURL(base *url.URL, org string, page int) string {
+	u := *base
+	u.Path = strings.TrimRight(u.Path, "/") + "/orgs/" + url.PathEscape(org) + "/repos"
+	query := u.Query()
+	query.Set("per_page", strconv.Itoa(perPage))
+	query.Set("sort", "full_name")
+	if page > 1 {
+		query.Set("page", strconv.Itoa(page))
+	}
+	u.RawQuery = query.Encode()
+	u.Fragment = ""
+	return u.String()
+}
+
+func newDiscoveryClient() *http.Client {
+	return &http.Client{
+		Timeout:       discoveryRequestTimeout,
+		CheckRedirect: refuseDiscoveryRedirect,
+	}
+}
+
+func refuseDiscoveryRedirect(req *http.Request, via []*http.Request) error {
+	return fmt.Errorf("fleet: --org: refusing to follow a redirect from the GitHub API (to %s)", req.URL)
+}
+
+func fetchRepoPageWithRetry(ctx context.Context, client *http.Client, pageURL, token string) (pageResult, error) {
+	var last error
+	for attempt := 1; attempt <= discoveryAttempts; attempt++ {
+		result, err := fetchRepoPage(ctx, client, pageURL, token)
+		if err == nil {
+			return result, nil
+		}
+		last = err
+		httpErr, retryable := err.(*discoveryHTTPError)
+		if !retryable || !httpErr.retryable || attempt == discoveryAttempts {
+			break
+		}
+		timer := time.NewTimer(time.Duration(attempt) * 100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return pageResult{}, fmt.Errorf("fleet: --org: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+	return pageResult{}, last
+}
+
+func fetchRepoPage(ctx context.Context, client *http.Client, pageURL, token string) (pageResult, error) {
+	requestContext, cancel := context.WithTimeout(ctx, discoveryRequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestContext, http.MethodGet, pageURL, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("fleet: --org: %w", err)
+		return pageResult{}, fmt.Errorf("fleet: --org: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -206,83 +305,67 @@ func fetchRepoPage(ctx context.Context, client *http.Client, url, token string) 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-
 	resp, err := client.Do(req)
 	if err != nil {
-		if isRedirectError(err) {
-			return nil, "", err
+		if strings.Contains(err.Error(), "refusing to follow a redirect") {
+			return pageResult{}, err
 		}
-		return nil, "", fmt.Errorf("fleet: --org: requesting %s: %w", url, err)
+		return pageResult{}, &discoveryHTTPError{message: fmt.Sprintf("fleet: --org: requesting GitHub repository page: %v", err), retryable: true}
 	}
 	defer resp.Body.Close()
-
-	// Read one byte past the cap so an oversized response is detected and
-	// reported clearly, rather than silently truncated by io.LimitReader
-	// into a confusing "invalid JSON" decode error further down.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
 	if err != nil {
-		return nil, "", fmt.Errorf("fleet: --org: reading response: %w", err)
+		return pageResult{}, &discoveryHTTPError{message: fmt.Sprintf("fleet: --org: reading response: %v", err), retryable: true}
 	}
 	if len(body) > maxAPIResponseBytes {
-		return nil, "", fmt.Errorf("fleet: --org: GitHub API response exceeded the %d MiB page limit", maxAPIResponseBytes>>20)
+		return pageResult{}, fmt.Errorf("fleet: --org: GitHub API response exceeded the %d MiB page limit", maxAPIResponseBytes>>20)
 	}
 
-	rateRemaining, hasRate := parseRateRemaining(resp.Header.Get("X-RateLimit-Remaining"))
-
+	rate := parseRateLimit(resp.Header)
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound:
-		return nil, "", fmt.Errorf("fleet: --org: organization not found, or the token in fleet.allowedRemoteHosts cannot see it")
+		return pageResult{}, fmt.Errorf("fleet: --org: organization not found, or the configured token cannot see it")
 	case http.StatusForbidden, http.StatusTooManyRequests:
-		if hasRate && rateRemaining == 0 {
-			return nil, "", fmt.Errorf("fleet: --org: GitHub API rate limit is exhausted (status %d)", resp.StatusCode)
+		if rate != nil && rate.Remaining == 0 {
+			return pageResult{}, &discoveryHTTPError{message: fmt.Sprintf("fleet: --org: GitHub API rate limit is exhausted (status %d)", resp.StatusCode), retryable: true}
 		}
-		return nil, "", fmt.Errorf("fleet: --org: GitHub API access denied (status %d) — check the token in fleet.allowedRemoteHosts has organization read access", resp.StatusCode)
+		return pageResult{}, fmt.Errorf("fleet: --org: GitHub API access denied (status %d); check organization read access", resp.StatusCode)
 	default:
-		return nil, "", fmt.Errorf("fleet: --org: GitHub API returned status %d", resp.StatusCode)
+		return pageResult{}, &discoveryHTTPError{message: fmt.Sprintf("fleet: --org: GitHub API returned status %d", resp.StatusCode), retryable: resp.StatusCode >= 500}
 	}
 
-	var repos []githubRepo
-	if err := json.Unmarshal(body, &repos); err != nil {
-		return nil, "", fmt.Errorf("fleet: --org: decoding GitHub API response: %w", err)
+	var repositories []githubRepo
+	if err := json.Unmarshal(body, &repositories); err != nil {
+		return pageResult{}, fmt.Errorf("fleet: --org: decoding GitHub API response: %w", err)
 	}
-	return repos, nextPageURL(resp.Header.Get("Link")), nil
+	return pageResult{repositories: repositories, hasNext: linkHasNext(resp.Header.Get("Link")), rateLimit: rate}, nil
 }
 
-// isRedirectError recognizes the error newDiscoveryClient's CheckRedirect
-// produces, which net/http wraps in a *url.Error — unwrapped here so the
-// caller's message is exactly what CheckRedirect said, not a generic
-// "requesting <url>: ..." wrapper that would bury the actual reason.
-func isRedirectError(err error) bool {
-	return strings.Contains(err.Error(), "refusing to follow a redirect")
-}
-
-func parseRateRemaining(header string) (int, bool) {
-	if header == "" {
-		return 0, false
+func parseRateLimit(header http.Header) *RateLimitState {
+	value := header.Get("X-RateLimit-Remaining")
+	if value == "" {
+		return nil
 	}
-	n, err := strconv.Atoi(header)
+	remaining, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, false
+		return nil
 	}
-	return n, true
+	state := &RateLimitState{Remaining: remaining}
+	if epoch, err := strconv.ParseInt(header.Get("X-RateLimit-Reset"), 10, 64); err == nil && epoch > 0 {
+		state.Reset = time.Unix(epoch, 0).UTC().Format(time.RFC3339)
+	}
+	return state
 }
 
-// nextPageURL parses a GitHub API Link header
-// (`<url>; rel="next", <url>; rel="last"`) for the "next" relation.
-func nextPageURL(link string) string {
+// linkHasNext treats Link as pagination metadata only. The next request URL
+// is reconstructed against APIBase, so authorization is never forwarded to
+// an origin supplied by a response header.
+func linkHasNext(link string) bool {
 	for _, part := range strings.Split(link, ",") {
-		segments := strings.Split(part, ";")
-		if len(segments) < 2 {
-			continue
+		if strings.Contains(part, `rel="next"`) {
+			return true
 		}
-		if !strings.Contains(segments[1], `rel="next"`) {
-			continue
-		}
-		u := strings.TrimSpace(segments[0])
-		u = strings.TrimPrefix(u, "<")
-		u = strings.TrimSuffix(u, ">")
-		return u
 	}
-	return ""
+	return false
 }

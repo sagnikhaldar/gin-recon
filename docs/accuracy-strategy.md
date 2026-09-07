@@ -34,6 +34,8 @@ Every fixture has a reviewed manifest describing expected routes, middleware ord
 
 ## Metrics and Release Gates
 
+**Status:** route recall/precision are measured, corpus-wide, by `TestAccuracyCorpusRouteRecallAndPrecision` (`cmd/gin-recon/accuracy_test.go`), which runs a real `inventory` against every fixture and compares emitted routes against each fixture's own reviewed `manifest.json`. Current baseline: 96.7% recall, 100% precision across the 12 fixtures — clears the Alpha bar below, not yet Beta's. One known, tracked gap: `untracked-factory`'s `/resolved-factory`/`/via-logged-factory` aren't discovered, because a function that calls another factory function without itself calling `gin.New()`/`Default()` is never selected as a scan root (`internal/analyzer/inventory.go`'s `HasEngineConstruction` check is direct-call-only) — a real silent-route-loss gap, not yet fixed. Middleware-chain exactness, authentication-safety false-`proven` counts, and OpenAPI accuracy below are not yet measured by any harness.
+
 Freeze each release corpus manifest before measuring a candidate. Adding, removing, or reclassifying a supported pattern requires review and cannot be used to make a failing candidate pass.
 
 Measure separately:

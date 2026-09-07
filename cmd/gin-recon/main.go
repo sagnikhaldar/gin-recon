@@ -21,6 +21,7 @@ import (
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
 	"github.com/sagnikhaldar/gin-recon/internal/compare"
 	"github.com/sagnikhaldar/gin-recon/internal/config"
+	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 	"github.com/sagnikhaldar/gin-recon/internal/format"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
 	"github.com/sagnikhaldar/gin-recon/internal/report"
@@ -54,7 +55,7 @@ const implementedFormatsMessage = `"json", "pretty", "openapi", "md", and "sarif
 const htmlCompanionFilename = "api.html"
 
 // formatFilename returns the --out filename for one format, per
-// docs/cli-contract.md: "Files are routes.json, routes.md, openapi.json,
+// docs/reference.md: "Files are routes.json, routes.md, openapi.json,
 // api.html, results.sarif, and routes.txt."
 func formatFilename(f cli.OutputFormat) string {
 	switch f {
@@ -113,7 +114,7 @@ func renderReport(rep *report.Report, f cli.OutputFormat, cfg *config.Config) ([
 	}
 }
 
-// printFormatDiagnostics writes format-time diagnostics (docs/cli-contract.md:
+// printFormatDiagnostics writes format-time diagnostics (docs/reference.md:
 // "warnings and diagnostics intended for humans go to stderr") as one line
 // each, never mixed into the stdout report content.
 func printFormatDiagnostics(stderr io.Writer, f cli.OutputFormat, diags []model.Diagnostic) {
@@ -151,10 +152,22 @@ type renderedFile struct {
 // cli.ExitGate here when a --fail-on selector matched, since the report
 // still needs to be written before the process exits nonzero.
 func writeReport(rep *report.Report, opts *cli.Options, cfg *config.Config, stdout, stderr io.Writer, successExitCode int) int {
+	// limits.maxOutputBytes (internal/config/limits.go) was previously
+	// validated as a config *value* but never actually enforced anywhere —
+	// checked here per rendered artifact, mirroring maxFileBytes's own
+	// per-source-file (rather than whole-scan) scope, so one huge SARIF/
+	// OpenAPI document from an unusually large target is caught rather than
+	// written unbounded.
+	maxOutputBytes := cfg.Limits.Resolve().MaxOutputBytes
+
 	if opts.OutDir == "" {
 		data, diags, err := renderReport(rep, opts.Formats[0], cfg)
 		if err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		if len(data) > maxOutputBytes {
+			fmt.Fprintf(stderr, "gin-recon: rendered %s output is %d bytes, exceeding limits.maxOutputBytes (%d)\n", opts.Formats[0], len(data), maxOutputBytes)
 			return cli.ExitOperationalError
 		}
 		printFormatDiagnostics(stderr, opts.Formats[0], diags)
@@ -172,6 +185,10 @@ func writeReport(rep *report.Report, opts *cli.Options, cfg *config.Config, stdo
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 			return cli.ExitOperationalError
 		}
+		if len(data) > maxOutputBytes {
+			fmt.Fprintf(stderr, "gin-recon: rendered %s output is %d bytes, exceeding limits.maxOutputBytes (%d)\n", f, len(data), maxOutputBytes)
+			return cli.ExitOperationalError
+		}
 		printFormatDiagnostics(stderr, f, diags)
 		files = append(files, renderedFile{formatFilename(f), data})
 
@@ -183,6 +200,10 @@ func writeReport(rep *report.Report, opts *cli.Options, cfg *config.Config, stdo
 			htmlData, _, err := format.HTML(rep, cfg)
 			if err != nil {
 				fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+				return cli.ExitOperationalError
+			}
+			if len(htmlData) > maxOutputBytes {
+				fmt.Fprintf(stderr, "gin-recon: rendered %s output is %d bytes, exceeding limits.maxOutputBytes (%d)\n", htmlCompanionFilename, len(htmlData), maxOutputBytes)
 				return cli.ExitOperationalError
 			}
 			files = append(files, renderedFile{htmlCompanionFilename, htmlData})
@@ -203,7 +224,7 @@ func writeReport(rep *report.Report, opts *cli.Options, cfg *config.Config, stdo
 	}
 	for _, rf := range files {
 		outPath := filepath.Join(opts.OutDir, rf.name)
-		if err := os.WriteFile(outPath, rf.data, 0o644); err != nil {
+		if err := fleet.WriteFileAtomic(outPath, rf.data, 0o644); err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 			return cli.ExitOperationalError
 		}
@@ -265,7 +286,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 // go/packages or the Go toolchain at all (internal/analyzer.LoadSyntax),
 // per docs/threat-model.md's syntax-only trust profile.
 func runInventory(opts *cli.Options, stdout, stderr io.Writer) int {
-	// --config is applicable to inventory (docs/cli-contract.md) purely for
+	// --config is applicable to inventory (docs/reference.md) purely for
 	// scan/analysis settings and OpenAPI title/version/securitySchemes
 	// metadata; it can never make an inventory report assert security, since
 	// applySecurity only ever runs against route.Auth, which inventory
@@ -299,7 +320,7 @@ func runInventory(opts *cli.Options, stdout, stderr io.Writer) int {
 		loaded, err := analyzer.LoadSyntax(context.Background(), analyzer.LoadOptions{
 			Src: opts.Src, GOOS: opts.GOOS, GOARCH: opts.GOARCH, Tags: opts.Tags,
 			Workspace: opts.Workspace, ModuleMode: opts.ModuleMode,
-			Include: opts.Include, Exclude: exclude,
+			Include: opts.Include, Exclude: exclude, IncludeTests: opts.IncludeTests,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
@@ -332,6 +353,7 @@ func runInventory(opts *cli.Options, stdout, stderr io.Writer) int {
 		AllowDownloads: opts.AllowDownloads,
 		Include:        opts.Include,
 		Exclude:        exclude,
+		IncludeTests:   opts.IncludeTests,
 		FollowModules:  followModulesFrom(cfg),
 	})
 	if err != nil {
@@ -424,7 +446,7 @@ func runAudit(opts *cli.Options, stdout, stderr io.Writer) int {
 		loaded, err := analyzer.LoadSyntax(context.Background(), analyzer.LoadOptions{
 			Src: opts.Src, GOOS: opts.GOOS, GOARCH: opts.GOARCH, Tags: opts.Tags,
 			Workspace: opts.Workspace, ModuleMode: opts.ModuleMode,
-			Include: opts.Include, Exclude: exclude,
+			Include: opts.Include, Exclude: exclude, IncludeTests: opts.IncludeTests,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "gin-recon: %v\n", err)
@@ -454,6 +476,7 @@ func runAudit(opts *cli.Options, stdout, stderr io.Writer) int {
 			AllowDownloads: opts.AllowDownloads,
 			Include:        opts.Include,
 			Exclude:        exclude,
+			IncludeTests:   opts.IncludeTests,
 			FollowModules:  followModulesFrom(cfg),
 		})
 		if err != nil {
@@ -502,7 +525,13 @@ func runAudit(opts *cli.Options, stdout, stderr io.Writer) int {
 // ever emits JSON reports (never YAML, unlike --config), so JSON is the only
 // format accepted here.
 func loadReportFile(path string) (*report.Report, error) {
-	data, err := os.ReadFile(path)
+	// path is an arbitrary external file whenever this is reached via
+	// --baseline or render --report (docs/threat-model.md's adversarial-input
+	// stance) — reject a symlink, a non-regular file, or an oversized one
+	// before reading it fully into memory. A target's own routes.json under a
+	// live fleet run's own --out is not externally sourced, but the same
+	// check is harmless there too.
+	data, err := fleet.ReadBoundedFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -513,12 +542,20 @@ func loadReportFile(path string) (*report.Report, error) {
 	return &rep, nil
 }
 
-// loadBaseline is loadReportFile with --baseline's own error-wrapping —
-// compare.Compatible (called by runAudit right after) already performs
-// --baseline's actual compatibility validation (schema major, audit-only,
-// matching profile/build context), so this stays a thin wrapper.
+// loadBaseline loads a --baseline file and validates it the same way render
+// validates an external --report (validateRenderedReport: schema major,
+// recognized command, well-formed authStatus enums) — compare.Compatible,
+// called by runAudit right after, layers its own stricter audit-only/
+// profile/build-context checks on top, not a substitute for these.
 func loadBaseline(path string) (*report.Report, error) {
-	return loadReportFile(path)
+	rep, err := loadReportFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRenderedReport(rep); err != nil {
+		return nil, err
+	}
+	return rep, nil
 }
 
 // gateMatched evaluates the --fail-on selectors runAudit knows how to
@@ -619,7 +656,7 @@ func loadConfig(path string) (*config.Config, error) {
 
 // applyConfigDefaults fills any scan/analysis/limits option the user did
 // not pass explicitly on the command line from cfg, per
-// docs/configuration-contract.md: "Scalar CLI values override
+// docs/reference.md: "Scalar CLI values override
 // configuration. Repeatable CLI include/exclude values append as specified
 // by the CLI contract." opts.ExplicitFlags — not the field's current value —
 // is what decides "explicitly passed," since a flag's default can happen to
@@ -735,6 +772,10 @@ func runSchema(opts *cli.Options, stdout, stderr io.Writer) int {
 		doc = schema.Report10
 	case cli.SchemaKindConfig:
 		doc = schema.Config1
+	case cli.SchemaKindFleet:
+		doc = schema.Fleet10
+	case cli.SchemaKindFleetDelta:
+		doc = schema.FleetDelta10
 	}
 	if _, err := stdout.Write(doc); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: writing schema: %v\n", err)
@@ -747,7 +788,7 @@ func runSchema(opts *cli.Options, stdout, stderr io.Writer) int {
 // runSuggestAuth wires cli.Options through internal/analyzer's loader and
 // SuggestAuth ranking into JSON output. Like runInventory, only the typed
 // profile is implemented so far. --config is accepted per
-// docs/cli-contract.md even though SuggestAuth's own ranking does not
+// docs/reference.md even though SuggestAuth's own ranking does not
 // consume it (no formats, OpenAPI metadata, or auth classification apply to
 // suggest-auth) — an invalid config file must still fail loudly here rather
 // than being silently ignored, matching every other command.
@@ -787,6 +828,7 @@ func runSuggestAuth(opts *cli.Options, stdout, stderr io.Writer) int {
 		AllowDownloads: opts.AllowDownloads,
 		Include:        opts.Include,
 		Exclude:        exclude,
+		IncludeTests:   opts.IncludeTests,
 		FollowModules:  followModulesFrom(cfg),
 	})
 	if err != nil {
@@ -840,24 +882,31 @@ func runSuggestAuth(opts *cli.Options, stdout, stderr io.Writer) int {
 // render has no source tree to point them at.
 // isFleetAggregateJSON detects a fleet.json aggregate rather than an
 // ordinary report.Report, per docs/adr/0024-fleet-render.md: a fleet
-// aggregate always has a "targets" array and never a "schemaVersion" field
-// (every report.Report always has the latter). Exactly two report kinds
+// aggregate has a "targets" array and, from fleet schema 1.0 onward, kind
+// "fleet". Legacy aggregates had no schemaVersion, while every ordinary
+// report.Report has one. Exactly two report kinds
 // exist to distinguish between — not the open-ended, directory-inferred
 // set a sibling tool's own render auto-detects across, which ADR 0016
 // already declined to build for gin-recon.
 func isFleetAggregateJSON(data []byte) bool {
 	var probe struct {
 		SchemaVersion string          `json:"schemaVersion"`
+		Kind          string          `json:"kind"`
 		Targets       json.RawMessage `json:"targets"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return false
 	}
-	return probe.SchemaVersion == "" && probe.Targets != nil
+	return probe.Targets != nil && (probe.Kind == "fleet" || probe.SchemaVersion == "")
 }
 
 func runRender(opts *cli.Options, stdout, stderr io.Writer) int {
-	data, err := os.ReadFile(opts.ReportPath)
+	// --report is an arbitrary external file (docs/threat-model.md treats
+	// every scanned-repo/report input as adversarial): reject a symlink, a
+	// non-regular file, or anything larger than gin-recon itself would ever
+	// legitimately write as its own report, before reading it fully into
+	// memory.
+	data, err := fleet.ReadBoundedFile(opts.ReportPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: --report: %v\n", err)
 		return cli.ExitOperationalError
@@ -928,6 +977,26 @@ func validateRenderedReport(rep *report.Report) error {
 	default:
 		return fmt.Errorf("unrecognized report command %q", rep.Command)
 	}
+	return validateAuthStatusEnums(rep)
+}
+
+// validateAuthStatusEnums rejects a report whose routes carry an authStatus
+// outside model.AuthProven/Public/Unknown. A --baseline or render --report
+// file is external input (docs/threat-model.md treats every scanned-repo/
+// report artifact as adversarial): a bogus status here would either fail to
+// match --fail-on's gate logic silently or misrender in fleet.html, rather
+// than being caught as the malformed input it actually is.
+func validateAuthStatusEnums(rep *report.Report) error {
+	for _, r := range rep.Routes {
+		if r.Auth == nil {
+			continue
+		}
+		switch r.Auth.AuthStatus {
+		case model.AuthProven, model.AuthPublic, model.AuthUnknown:
+		default:
+			return fmt.Errorf("route %s %s: invalid authStatus %q", r.Method, r.NormalizedPath, r.Auth.AuthStatus)
+		}
+	}
 	return nil
 }
 
@@ -937,8 +1006,8 @@ Usage:
   gin-recon inventory [options]
   gin-recon audit [options]
   gin-recon suggest-auth [options]
-  gin-recon schema [--kind report|config]
+  gin-recon schema [--kind report|config|fleet|fleet-delta]
   gin-recon render --report <routes.json> [options]
-  gin-recon fleet --targets <targets.json> --out <dir> [options]
+  gin-recon fleet (--targets <targets.json>|--org <name>|--repo <owner/name>) [options]
 
 See docs/reference.md for the full option reference.`

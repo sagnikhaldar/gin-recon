@@ -112,3 +112,100 @@ func TestLoadWithNoScopeOptionsScansEverything(t *testing.T) {
 		t.Error("expected /api/users to be discovered with no Include/Exclude restriction")
 	}
 }
+
+// hasRoute reports whether routes contains one at path, for the
+// --include-tests regression tests below.
+func hasRoute(routes []model.Route, path string) bool {
+	for _, r := range routes {
+		if r.NormalizedPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLoadIncludeTestsIsOffByDefault is a regression test for a real gap:
+// --include-tests (cli.Options.IncludeTests) was parsed and schema-validated
+// but never actually threaded into LoadOptions at all — packages.Config's
+// Tests field was hardcoded false regardless of the flag. The
+// include-tests fixture's /test-only-route lives only in router_test.go;
+// without IncludeTests it must be invisible, same as before this fix.
+func TestLoadIncludeTestsIsOffByDefault(t *testing.T) {
+	loaded, err := Load(context.Background(), LoadOptions{
+		Src:            fixtureDir(t, "include-tests"),
+		GOOS:           runtime.GOOS,
+		GOARCH:         runtime.GOARCH,
+		ModuleMode:     model.ModuleReadonly,
+		AllowDownloads: true,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	result := Inventory(loaded)
+	if !hasRoute(result.Routes, "/always-visible") {
+		t.Errorf("expected /always-visible to be discovered, got: %+v", result.Routes)
+	}
+	if hasRoute(result.Routes, "/test-only-route") {
+		t.Errorf("expected /test-only-route to be invisible without --include-tests, got: %+v", result.Routes)
+	}
+}
+
+// TestLoadIncludeTestsScansTestFiles proves the flag actually does something
+// once set — the fix half of the regression above.
+func TestLoadIncludeTestsScansTestFiles(t *testing.T) {
+	loaded, err := Load(context.Background(), LoadOptions{
+		Src:            fixtureDir(t, "include-tests"),
+		GOOS:           runtime.GOOS,
+		GOARCH:         runtime.GOARCH,
+		ModuleMode:     model.ModuleReadonly,
+		AllowDownloads: true,
+		IncludeTests:   true,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	result := Inventory(loaded)
+	if !hasRoute(result.Routes, "/always-visible") {
+		t.Errorf("expected /always-visible to still be discovered, got: %+v", result.Routes)
+	}
+	if !hasRoute(result.Routes, "/test-only-route") {
+		t.Errorf("expected /test-only-route to be discovered with --include-tests, got: %+v", result.Routes)
+	}
+}
+
+// TestLoadSyntaxIncludeTestsScansTestFiles is the syntax-only-mode
+// equivalent — syntaxload.go hardcoded its own, separate _test.go exclusion
+// (it never uses go/packages, so packages.Config.Tests does not apply
+// there), unconditionally, with no way to override it at all before this
+// fix.
+func TestLoadSyntaxIncludeTestsScansTestFiles(t *testing.T) {
+	without, err := LoadSyntax(context.Background(), LoadOptions{
+		Src:    fixtureDir(t, "include-tests"),
+		GOOS:   runtime.GOOS,
+		GOARCH: runtime.GOARCH,
+	})
+	if err != nil {
+		t.Fatalf("LoadSyntax: %v", err)
+	}
+	withoutResult := InventorySyntax(without)
+	if hasRoute(withoutResult.Routes, "/test-only-route") {
+		t.Errorf("expected /test-only-route to be invisible without --include-tests, got: %+v", withoutResult.Routes)
+	}
+
+	with, err := LoadSyntax(context.Background(), LoadOptions{
+		Src:          fixtureDir(t, "include-tests"),
+		GOOS:         runtime.GOOS,
+		GOARCH:       runtime.GOARCH,
+		IncludeTests: true,
+	})
+	if err != nil {
+		t.Fatalf("LoadSyntax: %v", err)
+	}
+	withResult := InventorySyntax(with)
+	if !hasRoute(withResult.Routes, "/test-only-route") {
+		t.Errorf("expected /test-only-route to be discovered with --include-tests, got: %+v", withResult.Routes)
+	}
+	if !hasRoute(withResult.Routes, "/always-visible") {
+		t.Errorf("expected /always-visible to still be discovered, got: %+v", withResult.Routes)
+	}
+}

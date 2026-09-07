@@ -11,9 +11,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
-	"os"
 	"regexp"
+	"strings"
 )
 
 // validTargetName matches docs/adr/0018-fleet-scanning.md's target name
@@ -21,6 +22,22 @@ import (
 // validated up front and rejected outright on a bad character rather than
 // silently sanitized into something the manifest author didn't write.
 var validTargetName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ValidTargetName reports whether name is a safe fleet target name,
+// returning a descriptive error if not. Exported so external, untrusted
+// fleet.json data — a --baseline file (baseline.go's LoadBaseline) or a
+// render --report file (cmd/gin-recon's runFleetRender) — can validate a
+// target Name before ever using it to build a filesystem path. Both read a
+// different shape (Aggregate/TargetResult, not Manifest/Target) than
+// ParseManifest validates, so they never go through this check any other
+// way; a hand-written --targets manifest and --org's own discovery
+// (github.go) already call this same check by construction.
+func ValidTargetName(name string) error {
+	if name == "" || name == "." || name == ".." || !validTargetName.MatchString(name) {
+		return fmt.Errorf("fleet: target name %q must match %s", name, validTargetName.String())
+	}
+	return nil
+}
 
 // GitSource names a remote target to shallow-clone before scanning
 // (docs/adr/0019-fleet-remote-targets.md). URL must be an https:// URL with
@@ -39,13 +56,14 @@ type GitSource struct {
 // was or wasn't included, independent of GitHub's own state possibly
 // changing before the next run.
 type GitHubMeta struct {
-	ID         int64  `json:"id,omitempty"`
-	FullName   string `json:"fullName,omitempty"`
-	Private    bool   `json:"private,omitempty"`
-	Visibility string `json:"visibility,omitempty"`
-	PushedAt   string `json:"pushedAt,omitempty"`
-	Archived   bool   `json:"archived,omitempty"`
-	Fork       bool   `json:"fork,omitempty"`
+	ID            int64  `json:"id,omitempty"`
+	FullName      string `json:"fullName,omitempty"`
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	Private       bool   `json:"private,omitempty"`
+	Visibility    string `json:"visibility,omitempty"`
+	PushedAt      string `json:"pushedAt,omitempty"`
+	Archived      bool   `json:"archived,omitempty"`
+	Fork          bool   `json:"fork,omitempty"`
 }
 
 // Target is one entry in a targets manifest. Exactly one of Src (a local
@@ -82,7 +100,7 @@ type Manifest struct {
 // checkpoint identity (see checkpoint.go) so a resumed run can detect a
 // manifest that changed since the checkpoint was written.
 func LoadManifest(path string) (*Manifest, []byte, error) {
-	data, err := os.ReadFile(path)
+	data, err := ReadBoundedFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fleet: reading --targets file: %w", err)
 	}
@@ -99,13 +117,17 @@ func LoadManifest(path string) (*Manifest, []byte, error) {
 // goes through the identical checks rather than a second, potentially
 // divergent copy of them.
 func ParseManifest(data []byte) (*Manifest, error) {
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return nil, fmt.Errorf("fleet: invalid targets file: %w", err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var m Manifest
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("fleet: invalid targets file: %w", err)
 	}
-	if dec.More() {
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
 		return nil, fmt.Errorf("fleet: invalid targets file: trailing content after the top-level object")
 	}
 	if m.Version != 1 {
@@ -117,8 +139,8 @@ func ParseManifest(data []byte) (*Manifest, error) {
 
 	seen := make(map[string]bool, len(m.Targets))
 	for _, t := range m.Targets {
-		if t.Name == "" || t.Name == "." || t.Name == ".." || !validTargetName.MatchString(t.Name) {
-			return nil, fmt.Errorf("fleet: target name %q must match %s", t.Name, validTargetName.String())
+		if err := ValidTargetName(t.Name); err != nil {
+			return nil, err
 		}
 		if seen[t.Name] {
 			return nil, fmt.Errorf("fleet: duplicate target name %q", t.Name)
@@ -135,6 +157,64 @@ func ParseManifest(data []byte) (*Manifest, error) {
 		}
 	}
 	return &m, nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	const maxJSONDepth = 100
+	var readValue func(int) error
+	readValue = func(depth int) error {
+		if depth > maxJSONDepth {
+			return fmt.Errorf("JSON nesting exceeds %d levels", maxJSONDepth)
+		}
+		token, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := map[string]bool{}
+			for dec.More() {
+				keyToken, err := dec.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("object key is not a string")
+				}
+				if seen[key] {
+					return fmt.Errorf("duplicate object key %q", key)
+				}
+				seen[key] = true
+				if err := readValue(depth + 1); err != nil {
+					return err
+				}
+			}
+		case '[':
+			for dec.More() {
+				if err := readValue(depth + 1); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("unexpected delimiter %q", delim)
+		}
+		_, err = dec.Token()
+		return err
+	}
+	if err := readValue(0); err != nil {
+		return err
+	}
+	var trailing any
+	if err := dec.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("trailing content after the top-level value")
+	}
+	return nil
 }
 
 // validateGitSource enforces docs/adr/0019-fleet-remote-targets.md's URL
@@ -158,5 +238,28 @@ func validateGitSource(name string, g *GitSource) error {
 	if u.Hostname() == "" {
 		return fmt.Errorf("fleet: target %q: git.url has no host", name)
 	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("fleet: target %q: git.url must not contain a query or fragment", name)
+	}
+	if !validGitRef(g.Ref) {
+		return fmt.Errorf("fleet: target %q: git.ref %q is not a safe Git ref", name, g.Ref)
+	}
 	return nil
+}
+
+func validGitRef(ref string) bool {
+	if ref == "" {
+		return true
+	}
+	if ref == "@" || strings.HasPrefix(ref, "-") || strings.HasSuffix(ref, ".") || strings.HasSuffix(ref, "/") ||
+		strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.Contains(ref, "//") ||
+		strings.ContainsAny(ref, "\x00\r\n ~^:?*[\\") {
+		return false
+	}
+	for _, component := range strings.Split(ref, "/") {
+		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return false
+		}
+	}
+	return true
 }

@@ -1,5 +1,5 @@
 // Package cli implements gin-recon's command-line contract
-// (docs/cli-contract.md): argument parsing, cross-field validation, and exit
+// (docs/reference.md): argument parsing, cross-field validation, and exit
 // codes. Parsing logic is centralized here and unit-tested directly, per
 // ADR 0002's "each option has one definition and command applicability is
 // tested"; cmd/gin-recon is a thin wrapper that calls Parse and dispatches.
@@ -41,11 +41,13 @@ const (
 type SchemaKind string
 
 const (
-	SchemaKindReport SchemaKind = "report"
-	SchemaKindConfig SchemaKind = "config"
+	SchemaKindReport     SchemaKind = "report"
+	SchemaKindConfig     SchemaKind = "config"
+	SchemaKindFleet      SchemaKind = "fleet"
+	SchemaKindFleetDelta SchemaKind = "fleet-delta"
 )
 
-// Exit codes, per docs/cli-contract.md and docs/report-contract.md.
+// Exit codes, per docs/reference.md and docs/reference.md.
 const (
 	ExitSuccess          = 0
 	ExitOperationalError = 1
@@ -102,6 +104,10 @@ type Options struct {
 	Concurrency        int
 	Resume             bool
 	AllowRemoteTargets bool
+	RepoAttempts       int
+	RepoTimeout        time.Duration
+	FleetTimeout       time.Duration
+	ProgressMode       string
 
 	// RenderHTML is fleet-only (docs/adr/0037-fleet-html-opt-in.md): off by
 	// default. fleet.html was previously an unconditional companion to
@@ -172,7 +178,7 @@ type Options struct {
 	// (e.g. GOOS defaults to runtime.GOOS, indistinguishable from an
 	// explicit "--goos <the-running-tool's-own-GOOS>" without this). Needed
 	// so a caller layering config file values on top of parsed Options (per
-	// docs/configuration-contract.md: "Scalar CLI values override
+	// docs/reference.md: "Scalar CLI values override
 	// configuration") can tell "the user asked for this on the command
 	// line" apart from "this field just has its zero-value default," which
 	// the Options struct alone cannot express once Parse has already

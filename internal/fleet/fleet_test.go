@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeAuditSource is a minimal stand-in for gin-recon's real "audit"
@@ -71,6 +73,12 @@ func main() {
 	if strings.Contains(*format, "openapi") {
 		os.WriteFile(filepath.Join(*out, "openapi.json"), []byte("{}"), 0o644)
 		os.WriteFile(filepath.Join(*out, "api.html"), []byte("<html></html>"), 0o644)
+	}
+	if strings.Contains(*format, "md") {
+		os.WriteFile(filepath.Join(*out, "routes.md"), []byte("# routes"), 0o644)
+	}
+	if strings.Contains(*format, "sarif") {
+		os.WriteFile(filepath.Join(*out, "results.sarif"), []byte("{}"), 0o644)
 	}
 }
 `
@@ -332,8 +340,8 @@ func TestRunUsesTargetOwnConfigWhenPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(usedByHasOwn) != ownConfig {
-		t.Errorf("has-own-config target's audit subprocess used --config %q, want its own file %q", usedByHasOwn, ownConfig)
+	if string(usedByHasOwn) == sharedConfig || filepath.Ext(string(usedByHasOwn)) != filepath.Ext(ownConfig) {
+		t.Errorf("has-own-config target's audit subprocess used --config %q, want an immutable snapshot of its own %q", usedByHasOwn, ownConfig)
 	}
 	if !agg.Targets[0].TargetConfig {
 		t.Error("agg.Targets[0].TargetConfig = false, want true")
@@ -548,8 +556,14 @@ func TestRunResumeSkipsCompletedTargets(t *testing.T) {
 	if !agg.Coverage.Complete {
 		t.Error("Coverage.Complete = false, want true after both targets succeeded")
 	}
+	if _, err := os.Stat(filepath.Join(outDir, CheckpointFilename)); err != nil {
+		t.Errorf("checkpoint should remain until the caller durably writes fleet.json: %v", err)
+	}
+	if err := RemoveCheckpoint(outDir); err != nil {
+		t.Fatalf("RemoveCheckpoint: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(outDir, CheckpointFilename)); !os.IsNotExist(err) {
-		t.Error("checkpoint should be removed once the fleet is complete")
+		t.Error("RemoveCheckpoint should remove the journal after durable output")
 	}
 }
 
@@ -649,7 +663,30 @@ func TestRunPreseedReusesUnchangedTarget(t *testing.T) {
 		{Name: "changed", Src: targetDir(t, "complete")},
 	}}
 	outDir := t.TempDir()
-	preseededResult := TargetResult{Name: "unchanged", Status: StatusOK, Complete: true, Routes: 9}
+	reportDir := filepath.Join(outDir, "targets", "unchanged")
+	if err := os.MkdirAll(reportDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(reportDir, "routes.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := artifactForFile(outDir, filepath.Join("targets", "unchanged", "routes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery, err := discoverRepository(manifest.Targets[0].Src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preseededResult := TargetResult{
+		Name: "unchanged", Status: StatusOK, Complete: true, Routes: 9,
+		SourceFingerprint: resolvedSourceFingerprint(manifest.Targets[0], discovery.Fingerprint), Artifacts: []Artifact{artifact},
+		Modules: []ModuleResult{{
+			ID: "root", Path: ".", ModulePath: "fixture", Kind: ModuleGo,
+			Status: StatusOK, Complete: true,
+			Report: filepath.ToSlash(filepath.Join("targets", "unchanged", "routes.json")), Artifacts: []Artifact{artifact},
+		}},
+	}
 	var progress bytes.Buffer
 
 	agg, err := Run(context.Background(), RunOptions{
@@ -668,7 +705,7 @@ func TestRunPreseedReusesUnchangedTarget(t *testing.T) {
 		t.Fatalf("Run: unexpected error: %v", err)
 	}
 
-	if agg.Targets[0] != preseededResult {
+	if !reflect.DeepEqual(agg.Targets[0], preseededResult) {
 		t.Errorf("Targets[0] = %+v, want the preseeded result verbatim (not rescanned)", agg.Targets[0])
 	}
 	if agg.Targets[1].Status != StatusOK {
@@ -687,6 +724,105 @@ func TestRunPreseedReusesUnchangedTarget(t *testing.T) {
 	want := "[1/2] unchanged: ok (unchanged)\n[2/2] changed: ok (0 routes)\n"
 	if progress.String() != want {
 		t.Errorf("progress output = %q, want %q", progress.String(), want)
+	}
+}
+
+func TestRunScansEveryNestedModuleWithoutRootGoMod(t *testing.T) {
+	bin := buildFakeAudit(t)
+	repo := t.TempDir()
+	for _, module := range []struct{ path, behavior string }{
+		{"services/api", "with-routes"},
+		{"workers/jobs", "complete"},
+	} {
+		dir := filepath.Join(repo, module.path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/"+filepath.Base(module.path)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "behavior"), []byte(module.behavior), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := &Manifest{Version: 1, Targets: []Target{{Name: "monorepo", Src: repo}}}
+	outDir := t.TempDir()
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"), Manifest: manifest,
+		ManifestData: []byte("fixture"), Formats: []string{"json"}, OutDir: outDir,
+		Concurrency: 1, BinaryPath: bin, ToolVersion: "test",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	result := agg.Targets[0]
+	if result.Status != StatusOK || !result.Complete {
+		t.Fatalf("target = %+v, want complete multi-module result", result)
+	}
+	if result.Inventory.Kind != RepositoryMultiModule || len(result.Modules) != 2 {
+		t.Fatalf("inventory/modules = %+v / %+v", result.Inventory, result.Modules)
+	}
+	if result.Routes != 5 || result.Report != "" {
+		t.Fatalf("rollup routes/report = %d/%q, want 5 and no misleading single report", result.Routes, result.Report)
+	}
+	for _, module := range result.Modules {
+		if module.Report == "" {
+			t.Fatalf("module has no report: %+v", module)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, filepath.FromSlash(module.Report))); err != nil {
+			t.Fatalf("module report %s missing: %v", module.Report, err)
+		}
+	}
+}
+
+func TestRunRetriesRemoteTargetAndRecordsAttempts(t *testing.T) {
+	bin := buildFakeAudit(t)
+	attempts := 0
+	clone := func(ctx context.Context, gitURL, ref, destDir, token string) error {
+		attempts++
+		if attempts == 1 {
+			return fmt.Errorf("transient clone failure")
+		}
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(destDir, "go.mod"), []byte("module fixture\n"), 0o644); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(destDir, "behavior"), []byte("complete"), 0o644)
+	}
+	target := Target{Name: "remote", Git: &GitSource{URL: "https://github.com/acme/remote.git", Ref: "main"}}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: "targets.json", Manifest: &Manifest{Version: 1, Targets: []Target{target}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: t.TempDir(), BinaryPath: bin, ToolVersion: "test",
+		AllowRemote: true, AllowedHosts: []AllowedHost{{Host: "github.com"}}, Clone: clone,
+		RepoAttempts: 2, RepoTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || agg.Targets[0].Status != StatusOK || agg.Targets[0].Attempts != 2 {
+		t.Fatalf("attempts/result = %d / %+v", attempts, agg.Targets[0])
+	}
+}
+
+func TestRunBoundsRemoteTargetByDeadline(t *testing.T) {
+	clone := func(ctx context.Context, gitURL, ref, destDir, token string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	target := Target{Name: "remote", Git: &GitSource{URL: "https://github.com/acme/remote.git", Ref: "main"}}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: "targets.json", Manifest: &Manifest{Version: 1, Targets: []Target{target}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: t.TempDir(), BinaryPath: "unused", ToolVersion: "test",
+		AllowRemote: true, AllowedHosts: []AllowedHost{{Host: "github.com"}}, Clone: clone,
+		RepoAttempts: 3, RepoTimeout: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.Targets[0].Status != StatusFailed || !strings.Contains(agg.Targets[0].Error, "deadline exceeded") {
+		t.Fatalf("deadline result = %+v", agg.Targets[0])
 	}
 }
 
@@ -916,5 +1052,118 @@ func TestRunFailOnDoesNotMutateAggregateJSON(t *testing.T) {
 	}
 	if decoded["tool"] != "gin-recon" {
 		t.Errorf(`tool = %v, want "gin-recon"`, decoded["tool"])
+	}
+}
+
+func TestRunFailedTargetPreservesPreviouslyPublishedArtifacts(t *testing.T) {
+	bin := buildFakeAudit(t)
+	target := Target{Name: "service", Src: targetDir(t, "fail")}
+	outDir := t.TempDir()
+	published := filepath.Join(outDir, "targets", target.Name)
+	if err := os.MkdirAll(published, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("previous complete report")
+	if err := os.WriteFile(filepath.Join(published, "routes.json"), want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     &Manifest{Version: 1, Targets: []Target{target}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: outDir, Concurrency: 1, BinaryPath: bin, ToolVersion: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.Targets[0].Status != StatusFailed {
+		t.Fatalf("status = %s, want failed", agg.Targets[0].Status)
+	}
+	got, err := os.ReadFile(filepath.Join(published, "routes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("failed scan replaced prior artifact: got %q, want %q", got, want)
+	}
+}
+
+func TestRunResumeRescansChangedLocalSource(t *testing.T) {
+	bin := buildFakeAudit(t)
+	src := targetDir(t, "complete")
+	if err := os.WriteFile(filepath.Join(src, "source.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := Target{Name: "service", Src: src}
+	outDir := t.TempDir()
+	opts := RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     &Manifest{Version: 1, Targets: []Target{target}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: outDir, Concurrency: 1, BinaryPath: bin, ToolVersion: "test",
+	}
+	if _, err := Run(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "source.go"), []byte("package fixture\n\nconst Changed = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "behavior"), []byte("fail"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts.Resume = true
+	agg, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.Resume.Reused != 0 || agg.Targets[0].Status != StatusFailed {
+		t.Fatalf("changed local source was reused: resume=%+v target=%+v", agg.Resume, agg.Targets[0])
+	}
+}
+
+func TestRunClassifiesGinModuleWithoutRoutesSeparately(t *testing.T) {
+	bin := buildFakeAudit(t)
+	src := targetDir(t, "complete")
+	goMod := "module fixture\n\nrequire github.com/gin-gonic/gin v1.10.0\n"
+	if err := os.WriteFile(filepath.Join(src, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     &Manifest{Version: 1, Targets: []Target{{Name: "library", Src: src}}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: t.TempDir(), Concurrency: 1, BinaryPath: bin, ToolVersion: "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := agg.Targets[0].Modules[0].Kind; got != ModuleGinNoRoutes {
+		t.Fatalf("module kind = %q, want %q", got, ModuleGinNoRoutes)
+	}
+}
+
+func TestRunEmitsMachineReadableProgress(t *testing.T) {
+	bin := buildFakeAudit(t)
+	target := Target{Name: "service", Src: targetDir(t, "complete")}
+	var progress bytes.Buffer
+	_, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     &Manifest{Version: 1, Targets: []Target{target}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: t.TempDir(), Concurrency: 1, BinaryPath: bin, ToolVersion: "test",
+		Progress: &progress, ProgressFormat: "json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event struct {
+		Kind    string `json:"kind"`
+		Target  string `json:"target"`
+		Status  Status `json:"status"`
+		Current int    `json:"current"`
+		Total   int    `json:"total"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(progress.Bytes()), &event); err != nil {
+		t.Fatalf("progress is not JSON: %v: %q", err, progress.String())
+	}
+	if event.Kind != "fleet-progress" || event.Target != "service" || event.Status != StatusOK || event.Current != 1 || event.Total != 1 {
+		t.Fatalf("progress event = %+v", event)
 	}
 }

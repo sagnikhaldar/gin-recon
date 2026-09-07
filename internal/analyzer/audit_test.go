@@ -40,7 +40,7 @@ func loadAndAudit(t *testing.T, fixture string, cfg *config.Config) *AuditResult
 // gin-unresolved-* diagnostics) runs in Audit after discover's own
 // relativizeSources pass already completed, so — before this fix — every
 // finding and diagnostic it produced still carried the absolute checkout
-// path go/packages' Fset naturally produces, violating docs/cli-contract.md's
+// path go/packages' Fset naturally produces, violating docs/reference.md's
 // "Reports store root-relative slash-separated paths, never absolute
 // checkout paths." No existing test caught this: internal/analyzer/gin's own
 // security_test.go exercises AnalyzeEngineSecurity below the orchestration

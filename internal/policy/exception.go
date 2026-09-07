@@ -9,7 +9,7 @@ import (
 
 // exceptionApplies reports whether any of exceptions both selects route and
 // has not yet expired. Expiry is evaluated in UTC per
-// docs/configuration-contract.md: an exception expiring "2026-01-01" covers
+// docs/reference.md: an exception expiring "2026-01-01" covers
 // through the end of that day UTC, so it is compared as "before the
 // following midnight" rather than "before midnight of that day."
 func exceptionApplies(route model.Route, exceptions []config.Exception, now time.Time) bool {

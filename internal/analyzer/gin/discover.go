@@ -1279,7 +1279,7 @@ func (d *discoverer) sourceOf(pos token.Pos) *model.Source {
 }
 
 // buildChain combines a callableRef slice into ordered Middleware entries
-// plus the final handler, per docs/report-contract.md's "the uppercase
+// plus the final handler, per docs/reference.md's "the uppercase
 // method plus... final handler" split: the last entry in the resolved chain
 // is always the final handler, everything before it is middleware.
 func buildChain(chain []callableRef) ([]model.Middleware, model.Middleware) {

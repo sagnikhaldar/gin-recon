@@ -3,7 +3,7 @@ package config
 import "time"
 
 // Default and hard-cap values from
-// docs/configuration-contract.md#resource-defaults-and-caps. Defaults are
+// docs/reference.md#resource-defaults-and-caps. Defaults are
 // what an absent field resolves to; hard caps are the maximum a configured
 // value may ever request, regardless of what the target repository's own
 // configuration asks for.
@@ -51,4 +51,41 @@ func DefaultResolvedLimits() ResolvedLimits {
 		MaxOutputBytes: DefaultMaxOutputBytes,
 		MaxCallDepth:   DefaultMaxCallDepth,
 	}
+}
+
+// Resolve merges l (a possibly-nil *LimitsConfig, itself possibly holding
+// only some fields — see LimitsConfig's own doc comment) onto
+// DefaultResolvedLimits, filling every unset field with its documented
+// default. Assumes l already passed validateLimits (Config.Validate calls
+// it), so every set field is already within its hard cap and every duration
+// string already parses — Resolve itself does not re-validate, only merges.
+func (l *LimitsConfig) Resolve() ResolvedLimits {
+	r := DefaultResolvedLimits()
+	if l == nil {
+		return r
+	}
+	if l.Timeout != nil {
+		if d, err := time.ParseDuration(*l.Timeout); err == nil {
+			r.Timeout = d
+		}
+	}
+	if l.MaxFiles != nil {
+		r.MaxFiles = *l.MaxFiles
+	}
+	if l.MaxPackages != nil {
+		r.MaxPackages = *l.MaxPackages
+	}
+	if l.MaxFileBytes != nil {
+		r.MaxFileBytes = *l.MaxFileBytes
+	}
+	if l.MaxDiagnostics != nil {
+		r.MaxDiagnostics = *l.MaxDiagnostics
+	}
+	if l.MaxOutputBytes != nil {
+		r.MaxOutputBytes = *l.MaxOutputBytes
+	}
+	if l.MaxCallDepth != nil {
+		r.MaxCallDepth = *l.MaxCallDepth
+	}
+	return r
 }

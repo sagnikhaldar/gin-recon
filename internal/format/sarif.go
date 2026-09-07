@@ -1,6 +1,6 @@
 // Package format's SARIF formatter emits a SARIF 2.1.0 log
 // (docs/express-parity-matrix.md: "Emit GitHub Code Scanning-compatible
-// findings and locations"). SARIF is audit-only (docs/cli-contract.md); an
+// findings and locations"). SARIF is audit-only (docs/reference.md); an
 // inventory report has no Findings at all, so calling SARIF on one produces
 // a structurally valid but empty results array rather than an error — the
 // CLI layer is what actually rejects `--format sarif` on inventory
@@ -103,7 +103,7 @@ type sarifDescriptor struct {
 	ID string `json:"id"`
 }
 
-// sarifRuleOrder is docs/report-contract.md's full closed set of built-in
+// sarifRuleOrder is docs/reference.md's full closed set of built-in
 // rule IDs, in a fixed order — driver.rules always lists every rule Gin
 // Recon can ever produce, in this order, regardless of which ones actually
 // fired in a given run. GitHub Code Scanning (and SARIF consumers generally)
@@ -130,7 +130,7 @@ type sarifRuleMeta struct {
 }
 
 // sarifRuleCatalog's short/full/help text and default level mirror
-// docs/report-contract.md and docs/gin-security-rules.md exactly. Default
+// docs/reference.md and docs/gin-security-rules.md exactly. Default
 // level is that rule's typical Severity from the rule's own implementation
 // (internal/classify, internal/policy, internal/analyzer/gin/security.go);
 // each individual sarifResult's actual level still comes from that finding's

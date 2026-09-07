@@ -9,7 +9,7 @@ import (
 )
 
 // acceptedPublicPattern is "METHOD /path": an uppercase HTTP method, a space,
-// then an absolute path (docs/configuration-contract.md#policies-and-baselines).
+// then an absolute path (docs/reference.md#policies-and-baselines).
 var acceptedPublicPattern = regexp.MustCompile(`^[A-Z]+ /`)
 
 // exceptionDatePattern is strict YYYY-MM-DD; time.Parse alone would also
@@ -19,7 +19,7 @@ var acceptedPublicPattern = regexp.MustCompile(`^[A-Z]+ /`)
 var exceptionDatePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 // Validate checks a decoded Config against every rule in
-// docs/configuration-contract.md that Decode's strict parsing does not
+// docs/reference.md that Decode's strict parsing does not
 // already enforce structurally (unknown fields, custom YAML tags, duplicate
 // YAML mapping keys), applies documented defaults in place, and reports every
 // violation found rather than stopping at the first one — a reviewer fixing
@@ -192,7 +192,7 @@ func validateAuthValue(v string) error {
 
 // requirementDepth returns the maximum nesting depth of all/any/not, where a
 // requirement with no nested composition is depth 1. This bounds the same
-// recursive structure docs/configuration-contract.md caps at maxCallDepth.
+// recursive structure docs/reference.md caps at maxCallDepth.
 func requirementDepth(r *PolicyRequirement) int {
 	if r == nil {
 		return 0

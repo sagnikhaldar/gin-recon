@@ -124,3 +124,10 @@ func TestGitCloneNeverPromptsForCredentials(t *testing.T) {
 		t.Fatal("gitClone hung until the context timeout instead of failing fast")
 	}
 }
+
+func TestSanitizeDiagnosticRedactsTokenAndControlCharacters(t *testing.T) {
+	got := sanitizeDiagnostic("failure secret-token\x00\x1b[31m", "secret-token")
+	if strings.Contains(got, "secret-token") || strings.ContainsRune(got, '\x00') || strings.ContainsRune(got, '\x1b') {
+		t.Fatalf("sanitizeDiagnostic = %q", got)
+	}
+}

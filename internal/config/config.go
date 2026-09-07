@@ -1,5 +1,5 @@
 // Package config defines the strict, data-only configuration format
-// (schema/config-1.json, docs/configuration-contract.md). Struct field names
+// (schema/config-1.json, docs/reference.md). Struct field names
 // and JSON/YAML tags mirror the schema exactly; Decode (decode.go) and
 // Validate (validate.go) are what actually enforce the contract — this file
 // only defines the shape.
@@ -10,7 +10,7 @@
 package config
 
 // Assurance is the reviewer-selected trust mode for a configured
-// authMiddleware entry (docs/configuration-contract.md#canonical-symbols-and-assurance).
+// authMiddleware entry (docs/reference.md#canonical-symbols-and-assurance).
 type Assurance string
 
 const (
@@ -43,9 +43,9 @@ type PolicySelector struct {
 
 // PolicyRequirement is a boolean composition of route requirements. All/Any/Not
 // recurse; Validate bounds recursion depth by Limits.MaxCallDepth
-// (docs/configuration-contract.md#policies-and-baselines).
+// (docs/reference.md#policies-and-baselines).
 //
-// docs/configuration-contract.md's "any/all/no middleware" describes three
+// docs/reference.md's "any/all/no middleware" describes three
 // distinct presence checks: MiddlewareAny requires at least one of the
 // listed canonical symbols to be present, MiddlewarePresent (the "all" case)
 // requires every listed symbol to be present, and MiddlewareAbsent (the "no"
@@ -67,7 +67,7 @@ type PolicyRequirement struct {
 
 // Exception is a time-bounded, reviewed carve-out from a policy. Expires must
 // be a strict YYYY-MM-DD date, evaluated in UTC
-// (docs/configuration-contract.md#policies-and-baselines).
+// (docs/reference.md#policies-and-baselines).
 type Exception struct {
 	ID       string         `json:"id" yaml:"id"`
 	Reason   string         `json:"reason" yaml:"reason"`
@@ -84,7 +84,7 @@ type Policy struct {
 }
 
 // ScanConfig controls source scope, mirroring the CLI's --include/--exclude/
-// --ignore-file (docs/cli-contract.md).
+// --ignore-file (docs/reference.md).
 type ScanConfig struct {
 	Include    []string `json:"include,omitempty" yaml:"include,omitempty"`
 	Exclude    []string `json:"exclude,omitempty" yaml:"exclude,omitempty"`
@@ -93,7 +93,7 @@ type ScanConfig struct {
 
 // AnalysisConfig controls the analysis profile and build context, mirroring
 // the CLI's --profile/--goos/--goarch/--tags/--workspace/--module-mode/
-// --allow-downloads (docs/cli-contract.md).
+// --allow-downloads (docs/reference.md).
 type AnalysisConfig struct {
 	Profile        string   `json:"profile,omitempty" yaml:"profile,omitempty"`
 	AllowDownloads bool     `json:"allowDownloads,omitempty" yaml:"allowDownloads,omitempty"`
@@ -117,7 +117,7 @@ type AnalysisConfig struct {
 }
 
 // LimitsConfig overrides resource defaults, bounded by hard caps that
-// configuration can never exceed (docs/configuration-contract.md#resource-defaults-and-caps).
+// configuration can never exceed (docs/reference.md#resource-defaults-and-caps).
 // Every field is a pointer so "absent" (use the documented default) is
 // distinguishable from "explicitly zero" (always invalid per that doc) —
 // a plain int field would conflate the two and silently apply the default to

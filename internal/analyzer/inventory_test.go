@@ -28,7 +28,7 @@ func loadAndInventory(t *testing.T, fixture string) *InventoryResult {
 		ModuleMode: model.ModuleReadonly,
 		// AllowDownloads is a test-environment concession to populate the
 		// persistent tool-owned module cache on first run; it is NOT the
-		// production CLI default, which stays offline (docs/cli-contract.md:
+		// production CLI default, which stays offline (docs/reference.md:
 		// "--allow-downloads ... default false").
 		AllowDownloads: true,
 	})
@@ -75,7 +75,7 @@ func TestInventoryEndToEndMiddlewareOrderFixture(t *testing.T) {
 // bugs caught by inspecting real CLI output: model.Middleware.Source was
 // never populated at all (buildMiddlewareList silently dropped it), and
 // model.Route.Source carried the absolute checkout path instead of a
-// root-relative one, violating docs/cli-contract.md's "never absolute
+// root-relative one, violating docs/reference.md's "never absolute
 // checkout paths" rule. Both were invisible to every prior test because none
 // asserted on Source or BuildContext specifically.
 func TestInventoryPopulatesSourceAndBuildContext(t *testing.T) {

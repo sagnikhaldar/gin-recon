@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sagnikhaldar/gin-recon/schema/fleet-delta-1.0.json",
+  "title": "Gin Recon Fleet Delta 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "coverage", "targets", "summary"],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "kind": {"const": "fleet-delta"},
+    "baselineFingerprint": {"type": "string"},
+    "currentFingerprint": {"type": "string"},
+    "coverage": {"type": "object", "additionalProperties": false, "required": ["complete"], "properties": {"complete": {"type": "boolean"}, "diagnostics": {"type": "array", "items": {"type": "string"}}}},
+    "targets": {"type": "array", "items": {"$ref": "#/$defs/targetDelta"}},
+    "summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["addedTargets", "removedTargets", "incomparableTargets", "statusChanges", "addedModules", "removedModules", "addedRoutes", "removedRoutes", "authRegressions", "authImprovements", "newFindings", "resolvedFindings"],
+      "properties": {"addedTargets": {"type": "integer", "minimum": 0}, "removedTargets": {"type": "integer", "minimum": 0}, "incomparableTargets": {"type": "integer", "minimum": 0}, "statusChanges": {"type": "integer", "minimum": 0}, "addedModules": {"type": "integer", "minimum": 0}, "removedModules": {"type": "integer", "minimum": 0}, "addedRoutes": {"type": "integer", "minimum": 0}, "removedRoutes": {"type": "integer", "minimum": 0}, "authRegressions": {"type": "integer", "minimum": 0}, "authImprovements": {"type": "integer", "minimum": 0}, "newFindings": {"type": "integer", "minimum": 0}, "resolvedFindings": {"type": "integer", "minimum": 0}}
+    }
+  },
+  "$defs": {
+    "deltaStatus": {"enum": ["unchanged", "added-target", "removed-target", "status-changed", "incomparable"]},
+    "scanStatus": {"enum": ["ok", "not-go-module", "inconclusive", "failed"]},
+    "moduleDelta": {"type": "object", "required": ["id", "path", "status"], "properties": {"id": {"type": "string"}, "path": {"type": "string"}, "status": {"$ref": "#/$defs/deltaStatus"}, "reason": {"type": "string"}, "delta": {"type": "object"}}},
+    "targetDelta": {"type": "object", "additionalProperties": false, "required": ["name", "status"], "properties": {"name": {"type": "string"}, "status": {"$ref": "#/$defs/deltaStatus"}, "reason": {"type": "string"}, "delta": {"type": "object"}, "beforeStatus": {"$ref": "#/$defs/scanStatus"}, "afterStatus": {"$ref": "#/$defs/scanStatus"}, "modules": {"type": "array", "items": {"$ref": "#/$defs/moduleDelta"}}}}
+  }
+}

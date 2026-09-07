@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,9 +14,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
+	"github.com/sagnikhaldar/gin-recon/internal/model"
 	"github.com/sagnikhaldar/gin-recon/internal/report"
 )
 
@@ -63,6 +67,23 @@ func TestRunSchemaConfigSucceeds(t *testing.T) {
 	}
 }
 
+func TestRunFleetSchemasSucceed(t *testing.T) {
+	for _, kind := range []string{"fleet", "fleet-delta"} {
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"schema", "--kind", kind}, &stdout, &stderr)
+		if code != cli.ExitSuccess {
+			t.Fatalf("schema %s exit code = %d; stderr: %s", kind, code, stderr.String())
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+			t.Fatalf("schema %s is not valid JSON: %v", kind, err)
+		}
+		if doc["$schema"] != "https://json-schema.org/draft/2020-12/schema" {
+			t.Errorf("schema %s has unexpected dialect %v", kind, doc["$schema"])
+		}
+	}
+}
+
 func TestRunSuggestAuthSucceedsAndRanksCandidates(t *testing.T) {
 	dir := fixtureDir(t, "middleware-order")
 
@@ -95,7 +116,7 @@ func TestRunSuggestAuthSucceedsAndRanksCandidates(t *testing.T) {
 
 // TestRunSuggestAuthWritesToOutDir is the regression for a real
 // contract/implementation mismatch found while wiring this command up:
-// docs/cli-contract.md says "suggest-auth writes JSON to stdout unless --out
+// docs/reference.md says "suggest-auth writes JSON to stdout unless --out
 // is supplied", but --out was never registered on suggest-auth's FlagSet at
 // all (see internal/cli/parse_test.go's TestParseSuggestAuthAcceptsOutAndForce
 // for the parser-level regression).
@@ -141,7 +162,7 @@ func fixtureDir(t *testing.T, name string) string {
 // synthetic package whose Errors describe the failure. Before this was
 // fixed, that meant --src pointed at a directory with no Go module at all
 // silently produced an empty, exit-0 "successful" report instead of the
-// exit 1 docs/report-contract.md requires for "Fatal inability to load the
+// exit 1 docs/reference.md requires for "Fatal inability to load the
 // requested root."
 func TestRunInventoryAndAuditFailFatallyOnAnEmptyDirectory(t *testing.T) {
 	dir := t.TempDir() // no go.mod, no Go files
@@ -180,7 +201,7 @@ func TestRunHelpSucceeds(t *testing.T) {
 }
 
 func TestRunSchemaIgnoresScanOnlyOptions(t *testing.T) {
-	// schema does not register --src at all (docs/cli-contract.md: "accepts
+	// schema does not register --src at all (docs/reference.md: "accepts
 	// no scan/config/output options"), so passing one must fail the same way
 	// any unknown flag would, not be silently ignored.
 	var stdout, stderr bytes.Buffer
@@ -367,7 +388,7 @@ func TestRunAuditSARIFFormatSucceeds(t *testing.T) {
 }
 
 // TestRunInventorySARIFFormatIsRejected is the regression for
-// docs/cli-contract.md's "SARIF is audit-only" — cli.Validate must still
+// docs/reference.md's "SARIF is audit-only" — cli.Validate must still
 // reject it for inventory now that format.SARIF actually exists, so
 // implementing the formatter did not accidentally widen its command scope.
 func TestRunInventorySARIFFormatIsRejected(t *testing.T) {
@@ -639,6 +660,117 @@ func writeBaseline(t *testing.T, data []byte) string {
 	return path
 }
 
+// TestRunInventoryRejectsOutputExceedingMaxOutputBytes is a regression test
+// for a real gap: limits.maxOutputBytes was validated as a config *value*
+// (internal/config/validate.go) but never actually enforced anywhere in the
+// output-writing path — any rendered artifact, however large, was written
+// unconditionally. A config with an unrealistically tiny maxOutputBytes
+// against a real fixture's report must now be refused rather than written.
+func TestRunInventoryRejectsOutputExceedingMaxOutputBytes(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "gin-recon.json")
+	tinyLimitConfig := `{"version":1,"limits":{"maxOutputBytes":10}}`
+	if err := os.WriteFile(cfgPath, []byte(tinyLimitConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"inventory", "--src", fixtureDir(t, "route-kinds"), "--format", "json",
+		"--config", cfgPath, "--allow-downloads",
+	}, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d; stdout: %s stderr: %s", code, cli.ExitOperationalError, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "maxOutputBytes") {
+		t.Errorf("stderr = %q, want it to explain the maxOutputBytes limit", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty — an over-limit report must never be written", stdout.String())
+	}
+}
+
+// TestRunInventoryIncludeTestsFlagWorksEndToEnd is the CLI-level regression
+// test for a real gap: --include-tests was parsed and schema-validated but
+// never actually threaded through to the analyzer, so it silently did
+// nothing regardless of how it was set (internal/analyzer/scope_test.go has
+// the lower-level Load/LoadSyntax regression tests for the same fix).
+func TestRunInventoryIncludeTestsFlagWorksEndToEnd(t *testing.T) {
+	dir := fixtureDir(t, "include-tests")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"inventory", "--src", dir, "--format", "json", "--allow-downloads"}, &stdout, &stderr); code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d; stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "/test-only-route") {
+		t.Errorf("expected /test-only-route to be invisible without --include-tests: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"inventory", "--src", dir, "--format", "json", "--allow-downloads", "--include-tests"}, &stdout, &stderr); code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "/test-only-route") {
+		t.Errorf("expected /test-only-route to be discovered with --include-tests: %s", stdout.String())
+	}
+}
+
+// TestRunAuditBaselineRejectsInvalidAuthStatus is a regression test for real
+// artifact-validation gap: --baseline is an external, untrusted file, and
+// before this fix its routes' own authStatus values were never checked
+// against model.AuthProven/Public/Unknown — a crafted or corrupted baseline
+// claiming some bogus status would either silently fail to match
+// --fail-on's gate logic, or feed a nonsense value into the delta, rather
+// than being rejected as the malformed input it is.
+func TestRunAuditBaselineRejectsInvalidAuthStatus(t *testing.T) {
+	maliciousBaseline := `{"schemaVersion":"1.0","command":"audit","routes":[
+		{"method":"GET","normalizedPath":"/x","auth":{"authStatus":"totally-bogus"}}
+	]}`
+	baselinePath := writeBaseline(t, []byte(maliciousBaseline))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"audit", "--src", fixtureDir(t, "auth-wrappers"), "--format", "json",
+		"--baseline", baselinePath, "--allow-downloads",
+	}, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitOperationalError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid authStatus") {
+		t.Errorf("stderr = %q, want it to reject the invalid authStatus", stderr.String())
+	}
+}
+
+// TestRunFleetRenderRejectsInvalidAuthStatus mirrors the --baseline case
+// above for render's own external --report validation.
+func TestRunFleetRenderRejectsInvalidAuthStatus(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(filepath.Join(outDir, "targets", "repo-a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	maliciousRoutes := `{"schemaVersion":"1.0","command":"audit","routes":[
+		{"method":"GET","normalizedPath":"/x","auth":{"authStatus":"totally-bogus"}}
+	]}`
+	if err := os.WriteFile(filepath.Join(outDir, "targets", "repo-a", "routes.json"), []byte(maliciousRoutes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(outDir, "fleet.json")
+	fleetJSON := `{"targets":[{"name":"repo-a","status":"ok"}]}`
+	if err := os.WriteFile(reportPath, []byte(fleetJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"render", "--report", reportPath, "--format", "json", "--force"}, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitOperationalError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid authStatus") {
+		t.Errorf("stderr = %q, want it to reject the invalid authStatus", stderr.String())
+	}
+}
+
 // TestRunAuditBaselineDetectsAuthRegressions is the CLI-level integration
 // test for --baseline: comparing a baseline captured with the auth-wrappers
 // fixture's full config against a current run with an empty config (so
@@ -759,7 +891,7 @@ func TestRunAuditBaselineWithoutFailOnStillSucceeds(t *testing.T) {
 // TestRunAuditBaselineRejectsIncompatibleAnalysisProfile confirms a
 // baseline/current mismatch is rejected with an operational error rather
 // than silently producing a misleading comparison, per
-// docs/report-contract.md's baseline compatibility requirement.
+// docs/reference.md's baseline compatibility requirement.
 func TestRunAuditBaselineRejectsIncompatibleAnalysisProfile(t *testing.T) {
 	dir := fixtureDir(t, "auth-wrappers")
 	_, doc := runAuditJSON(t, dir, authWrappersEmpty)
@@ -1370,27 +1502,28 @@ func TestRunFleetConflictInteractivePromptEOFCancels(t *testing.T) {
 // docs/adr/0039-fleet-org-update.md's "read the previous complete run's own
 // state" half, without any real clone or network: writes the same
 // discovered-targets.json/fleet.json shape a real --org run would have
-// left at --out, and checks both maps come back correctly keyed by target
-// name.
+// left at --out, and checks both maps come from the committed aggregate.
+// The discovery file intentionally carries different timestamps: it may
+// belong to an interrupted newer run and must never authorize reuse.
 func TestLoadFleetUpdateState(t *testing.T) {
 	outDir := t.TempDir()
 	discovered := `{"version":1,"targets":[
-		{"name":"repo-a","git":{"url":"https://github.com/acme/repo-a.git"},"github":{"pushedAt":"2026-01-01T00:00:00Z"}},
-		{"name":"repo-b","git":{"url":"https://github.com/acme/repo-b.git"},"github":{"pushedAt":"2026-02-02T00:00:00Z"}}
+		{"name":"repo-a","git":{"url":"https://github.com/acme/repo-a.git"},"github":{"pushedAt":"1999-01-01T00:00:00Z"}},
+		{"name":"repo-b","git":{"url":"https://github.com/acme/repo-b.git"},"github":{"pushedAt":"1999-02-02T00:00:00Z"}}
 	]}`
 	if err := os.WriteFile(filepath.Join(outDir, discoveredTargetsFilename), []byte(discovered), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	agg := fmt.Sprintf(`{"tool":"gin-recon","toolVersion":%q,"targets":[
-		{"name":"repo-a","src":"","status":"ok","complete":true,"routes":5},
-		{"name":"repo-b","src":"","status":"failed"}
-	],"coverage":{"complete":false},"resume":{"requested":false,"reused":0,"checkpoint":false},"update":{"requested":false,"reused":0},"totals":{"routes":0,"proven":0,"public":0,"unknown":0},"authConfig":{"middlewareCount":0,"wrappersCount":0}}`, report.ToolVersion)
+	agg := fmt.Sprintf(`{"schemaVersion":"1.0","kind":"fleet","tool":"gin-recon","toolVersion":%q,"targets":[
+		{"name":"repo-a","src":"","status":"ok","complete":true,"routes":5,"repository":{"pushedAt":"2026-01-01T00:00:00Z"}},
+		{"name":"repo-b","src":"","status":"not-go-module","complete":true,"repository":{"pushedAt":"2026-02-02T00:00:00Z"}}
+	],"repoAttempts":2,"repoTimeout":"10m0s","coverage":{"complete":true},"resume":{"requested":false,"reused":0,"checkpoint":false},"update":{"requested":false,"reused":0},"totals":{"routes":0,"proven":0,"public":0,"unknown":0},"authConfig":{"middlewareCount":0,"wrappersCount":0}}`, report.ToolVersion)
 	if err := os.WriteFile(filepath.Join(outDir, fleetAggregateFilename), []byte(agg), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	var stderr bytes.Buffer
-	pushedAt, results := loadFleetUpdateState(&cli.Options{OutDir: outDir, Update: true}, &stderr)
+	pushedAt, results := loadFleetUpdateState(&cli.Options{OutDir: outDir, Update: true, RepoAttempts: 2, RepoTimeout: 10 * time.Minute}, &stderr)
 	if pushedAt["repo-a"] != "2026-01-01T00:00:00Z" {
 		t.Errorf("pushedAt[repo-a] = %q", pushedAt["repo-a"])
 	}
@@ -1400,7 +1533,7 @@ func TestLoadFleetUpdateState(t *testing.T) {
 	if results["repo-a"].Status != fleet.StatusOK || results["repo-a"].Routes != 5 {
 		t.Errorf("results[repo-a] = %+v", results["repo-a"])
 	}
-	if results["repo-b"].Status != fleet.StatusFailed {
+	if results["repo-b"].Status != fleet.StatusNotGoModule {
 		t.Errorf("results[repo-b] = %+v", results["repo-b"])
 	}
 }
@@ -1447,6 +1580,120 @@ func TestLoadFleetUpdateStateRefusesReuseAcrossToolVersions(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "toolVersion") {
 		t.Errorf("stderr = %q, want a toolVersion-mismatch explanation", stderr.String())
+	}
+}
+
+// TestLoadFleetUpdateStateRefusesReuseAcrossConfigChange is a regression
+// test for a real gap: --update only ever checked toolVersion, never
+// whether --config itself changed between the previous run and this one —
+// a route's proven/public/unknown classification could silently stay
+// stale under what's now an outdated auth config. Aggregate gained
+// ConfigHash for exactly this comparison.
+func TestLoadFleetUpdateStateRefusesReuseAcrossConfigChange(t *testing.T) {
+	outDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outDir, discoveredTargetsFilename), []byte(`{"version":1,"targets":[{"name":"repo-a","github":{"pushedAt":"2026-01-01T00:00:00Z"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agg := fmt.Sprintf(`{"tool":"gin-recon","toolVersion":%q,"configHash":"old-hash","targets":[
+		{"name":"repo-a","src":"","status":"ok","complete":true,"routes":5}
+	],"coverage":{"complete":false},"resume":{"requested":false,"reused":0,"checkpoint":false},"update":{"requested":false,"reused":0},"totals":{"routes":0,"proven":0,"public":0,"unknown":0},"authConfig":{"middlewareCount":0,"wrappersCount":0}}`, report.ToolVersion)
+	if err := os.WriteFile(filepath.Join(outDir, fleetAggregateFilename), []byte(agg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(outDir, "gin-recon.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	pushedAt, results := loadFleetUpdateState(&cli.Options{OutDir: outDir, Update: true, ConfigPath: cfgPath}, &stderr)
+	if len(pushedAt) != 0 || len(results) != 0 {
+		t.Errorf("pushedAt=%v results=%v, want both empty across a --config change", pushedAt, results)
+	}
+	if !strings.Contains(stderr.String(), "--config has changed") {
+		t.Errorf("stderr = %q, want a --config-changed explanation", stderr.String())
+	}
+}
+
+// TestLoadFleetUpdateStateRefusesReuseAcrossFormatChange mirrors the config
+// test above for --format: the previous run's own artifacts may not cover
+// a newly requested format (e.g. openapi added), so reuse must be refused,
+// not silently missing what this run was actually asked to produce.
+func TestLoadFleetUpdateStateRefusesReuseAcrossFormatChange(t *testing.T) {
+	outDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outDir, discoveredTargetsFilename), []byte(`{"version":1,"targets":[{"name":"repo-a","github":{"pushedAt":"2026-01-01T00:00:00Z"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agg := fmt.Sprintf(`{"tool":"gin-recon","toolVersion":%q,"formats":["json"],"targets":[
+		{"name":"repo-a","src":"","status":"ok","complete":true,"routes":5}
+	],"coverage":{"complete":false},"resume":{"requested":false,"reused":0,"checkpoint":false},"update":{"requested":false,"reused":0},"totals":{"routes":0,"proven":0,"public":0,"unknown":0},"authConfig":{"middlewareCount":0,"wrappersCount":0}}`, report.ToolVersion)
+	if err := os.WriteFile(filepath.Join(outDir, fleetAggregateFilename), []byte(agg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	pushedAt, results := loadFleetUpdateState(&cli.Options{OutDir: outDir, Update: true, Formats: []cli.OutputFormat{cli.FormatJSON, cli.FormatOpenAPI}}, &stderr)
+	if len(pushedAt) != 0 || len(results) != 0 {
+		t.Errorf("pushedAt=%v results=%v, want both empty across a --format change", pushedAt, results)
+	}
+	if !strings.Contains(stderr.String(), "--format has changed") {
+		t.Errorf("stderr = %q, want a --format-changed explanation", stderr.String())
+	}
+}
+
+// TestShouldPreseedTargetRefusesWhenArtifactIsMissing is a regression test
+// for a real gap: the previous-result-reuse decision trusted a StatusOK
+// target's recorded Report path unchecked — someone deleting or moving
+// --out's targets/<name> tree between runs (a partial cleanup, a moved
+// artifact) must cause a rescan, not a "complete" result pointing at a
+// routes.json that no longer exists.
+func TestShouldPreseedTargetRefusesWhenArtifactIsMissing(t *testing.T) {
+	outDir := t.TempDir()
+	target := fleet.Target{Name: "repo-a", GitHub: &fleet.GitHubMeta{PushedAt: "2026-01-01T00:00:00Z"}}
+	oldPushedAt := map[string]string{"repo-a": "2026-01-01T00:00:00Z"}
+	reportRel := filepath.Join("targets", "repo-a", "routes.json")
+	reportSum := sha256.Sum256([]byte(`{}`))
+	oldResults := map[string]fleet.TargetResult{
+		"repo-a": {
+			Name: "repo-a", Status: fleet.StatusOK, Complete: true, Report: reportRel,
+			SourceFingerprint: fleet.TargetFingerprint(target),
+			Artifacts:         []fleet.Artifact{{Path: filepath.ToSlash(reportRel), Bytes: 2, SHA256: hex.EncodeToString(reportSum[:])}},
+			Modules: []fleet.ModuleResult{{
+				ID: "root", Path: ".", Kind: fleet.ModuleGo, Status: fleet.StatusOK, Complete: true,
+				Report:    filepath.ToSlash(reportRel),
+				Artifacts: []fleet.Artifact{{Path: filepath.ToSlash(reportRel), Bytes: 2, SHA256: hex.EncodeToString(reportSum[:])}},
+			}},
+		},
+	}
+
+	// The report file genuinely does not exist under outDir at all yet.
+	if _, ok := shouldPreseedTarget(outDir, "", []string{"json"}, false, target, oldPushedAt, oldResults); ok {
+		t.Fatal("shouldPreseedTarget = true with a missing routes.json, want false")
+	}
+
+	// Once the file is actually there, the identical inputs must reuse it.
+	reportPath := filepath.Join(outDir, "targets", "repo-a", "routes.json")
+	if err := os.MkdirAll(filepath.Dir(reportPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(reportPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := shouldPreseedTarget(outDir, "", []string{"json"}, false, target, oldPushedAt, oldResults); !ok {
+		t.Error("shouldPreseedTarget = false with the routes.json present, want true")
+	}
+}
+
+// TestShouldPreseedTargetRefusesWhenPushedAtChanged confirms the existing
+// pushedAt-comparison behavior survives the shouldPreseedTarget refactor.
+func TestShouldPreseedTargetRefusesWhenPushedAtChanged(t *testing.T) {
+	target := fleet.Target{Name: "repo-a", GitHub: &fleet.GitHubMeta{PushedAt: "2026-02-02T00:00:00Z"}}
+	oldPushedAt := map[string]string{"repo-a": "2026-01-01T00:00:00Z"}
+	oldResults := map[string]fleet.TargetResult{
+		"repo-a": {Name: "repo-a", Status: fleet.StatusOK, Report: filepath.Join("targets", "repo-a", "routes.json")},
+	}
+	if _, ok := shouldPreseedTarget(t.TempDir(), "", []string{"json"}, false, target, oldPushedAt, oldResults); ok {
+		t.Error("shouldPreseedTarget = true despite pushedAt having changed, want false")
 	}
 }
 
@@ -1996,6 +2243,73 @@ func TestRunFleetRenderAddsFormatWithoutRescanning(t *testing.T) {
 	}
 }
 
+func TestRunFleetRenderHandlesEveryModule(t *testing.T) {
+	rawDir := t.TempDir()
+	moduleIDs := []string{"module-0123456789abcdef", "module-fedcba9876543210"}
+	modules := make([]fleet.ModuleResult, 0, len(moduleIDs))
+	for index, id := range moduleIDs {
+		rel := filepath.Join("targets", "monorepo", "modules", id, "routes.json")
+		path := filepath.Join(rawDir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		rep := report.NewInventoryReport(model.ProfileTyped, report.Target{Module: fmt.Sprintf("example.com/module%d", index)})
+		rep.ScanCoverage.Complete = true
+		data, err := json.Marshal(rep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		modules = append(modules, fleet.ModuleResult{
+			ID: id, Path: fmt.Sprintf("services/%d", index), ModulePath: fmt.Sprintf("example.com/module%d", index),
+			Kind: fleet.ModuleGo, Status: fleet.StatusOK, Complete: true, Report: filepath.ToSlash(rel),
+		})
+	}
+	agg := fleet.Aggregate{SchemaVersion: "1.0", Kind: "fleet", Tool: "gin-recon", ToolVersion: report.ToolVersion}
+	agg.Coverage.Complete = true
+	agg.Targets = []fleet.TargetResult{{
+		Name: "monorepo", Status: fleet.StatusOK, Complete: true,
+		Inventory: fleet.RepositoryInventory{Kind: fleet.RepositoryMultiModule, Complete: true, Modules: 2}, Modules: modules,
+	}}
+	aggData, err := json.Marshal(&agg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleetPath := filepath.Join(rawDir, fleetAggregateFilename)
+	if err := os.WriteFile(fleetPath, aggData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"render", "--report", fleetPath, "--format", "openapi", "--out", rawDir, "--force"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d; stderr: %s", code, stderr.String())
+	}
+
+	refreshedData, err := os.ReadFile(fleetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refreshed fleet.Aggregate
+	if err := json.Unmarshal(refreshedData, &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshed.Targets[0].Modules) != 2 {
+		t.Fatalf("modules = %+v", refreshed.Targets[0].Modules)
+	}
+	htmlDir := rawDir + "-html"
+	for _, module := range refreshed.Targets[0].Modules {
+		if module.APIHTML == "" || len(module.Artifacts) != 3 {
+			t.Fatalf("module render metadata = %+v, want apiHtml plus json/openapi/html integrity", module)
+		}
+		if _, err := os.Stat(filepath.Join(htmlDir, filepath.FromSlash(module.APIHTML))); err != nil {
+			t.Fatalf("module HTML %s missing: %v", module.APIHTML, err)
+		}
+	}
+}
+
 // TestRunFleetRenderDefaultsOutToReportDir is a regression test for
 // docs/adr/0028-gin-recon-default-output-directory.md: a fleet render no
 // longer requires --out — omitting it re-renders in place, into --report's
@@ -2066,6 +2380,67 @@ func TestRunFleetRenderRequiresForce(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--force is required") {
 		t.Errorf("stderr = %q, want it to explain --force is required", stderr.String())
+	}
+}
+
+// TestRunFleetRenderRejectsPathTraversalTargetName is a regression test for
+// a real path-traversal write: --report is an arbitrary file (someone else's
+// fleet.json, a CI artifact, anything), and before this fix its targets'
+// Name field was used to build both a read path (routes.json) and a write
+// path (this target's own re-rendered output directory) with no validation
+// at all — a crafted name like "../../../../tmp/..." would write gin-recon's
+// own report files outside --out entirely.
+func TestRunFleetRenderRejectsPathTraversalTargetName(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	escapeTarget := filepath.Join(root, "escaped")
+	maliciousName := "../../escaped"
+	reportPath := filepath.Join(outDir, "fleet.json")
+	fleetJSON := fmt.Sprintf(`{"targets":[{"name":%q,"status":"ok"}]}`, maliciousName)
+	if err := os.WriteFile(reportPath, []byte(fleetJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"render", "--report", reportPath, "--format", "json", "--force"}, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitOperationalError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "must match") {
+		t.Errorf("stderr = %q, want it to reject the invalid target name", stderr.String())
+	}
+	if _, err := os.Stat(escapeTarget); err == nil {
+		t.Fatalf("target escaped --out: %s was created", escapeTarget)
+	}
+}
+
+// TestRunFleetRenderRejectsDuplicateTargetNames is a regression test for two
+// targets silently clobbering the same output directory — a crafted or
+// corrupted fleet.json listing the same target name twice must be refused
+// outright, not processed with the second target's output overwriting the
+// first's.
+func TestRunFleetRenderRejectsDuplicateTargetNames(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(outDir, "fleet.json")
+	fleetJSON := `{"targets":[{"name":"repo-a","status":"ok"},{"name":"repo-a","status":"ok"}]}`
+	if err := os.WriteFile(reportPath, []byte(fleetJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"render", "--report", reportPath, "--format", "json", "--force"}, &stdout, &stderr)
+	if code != cli.ExitOperationalError {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitOperationalError, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "duplicate target name") {
+		t.Errorf("stderr = %q, want it to reject the duplicate target name", stderr.String())
 	}
 }
 

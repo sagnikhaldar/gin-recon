@@ -47,17 +47,18 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 {{if .Scope}}
 <p class="gr-eyebrow">{{.GitMark}} GitHub organization inventory</p>
 <h1>{{.Scope.Org}}</h1>
-<p class="gr-lede">{{len .Agg.Targets}} discovered repositor{{if eq (len .Agg.Targets) 1}}y{{else}}ies{{end}}, one audit per target. Each target's own raw report lives under <code>{{$.RawDirLink}}/targets/&lt;name&gt;/</code>, untouched.</p>
+<p class="gr-lede">{{len .Agg.Targets}} discovered repositor{{if eq (len .Agg.Targets) 1}}y{{else}}ies{{end}}, one audit per discovered Go module. Raw reports live under <code>{{$.RawDirLink}}/targets/&lt;name&gt;/</code>.</p>
 {{else}}
 <p class="gr-eyebrow">Fleet report</p>
 <h1>{{len .Agg.Targets}} target{{if ne (len .Agg.Targets) 1}}s{{end}} scanned</h1>
-<p class="gr-lede">One audit per target, aggregated. Each target's own raw report lives under <code>{{$.RawDirLink}}/targets/&lt;name&gt;/</code>, untouched.</p>
+<p class="gr-lede">One audit per discovered Go module, aggregated by repository. Raw reports live under <code>{{$.RawDirLink}}/targets/&lt;name&gt;/</code>.</p>
 {{end}}
 </div>
 <div class="gr-metrics">
 <div class="gr-metric"><span class="gr-metric__value">{{len .Agg.Targets}}</span><span class="gr-metric__label">Targets</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.OKCount}}</span><span class="gr-metric__label">OK</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.FailedCount}}</span><span class="gr-metric__label">Failed</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.InconclusiveCount}}</span><span class="gr-metric__label">Inconclusive</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.NotGoModuleCount}}</span><span class="gr-metric__label">Not a Go module</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.Agg.Coverage.Complete}}</span><span class="gr-metric__label">Coverage complete</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.Agg.Totals.Routes}}</span><span class="gr-metric__label">Routes</span></div>
@@ -80,6 +81,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 {{if .Scope.RepoInclude}}<dt>Repo include</dt><dd>{{range $i, $p := .Scope.RepoInclude}}{{if $i}}, {{end}}{{$p}}{{end}}</dd>{{end}}
 {{if .Scope.RepoExclude}}<dt>Repo exclude</dt><dd>{{range $i, $p := .Scope.RepoExclude}}{{if $i}}, {{end}}{{$p}}{{end}}</dd>{{end}}
 {{if .Scope.DiscoveryCompleteKnown}}<dt>Enumeration coverage</dt><dd>{{if .Scope.DiscoveryComplete}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}</dd>{{end}}
+{{if .Scope.Discovery}}<dt>Visible repositories</dt><dd>{{.Scope.Discovery.Visible}}</dd><dt>Selected repositories</dt><dd>{{.Scope.Discovery.Selected}}</dd><dt>API pages fetched</dt><dd>{{.Scope.Discovery.PagesFetched}}</dd>{{end}}
 </dl>
 </div>
 {{end}}
@@ -98,7 +100,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 {{if .ZeroRouteOKCount}}<p class="gr-lede" style="margin:0;padding:12px 16px 0;">{{.ZeroRouteOKCount}} target{{if ne .ZeroRouteOKCount 1}}s{{end}} scanned cleanly but found no routes of their own (marked <code>0*</code> below) — hover a mark for why; gin-recon scans one repository at a time, so a shared library's routes only ever show up under whichever service actually imports and mounts them.</p>{{end}}
 <div class="gr-filters" data-gr-filter="gr-targets-table">
 <div><label for="gr-target-search">Search</label><input id="gr-target-search" type="search" placeholder="Target, status, error…" data-gr-filter-search></div>
-<div><label for="gr-target-status">Status</label><select id="gr-target-status" data-gr-filter-status><option value="">All statuses</option><option value="ok">ok</option><option value="failed">failed</option><option value="not-go-module">not-go-module</option></select></div>
+<div><label for="gr-target-status">Status</label><select id="gr-target-status" data-gr-filter-status><option value="">All statuses</option><option value="ok">ok</option><option value="failed">failed</option><option value="inconclusive">inconclusive</option><option value="not-go-module">not-go-module</option></select></div>
 <span class="gr-result-count" data-gr-result-count aria-live="polite"></span>
 </div>
 <div class="gr-table-wrap">
@@ -106,14 +108,14 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <thead><tr><th>Target</th><th>Status</th><th>Coverage</th><th>Routes</th><th>Proven</th><th>Public</th><th>Unknown</th><th>Report</th><th>Error</th></tr></thead>
 <tbody>
 {{range .Agg.Targets}}<tr data-gr-search="{{.Name}} {{.Status}} {{.Error}}" data-gr-status="{{.Status}}">
-<td><code>{{.Name}}</code>{{if .TargetConfigDir}} <span class="gr-badge gr-badge--good" title="Used an operator-owned config from --target-config-dir, never sourced from this repository">own config (dir)</span>{{else if .TargetConfig}} <span class="gr-badge gr-badge--neutral" title="Used this target's own committed config instead of the fleet-wide --config">own config (repo)</span>{{end}}<br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}</td>
+<td><code>{{.Name}}</code>{{if .TargetConfigDir}} <span class="gr-badge gr-badge--good" title="Used an operator-owned config from --target-config-dir, never sourced from this repository">own config (dir)</span>{{else if .TargetConfig}} <span class="gr-badge gr-badge--neutral" title="Used this target's own committed config instead of the fleet-wide --config">own config (repo)</span>{{end}}<br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}{{if .Inventory.Kind}} <span class="gr-src">&middot; {{.Inventory.Kind}}</span>{{end}}</td>
 <td>{{if eq .Status "ok"}}<span class="gr-badge gr-badge--good">{{.Status}}</span>{{else if eq .Status "failed"}}<span class="gr-badge gr-badge--bad">{{.Status}}</span>{{else}}<span class="gr-badge gr-badge--neutral">{{.Status}}</span>{{end}}</td>
 <td>{{if eq .Status "ok"}}{{if .Complete}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}{{else}}<span class="gr-count">&mdash;</span>{{end}}</td>
 <td class="gr-num">{{if .Routes}}{{.Routes}}{{else if eq .Status "ok"}}<span class="gr-count" title="No gin.Engine/RouterGroup route registrations found in this module's own source. Common, legitimate reasons: it's a library other services import and mount routes from (gin-recon scans one repository at a time, so its routes only show up in whichever service actually imports and registers them); it uses a different web framework entirely; or it genuinely has no HTTP surface (a worker, SDK, or config package).">0*</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
 <td class="gr-num">{{if .Proven}}<span class="gr-badge gr-badge--good">{{.Proven}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
 <td class="gr-num">{{if .Public}}<span class="gr-badge gr-badge--warn">{{.Public}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
 <td class="gr-num">{{if .Unknown}}<span class="gr-badge gr-badge--warn">{{.Unknown}}</span>{{else}}<span class="gr-count">0</span>{{end}}</td>
-<td>{{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}} &middot; <a href="{{.APIHTML}}">api.html</a>{{end}}</td>
+<td>{{if .Modules}}{{range .Modules}}<div><code>{{.Path}}</code>{{if .Kind}} <span class="gr-src">({{.Kind}})</span>{{end}}: {{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}} &middot; <a href="{{.APIHTML}}">api.html</a>{{end}}</div>{{end}}{{else}}{{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}} &middot; <a href="{{.APIHTML}}">api.html</a>{{end}}{{end}}</td>
 <td class="gr-error">{{.Error}}</td>
 </tr>
 {{end}}</tbody>
@@ -128,11 +130,15 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <div class="gr-metrics">
 <div class="gr-metric"><span class="gr-metric__value">{{.Delta.Summary.AddedTargets}}</span><span class="gr-metric__label">Added targets</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.Delta.Summary.RemovedTargets}}</span><span class="gr-metric__label">Removed targets</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.Delta.Summary.StatusChanges}}</span><span class="gr-metric__label">Status changes</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.Delta.Summary.AddedModules}}</span><span class="gr-metric__label">Added modules</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.Delta.Summary.RemovedModules}}</span><span class="gr-metric__label">Removed modules</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.Delta.Summary.AddedRoutes}}</span><span class="gr-metric__label">Added routes</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.Delta.Summary.RemovedRoutes}}</span><span class="gr-metric__label">Removed routes</span></div>
 <div class="gr-metric"><span class="gr-badge gr-badge--bad">{{.Delta.Summary.AuthRegressions}} regression(s)</span></div>
 <div class="gr-metric"><span class="gr-badge gr-badge--good">{{.Delta.Summary.AuthImprovements}} improvement(s)</span></div>
 </div>
+{{if not .Delta.Coverage.Complete}}<p class="gr-lede" style="margin:8px 24px 0;"><strong>Comparison coverage is incomplete.</strong>{{range .Delta.Coverage.Diagnostics}} {{.}}{{end}}</p>{{end}}
 {{if .Delta.Summary.IncomparableTargets}}<p class="gr-lede" style="margin:8px 24px 0;">{{.Delta.Summary.IncomparableTargets}} target(s) could not be compared — see the reason column below.</p>{{end}}
 <div class="gr-panel">
 <h2 class="gr-panel__title">Per-target delta</h2>
@@ -142,11 +148,11 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <tbody>
 {{range .Delta.Targets}}<tr>
 <td><code>{{.Name}}</code></td>
-<td>{{.Status}}</td>
-<td>{{if .Delta}}{{range .Delta.AddedRoutes}}{{.}}<br>{{end}}{{end}}</td>
-<td>{{if .Delta}}{{range .Delta.RemovedRoutes}}{{.}}<br>{{end}}{{end}}</td>
-<td>{{if .Delta}}{{if .Delta.AuthRegressions}}<span class="gr-badge gr-badge--bad">{{len .Delta.AuthRegressions}}</span>{{end}}{{end}}</td>
-<td class="gr-error">{{.Reason}}</td>
+<td>{{.Status}}{{range .Modules}}<br><code>{{.Path}}</code>: {{.Status}}{{end}}</td>
+<td>{{if .Delta}}{{range .Delta.AddedRoutes}}{{.}}<br>{{end}}{{end}}{{range .Modules}}{{if .Delta}}{{range .Delta.AddedRoutes}}{{.}}<br>{{end}}{{end}}{{end}}</td>
+<td>{{if .Delta}}{{range .Delta.RemovedRoutes}}{{.}}<br>{{end}}{{end}}{{range .Modules}}{{if .Delta}}{{range .Delta.RemovedRoutes}}{{.}}<br>{{end}}{{end}}{{end}}</td>
+<td>{{if .Delta}}{{if .Delta.AuthRegressions}}<span class="gr-badge gr-badge--bad">{{len .Delta.AuthRegressions}}</span>{{end}}{{end}}{{range .Modules}}{{if .Delta}}{{if .Delta.AuthRegressions}}<span class="gr-badge gr-badge--bad">{{len .Delta.AuthRegressions}}</span>{{end}}{{end}}{{end}}</td>
+<td class="gr-error">{{.Reason}}{{range .Modules}}{{if .Reason}}<br><code>{{.Path}}</code>: {{.Reason}}{{end}}{{end}}</td>
 </tr>
 {{end}}</tbody>
 </table>
@@ -213,6 +219,7 @@ type fleetHTMLData struct {
 	FilterJS             template.JS
 	OKCount              int
 	FailedCount          int
+	InconclusiveCount    int
 	NotGoModuleCount     int
 	TargetConfigCount    int
 	TargetConfigDirCount int
@@ -245,6 +252,8 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 			data.OKCount++
 		case fleet.StatusFailed:
 			data.FailedCount++
+		case fleet.StatusInconclusive:
+			data.InconclusiveCount++
 		case fleet.StatusNotGoModule:
 			data.NotGoModuleCount++
 		}

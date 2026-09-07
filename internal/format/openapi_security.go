@@ -61,7 +61,7 @@ func resolveScheme(auth *model.AuthClassification, cfg *config.Config) (string, 
 // securitySchemesFrom returns the configured, already-validated security
 // schemes to publish under components.securitySchemes, or nil if none were
 // configured (config.SecurityScheme's JSON shape already matches OpenAPI's
-// own SecurityScheme object exactly — see docs/configuration-contract.md's
+// own SecurityScheme object exactly — see docs/reference.md's
 // example — so no separate type is needed here).
 func securitySchemesFrom(cfg *config.Config) map[string]config.SecurityScheme {
 	if cfg == nil || cfg.OpenAPI == nil {

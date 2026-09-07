@@ -16,6 +16,10 @@ coverage.html
 /recon-out/
 *.tmp-*/
 
+# Local build output — `go build ./cmd/gin-recon` with no -o writes this
+# binary straight into the repo root; never commit it.
+/gin-recon
+
 # Editor / OS
 .DS_Store
 *.swp

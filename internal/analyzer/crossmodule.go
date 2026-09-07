@@ -72,7 +72,7 @@ func buildCrossModuleFuncIndex(roots []*packages.Package, globs []string, index 
 // source file that resolveEngineFactoryCall/tryFollowRegistrarCall reached
 // outside the target module's own root: rather than a raw absolute
 // filesystem path (which would leak local module-cache layout and,
-// incidentally, violate docs/cli-contract.md's "never absolute checkout
+// incidentally, violate docs/reference.md's "never absolute checkout
 // paths" for a path that was never under --src to begin with), it becomes
 // "<module path>@<version>/<path within the module>" — stable across
 // machines, never containing a local cache directory or username, and

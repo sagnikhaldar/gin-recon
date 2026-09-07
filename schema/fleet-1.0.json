@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sagnikhaldar/gin-recon/schema/fleet-1.0.json",
+  "title": "Gin Recon Fleet Aggregate 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "tool", "toolVersion", "targets", "coverage", "resume", "update", "configHash", "formats", "scopeFingerprint", "scanFingerprint", "allowDownloads", "useTargetConfig", "renderHtml", "repoAttempts", "repoTimeout", "totals", "authConfig"],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "kind": {"const": "fleet"},
+    "tool": {"const": "gin-recon"},
+    "toolVersion": {"type": "string", "minLength": 1},
+    "targets": {"type": "array", "items": {"$ref": "#/$defs/target"}},
+    "scope": {"$ref": "#/$defs/scope"},
+    "coverage": {"$ref": "#/$defs/coverage"},
+    "resume": {"$ref": "#/$defs/reuse"},
+    "update": {"type": "object", "additionalProperties": false, "required": ["requested", "reused"], "properties": {"requested": {"type": "boolean"}, "reused": {"type": "integer", "minimum": 0}}},
+    "configHash": {"type": "string"},
+    "formats": {"type": "array", "items": {"enum": ["pretty", "json", "md", "openapi", "sarif"]}, "uniqueItems": true},
+    "scopeFingerprint": {"type": "string"},
+    "scanFingerprint": {"type": "string"},
+    "targetConfigHash": {"type": "string"},
+    "allowDownloads": {"type": "boolean"},
+    "useTargetConfig": {"type": "boolean"},
+    "renderHtml": {"type": "boolean"},
+    "repoAttempts": {"type": "integer", "minimum": 1, "maximum": 3},
+    "repoTimeout": {"type": "string", "minLength": 1},
+    "totals": {"$ref": "#/$defs/counts"},
+    "authConfig": {"type": "object", "additionalProperties": false, "required": ["middlewareCount", "wrappersCount"], "properties": {"middlewareCount": {"type": "integer", "minimum": 0}, "wrappersCount": {"type": "integer", "minimum": 0}}},
+    "followModulesCount": {"type": "integer", "minimum": 0}
+  },
+  "$defs": {
+    "status": {"enum": ["ok", "not-go-module", "inconclusive", "failed"]},
+    "coverage": {"type": "object", "additionalProperties": false, "required": ["complete"], "properties": {"complete": {"type": "boolean"}}},
+    "reuse": {"type": "object", "additionalProperties": false, "required": ["requested", "reused", "checkpoint"], "properties": {"requested": {"type": "boolean"}, "reused": {"type": "integer", "minimum": 0}, "checkpoint": {"type": "boolean"}}},
+    "counts": {"type": "object", "additionalProperties": false, "required": ["routes", "proven", "public", "unknown"], "properties": {"routes": {"type": "integer", "minimum": 0}, "proven": {"type": "integer", "minimum": 0}, "public": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0}}},
+    "artifact": {"type": "object", "additionalProperties": false, "required": ["path", "bytes", "sha256"], "properties": {"tree": {"enum": ["html"]}, "path": {"type": "string", "minLength": 1}, "bytes": {"type": "integer", "minimum": 0}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "module": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "path", "modulePath", "kind", "status", "complete"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^(root|module-[0-9a-f]{16})$"}, "path": {"type": "string"}, "modulePath": {"type": "string"},
+        "kind": {"enum": ["go-module", "gin-module-no-routes", "gin-application"]}, "status": {"$ref": "#/$defs/status"}, "error": {"type": "string"}, "complete": {"type": "boolean"},
+        "report": {"type": "string"}, "apiHtml": {"type": "string"}, "routes": {"type": "integer", "minimum": 0}, "proven": {"type": "integer", "minimum": 0}, "public": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0},
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}}
+      }
+    },
+    "inventory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "complete", "goFiles", "modules", "directories", "files", "bytes"],
+      "properties": {"kind": {"enum": ["", "no-go", "go-no-module", "go-module", "multi-module"]}, "complete": {"type": "boolean"}, "goFiles": {"type": "integer", "minimum": 0}, "modules": {"type": "integer", "minimum": 0}, "directories": {"type": "integer", "minimum": 0}, "files": {"type": "integer", "minimum": 0}, "bytes": {"type": "integer", "minimum": 0}, "hasGoWork": {"type": "boolean"}}
+    },
+    "repository": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "id": {"type": "integer", "minimum": 0}, "fullName": {"type": "string"}, "defaultBranch": {"type": "string"}, "ref": {"type": "string"}, "pushedAt": {"type": "string"},
+        "private": {"type": "boolean"}, "visibility": {"type": "string"}, "archived": {"type": "boolean"}, "fork": {"type": "boolean"}, "scannedCommit": {"type": "string", "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$"}
+      }
+    },
+    "rateLimit": {
+      "type": "object", "additionalProperties": false, "required": ["remaining"],
+      "properties": {"remaining": {"type": "integer"}, "reset": {"type": "string"}}
+    },
+    "repositoryDisposition": {
+      "type": "object", "additionalProperties": false, "required": ["fullName", "status"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 0}, "fullName": {"type": "string"}, "defaultBranch": {"type": "string"}, "pushedAt": {"type": "string"},
+        "status": {"enum": ["selected", "skipped", "filtered", "capped"]}, "reason": {"type": "string"}
+      }
+    },
+    "discovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["complete", "pagesFetched", "visibleRepositories", "selectedRepositories", "repositories"],
+      "properties": {
+        "complete": {"type": "boolean"}, "pagesFetched": {"type": "integer", "minimum": 0}, "visibleRepositories": {"type": "integer", "minimum": 0}, "selectedRepositories": {"type": "integer", "minimum": 0},
+        "repositories": {"type": "array", "items": {"$ref": "#/$defs/repositoryDisposition"}}, "diagnostics": {"type": "array", "items": {"type": "string"}}, "rateLimit": {"$ref": "#/$defs/rateLimit"}
+      }
+    },
+    "scope": {
+      "type": "object", "additionalProperties": false, "required": ["org"],
+      "properties": {
+        "org": {"type": "string"}, "maxRepos": {"type": "integer", "minimum": 1}, "concurrency": {"type": "integer", "minimum": 1}, "includeArchived": {"type": "boolean"}, "includeForks": {"type": "boolean"},
+        "repoInclude": {"type": "array", "items": {"type": "string"}}, "repoExclude": {"type": "array", "items": {"type": "string"}}, "discoveryComplete": {"type": "boolean"}, "discoveryCompleteKnown": {"type": "boolean"}, "discovery": {"$ref": "#/$defs/discovery"}
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "src", "status", "complete", "inventory"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}, "src": {"type": "string"}, "gitUrl": {"type": "string"}, "status": {"$ref": "#/$defs/status"}, "error": {"type": "string"}, "complete": {"type": "boolean"},
+        "report": {"type": "string"}, "apiHtml": {"type": "string"}, "inventory": {"$ref": "#/$defs/inventory"}, "repository": {"$ref": "#/$defs/repository"}, "modules": {"type": "array", "items": {"$ref": "#/$defs/module"}}, "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+        "sourceFingerprint": {"type": "string"}, "attempts": {"type": "integer", "minimum": 0}, "durationMs": {"type": "integer", "minimum": 0}, "routes": {"type": "integer", "minimum": 0}, "proven": {"type": "integer", "minimum": 0}, "public": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0}, "targetConfig": {"type": "boolean"}, "targetConfigDir": {"type": "boolean"}
+      }
+    }
+  }
+}

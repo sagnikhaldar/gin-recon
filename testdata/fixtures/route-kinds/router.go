@@ -19,7 +19,7 @@ func NotFound(c *gin.Context) { c.Status(http.StatusNotFound) }
 // pattern for a validation/binding helper parameterized by request DTO type
 // (e.g. "middlewares.BindAndValidate[dtos.Foo](\"body\")"). Its canonical
 // symbol must resolve to the base function, discarding the type argument,
-// per docs/configuration-contract.md: "Generic instantiation arguments...
+// per docs/reference.md: "Generic instantiation arguments...
 // are not part of identity."
 func BindAndValidate[T any](source string) gin.HandlerFunc {
 	return func(c *gin.Context) { c.Next() }

@@ -73,7 +73,7 @@ type matchedGuard struct {
 // examines route.Middleware — not FinalHandler — since a "guard" is by
 // definition something that runs before the handler; matching an
 // authMiddleware symbol against the terminal handler itself is not a case
-// docs/configuration-contract.md describes, and treating it as one would
+// docs/reference.md describes, and treating it as one would
 // blur a distinction the rest of the schema depends on.
 func ClassifyRoute(route model.Route, in Inputs) Result {
 	var guards []matchedGuard
@@ -92,7 +92,7 @@ func ClassifyRoute(route model.Route, in Inputs) Result {
 		}
 		// authWrappers: only an explicitly configured canonical wrapper —
 		// reviewer-attested to always preserve and invoke a nested
-		// middleware argument, per docs/configuration-contract.md — may
+		// middleware argument, per docs/reference.md — may
 		// expose what it wraps as authentication evidence. mw.WrappedSymbols
 		// is the bounded chain internal/analyzer/gin already resolved from
 		// this call's own arguments (never a literal, never re-derived from

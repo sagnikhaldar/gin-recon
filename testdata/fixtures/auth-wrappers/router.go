@@ -1,5 +1,5 @@
 // Package authwrappers exercises authWrappers classification per
-// docs/configuration-contract.md: "authWrappers contains canonical factories
+// docs/reference.md: "authWrappers contains canonical factories
 // proven by review to preserve and always invoke a nested middleware
 // argument." Only an explicitly configured canonical wrapper may expose its
 // wrapped argument as authentication evidence — an arbitrary, unconfigured
@@ -36,7 +36,7 @@ func RequireAuthContradicted(c *gin.Context) {
 
 // RequireRoleFactory is a factory-shaped guard: the returned closure is what
 // gets registered/wrapped, and "role" (its argument) is never part of its
-// canonical identity, per docs/configuration-contract.md — matching the
+// canonical identity, per docs/reference.md — matching the
 // enforcement-shapes fixture's own factory pattern, reused here wrapped.
 func RequireRoleFactory(role string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -97,7 +97,7 @@ func NewRouter() *gin.Engine {
 	// Factory: LoggedAuth wraps a factory-produced closure
 	// (RequireRoleFactory("admin")). The factory's own canonical symbol
 	// (RequireRoleFactory) is what resolves — "admin" is discarded, per
-	// docs/configuration-contract.md — proving wrapper-unwrapping composes
+	// docs/reference.md — proving wrapper-unwrapping composes
 	// correctly with the existing factory-closure handling.
 	r.GET("/wrapped/factory", LoggedAuth(RequireRoleFactory("admin")), Handler)
 

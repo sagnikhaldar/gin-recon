@@ -191,7 +191,7 @@ func TestDiscoverRouteKindsAndDynamicPathDiagnostic(t *testing.T) {
 	}
 
 	// The generic middleware's canonical symbol must be the base function,
-	// with the type argument discarded — docs/configuration-contract.md:
+	// with the type argument discarded — docs/reference.md:
 	// "Generic instantiation arguments... are not part of identity."
 	for _, r := range reg.Routes {
 		if r.NormalizedPath != "/generic" {

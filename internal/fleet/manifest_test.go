@@ -159,3 +159,35 @@ func TestLoadManifestRejectsEmptyGitURL(t *testing.T) {
 		t.Fatalf("err = %v, want a git.url-required complaint", err)
 	}
 }
+
+func TestLoadManifestRejectsUnsafeGitRefAndURLSuffix(t *testing.T) {
+	for _, manifest := range []string{
+		`{"version":1,"targets":[{"name":"a","git":{"url":"https://github.com/example/repo.git","ref":"--upload-pack=evil"}}]}`,
+		`{"version":1,"targets":[{"name":"a","git":{"url":"https://github.com/example/repo.git","ref":"refs/heads/main.lock"}}]}`,
+		`{"version":1,"targets":[{"name":"a","git":{"url":"https://github.com/example/repo.git?token=secret"}}]}`,
+		`{"version":1,"targets":[{"name":"a","git":{"url":"https://github.com/example/repo.git#main"}}]}`,
+	} {
+		if _, err := ParseManifest([]byte(manifest)); err == nil {
+			t.Errorf("ParseManifest accepted unsafe git source: %s", manifest)
+		}
+	}
+}
+
+func TestParseManifestRejectsDuplicateKeysAndTrailingJSON(t *testing.T) {
+	for _, data := range []string{
+		`{"version":1,"version":1,"targets":[{"name":"a","src":"."}]}`,
+		`{"version":1,"targets":[{"name":"a","name":"b","src":"."}]}`,
+		`{"version":1,"targets":[{"name":"a","src":"."}]} {}`,
+	} {
+		if _, err := ParseManifest([]byte(data)); err == nil {
+			t.Fatalf("ParseManifest(%s) unexpectedly succeeded", data)
+		}
+	}
+}
+
+func TestDuplicateKeyScannerBoundsJSONNesting(t *testing.T) {
+	data := []byte(strings.Repeat("[", 102) + "0" + strings.Repeat("]", 102))
+	if err := rejectDuplicateJSONKeys(data); err == nil || !strings.Contains(err.Error(), "nesting exceeds") {
+		t.Fatalf("rejectDuplicateJSONKeys error = %v, want nesting-limit failure", err)
+	}
+}

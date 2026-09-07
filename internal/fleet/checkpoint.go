@@ -1,12 +1,15 @@
 package fleet
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // CheckpointFilename is the fixed name of a fleet run's resume state,
@@ -19,9 +22,16 @@ const CheckpointFilename = "checkpoint.json"
 // "refuse rather than guess" posture internal/compare.Compatible already
 // applies to --baseline.
 type identity struct {
-	ManifestHash string   `json:"manifestHash"`
-	ConfigHash   string   `json:"configHash"`
-	Formats      []string `json:"formats"`
+	ManifestHash     string   `json:"manifestHash"`
+	ConfigHash       string   `json:"configHash"`
+	Formats          []string `json:"formats"`
+	ToolVersion      string   `json:"toolVersion"`
+	TargetConfigHash string   `json:"targetConfigHash,omitempty"`
+	AllowDownloads   bool     `json:"allowDownloads"`
+	UseTargetConfig  bool     `json:"useTargetConfig"`
+	RenderHTML       bool     `json:"renderHtml"`
+	RepoAttempts     int      `json:"repoAttempts"`
+	RepoTimeout      string   `json:"repoTimeout"`
 }
 
 // checkpoint is the on-disk resume state: the scope it was produced under,
@@ -44,11 +54,70 @@ func hashFile(path string) (string, error) {
 	if path == "" {
 		return "", nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := ReadBoundedFile(path)
 	if err != nil {
 		return "", fmt.Errorf("fleet: reading --config for checkpoint identity: %w", err)
 	}
 	return hashBytes(data), nil
+}
+
+func hashConfigDirectory(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	var names []string
+	err := filepath.WalkDir(path, func(current string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("fleet: --target-config-dir: %s is a symlink", current)
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("fleet: --target-config-dir: %s is not a regular file", current)
+		}
+		rel, err := filepath.Rel(path, current)
+		if err != nil {
+			return err
+		}
+		names = append(names, rel)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(names)
+	var material bytes.Buffer
+	for _, name := range names {
+		data, err := ReadBoundedFile(filepath.Join(path, name))
+		if err != nil {
+			return "", err
+		}
+		material.WriteString(filepath.ToSlash(name))
+		material.WriteByte(0)
+		material.WriteString(hashBytes(data))
+		material.WriteByte('\n')
+	}
+	return hashBytes(material.Bytes()), nil
+}
+
+// HashTargetConfigDirectory returns the deterministic content identity used
+// by both checkpoint resume and cross-run update validation.
+func HashTargetConfigDirectory(path string) (string, error) {
+	return hashConfigDirectory(path)
+}
+
+// HashConfigFile is hashFile, exported so cmd/gin-recon can compute a
+// --config path's identity hash the identical way Run itself does — needed
+// by --update (docs/adr/0039-fleet-org-update.md) to compare this run's own
+// --config against Aggregate.ConfigHash from the previous complete run,
+// before Run itself has even been called (the preseed decision is made
+// beforehand, in cmd/gin-recon).
+func HashConfigFile(path string) (string, error) {
+	return hashFile(path)
 }
 
 // loadCheckpoint reads an existing checkpoint for --resume. It returns a
@@ -56,9 +125,9 @@ func hashFile(path string) (string, error) {
 // run of a --resume invocation behaves like an ordinary run.
 func loadCheckpoint(outDir string, want identity) (*checkpoint, error) {
 	path := filepath.Join(outDir, CheckpointFilename)
-	data, err := os.ReadFile(path)
+	data, err := ReadBoundedFile(path)
 	if os.IsNotExist(err) {
-		return &checkpoint{Version: 1, Identity: want, Complete: map[string]TargetResult{}}, nil
+		return &checkpoint{Version: 2, Identity: want, Complete: map[string]TargetResult{}}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("fleet: reading checkpoint: %w", err)
@@ -66,6 +135,12 @@ func loadCheckpoint(outDir string, want identity) (*checkpoint, error) {
 	var cp checkpoint
 	if err := json.Unmarshal(data, &cp); err != nil {
 		return nil, fmt.Errorf("fleet: invalid checkpoint %s: %w", path, err)
+	}
+	if cp.Version != 2 {
+		return nil, fmt.Errorf("fleet: --resume: checkpoint version %d is not compatible with version 2; start a fresh run", cp.Version)
+	}
+	if cp.Identity.ToolVersion != want.ToolVersion {
+		return nil, fmt.Errorf("fleet: --resume: gin-recon version has changed since this checkpoint was written; refusing to reuse mismatched state")
 	}
 	if cp.Identity.ManifestHash != want.ManifestHash {
 		return nil, fmt.Errorf("fleet: --resume: the targets file has changed since this checkpoint was written; refusing to reuse mismatched state")
@@ -75,6 +150,15 @@ func loadCheckpoint(outDir string, want identity) (*checkpoint, error) {
 	}
 	if !stringsEqual(cp.Identity.Formats, want.Formats) {
 		return nil, fmt.Errorf("fleet: --resume: --format has changed since this checkpoint was written; refusing to reuse mismatched state")
+	}
+	if cp.Identity.TargetConfigHash != want.TargetConfigHash || cp.Identity.UseTargetConfig != want.UseTargetConfig {
+		return nil, fmt.Errorf("fleet: --resume: target configuration has changed since this checkpoint was written; refusing to reuse mismatched state")
+	}
+	if cp.Identity.AllowDownloads != want.AllowDownloads || cp.Identity.RenderHTML != want.RenderHTML {
+		return nil, fmt.Errorf("fleet: --resume: scan options have changed since this checkpoint was written; refusing to reuse mismatched state")
+	}
+	if cp.Identity.RepoAttempts != want.RepoAttempts || cp.Identity.RepoTimeout != want.RepoTimeout {
+		return nil, fmt.Errorf("fleet: --resume: repository retry/timeout options have changed since this checkpoint was written; refusing to reuse mismatched state")
 	}
 	if cp.Complete == nil {
 		cp.Complete = map[string]TargetResult{}
@@ -90,11 +174,7 @@ func saveCheckpoint(outDir string, cp *checkpoint) error {
 	if err != nil {
 		return fmt.Errorf("fleet: encoding checkpoint: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("fleet: writing checkpoint: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := WriteFileAtomic(path, data, 0o600); err != nil {
 		return fmt.Errorf("fleet: writing checkpoint: %w", err)
 	}
 	return nil
@@ -106,6 +186,13 @@ func removeCheckpoint(outDir string) error {
 		return fmt.Errorf("fleet: removing checkpoint: %w", err)
 	}
 	return nil
+}
+
+// RemoveCheckpoint is called by the CLI only after fleet.json and any delta
+// have been atomically and durably committed. Run intentionally leaves the
+// resume journal in place until that outer transaction finishes.
+func RemoveCheckpoint(outDir string) error {
+	return removeCheckpoint(outDir)
 }
 
 func stringsEqual(a, b []string) bool {

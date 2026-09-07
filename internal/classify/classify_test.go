@@ -5,6 +5,7 @@ import (
 	"go/types"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/sagnikhaldar/gin-recon/internal/analyzer/gin"
@@ -229,6 +230,51 @@ func TestStaleAuthConfigFindingFiresForUnmatchedSymbol(t *testing.T) {
 	}
 }
 
+// TestStaleAuthConfigFindingsAreDeterministicallyOrdered is a regression
+// test for a real determinism bug: cfg.AuthMiddleware is a Go map, and
+// staleAuthConfigFindings used to range over it directly with no sort, so
+// two runs against byte-identical source with two or more simultaneously
+// stale symbols could emit those findings in a different order each time —
+// violating docs/reference.md's "two runs against unchanged source
+// always produce byte-identical JSON." Calls the unexported function
+// directly, many times, with a map large enough that Go's randomized map
+// iteration would almost certainly have produced at least one different
+// order across the runs before this was fixed.
+func TestStaleAuthConfigFindingsAreDeterministicallyOrdered(t *testing.T) {
+	cfg := &config.Config{
+		Version: 1,
+		AuthMiddleware: map[string]config.AuthMiddlewareEntry{
+			"example.com/app.Zebra":   {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Mango":   {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Apple":   {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Lemon":   {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Grape":   {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Orange":  {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Papaya":  {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Cherry":  {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Banana":  {Assurance: config.AssuranceAnalyze},
+			"example.com/app.Coconut": {Assurance: config.AssuranceAnalyze},
+		},
+	}
+	seenSymbols := map[string]bool{} // every symbol above is unmatched, so every one is stale
+
+	var first []string
+	for i := 0; i < 25; i++ {
+		findings := staleAuthConfigFindings(cfg, seenSymbols)
+		var order []string
+		for _, f := range findings {
+			order = append(order, f.Detail)
+		}
+		if first == nil {
+			first = order
+			continue
+		}
+		if !slices.Equal(first, order) {
+			t.Fatalf("run %d produced a different finding order than run 0:\nrun 0: %v\nrun %d: %v", i, first, i, order)
+		}
+	}
+}
+
 // TestStaleAuthConfigFindingSuppressedForSyntaxOnly is the regression for a
 // real bug found while validating a live syntax-only report against
 // schema/report-1.0.json: every syntax-only route has a nil CanonicalSymbol
@@ -288,7 +334,7 @@ func routeWithAuth(method, path string, status model.AuthStatus, accepted bool) 
 }
 
 // TestPerVerbGapFindingFiresForInconsistentAuthAcrossMethods is the
-// regression for a real gap: docs/report-contract.md documents per-verb-gap
+// regression for a real gap: docs/reference.md documents per-verb-gap
 // as a built-in finding, and it even has SARIF rule metadata, but nothing
 // ever produced it — mirroring express-recon's own inconsistentPaths check,
 // which does fire in the reference implementation. A classic write-path

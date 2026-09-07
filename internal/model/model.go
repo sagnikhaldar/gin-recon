@@ -1,6 +1,6 @@
 // Package model defines the normalized route registry types shared by every
 // report. Field names and enums mirror schema/report-1.0.json exactly; the
-// schema is the normative contract (see docs/report-contract.md), this
+// schema is the normative contract (see docs/reference.md), this
 // package is its Go representation.
 //
 // Several types below implement MarshalJSON solely to default a nil slice
@@ -26,7 +26,7 @@ const (
 )
 
 // WorkspaceMode and ModuleMode mirror the CLI's --workspace and --module-mode
-// options (docs/cli-contract.md).
+// options (docs/reference.md).
 type WorkspaceMode string
 
 const (
@@ -43,7 +43,7 @@ const (
 
 // BuildContext identifies the single GOOS/GOARCH/tag/workspace/module
 // combination a report was produced under. One report represents exactly one
-// build context (docs/cli-contract.md).
+// build context (docs/reference.md).
 type BuildContext struct {
 	GOOS          string          `json:"goos"`
 	GOARCH        string          `json:"goarch"`
@@ -65,7 +65,7 @@ func (b BuildContext) MarshalJSON() ([]byte, error) {
 
 // Source is a file/line location, or nil when the analyzer could not
 // establish one. Absolute checkout paths are never stored — File is always
-// root-relative and slash-separated (docs/cli-contract.md).
+// root-relative and slash-separated (docs/reference.md).
 type Source struct {
 	File string `json:"file"`
 	Line *int   `json:"line"`
@@ -176,7 +176,7 @@ type SwagInfo struct {
 }
 
 // IOEvidence is optional, static/hybrid-only request/response shape evidence
-// for a route. See docs/report-contract.md#route-evidence.
+// for a route. See docs/reference.md#route-evidence.
 type IOEvidence struct {
 	Request   *RequestEvidence   `json:"request,omitempty"`
 	Responses []ResponseEvidence `json:"responses,omitempty"`
@@ -194,7 +194,7 @@ const (
 )
 
 // Assurance is the reviewer-selected trust mode for a configured
-// authMiddleware entry. See docs/configuration-contract.md#canonical-symbols-and-assurance.
+// authMiddleware entry. See docs/reference.md#canonical-symbols-and-assurance.
 type Assurance string
 
 const (
@@ -249,7 +249,7 @@ func (a AuthClassification) MarshalJSON() ([]byte, error) {
 // SurfaceKind distinguishes ordinary routes from static-file surfaces.
 // NoRoute/NoMethod are represented separately as FallbackSurface, not as a
 // SurfaceKind, so they cannot collide with normal route identity
-// (docs/report-contract.md#route-evidence).
+// (docs/reference.md#route-evidence).
 type SurfaceKind string
 
 const (
@@ -270,7 +270,7 @@ const (
 )
 
 // Route is one discovered Gin route. Canonical identity is Method plus
-// NormalizedPath (docs/report-contract.md#route-evidence); Auth is present
+// NormalizedPath (docs/reference.md#route-evidence); Auth is present
 // only in audit reports.
 type Route struct {
 	Method             string              `json:"method"`
@@ -333,7 +333,7 @@ func (f FallbackSurface) MarshalJSON() ([]byte, error) {
 
 // ScanCoverage records what the analyzer discovered, analyzed, and could not
 // resolve. Complete is scoped strictly to the recorded BuildContext and never
-// claims coverage of other platforms/tags (docs/report-contract.md#coverage-and-diagnostics).
+// claims coverage of other platforms/tags (docs/reference.md#coverage-and-diagnostics).
 type ScanCoverage struct {
 	DiscoveredPackages      int             `json:"discoveredPackages"`
 	AnalyzedPackages        int             `json:"analyzedPackages"`

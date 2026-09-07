@@ -1,6 +1,6 @@
 // Package report defines the top-level report envelope (schema/report-1.0.json)
 // and its construction. The JSON Schema is the normative contract
-// (docs/report-contract.md); this package must stay in lockstep with it —
+// (docs/reference.md); this package must stay in lockstep with it —
 // internal/report/schema_test.go enforces that with round-trip validation
 // against the schema file itself.
 package report
@@ -22,7 +22,7 @@ const Tool = "gin-recon"
 
 // Command is which top-level command produced the report. Only inventory and
 // audit produce a Report; schema and suggest-auth have their own output
-// shapes (docs/cli-contract.md).
+// shapes (docs/reference.md).
 type Command string
 
 const (
@@ -40,7 +40,7 @@ type Target struct {
 
 // RuleID enumerates every built-in finding rule. This set is closed for v1 —
 // adding a rule requires an ADR and fixture corpus per docs/gin-security-rules.md
-// and docs/report-contract.md#findings-and-policies.
+// and docs/reference.md#findings-and-policies.
 type RuleID string
 
 const (
@@ -72,7 +72,7 @@ const (
 // Finding is one audit-time security or policy result. Fingerprint hashes
 // rule identity plus normalized route identity and excludes source line and
 // absolute checkout path, so it stays stable across unrelated line moves
-// (docs/report-contract.md#findings-and-policies).
+// (docs/reference.md#findings-and-policies).
 type Finding struct {
 	ID             string           `json:"id"`
 	RuleID         RuleID           `json:"ruleId"`
@@ -90,7 +90,7 @@ type Finding struct {
 // and ProvenByAttestedUnresolved are reported separately, never merged into a
 // single "proven" count, so a consumer can tell analyzer-confirmed
 // enforcement apart from reviewer-trusted enforcement without reading every
-// route (docs/report-contract.md#authentication).
+// route (docs/reference.md#authentication).
 type Summary struct {
 	TotalRoutes                int              `json:"totalRoutes"`
 	ProvenByConfirmedShape     int              `json:"provenByConfirmedShape"`
@@ -151,7 +151,7 @@ type AuthChange struct {
 // Delta is present only when a baseline was supplied. Baseline comparison
 // requires the same schema major, analysis profile, normalized build
 // context, and route-normalization version; a mismatch is an operational
-// error, not a misleading delta (docs/report-contract.md#baselines-and-exit-codes).
+// error, not a misleading delta (docs/reference.md#baselines-and-exit-codes).
 type Delta struct {
 	AddedRoutes      []string     `json:"addedRoutes"`
 	RemovedRoutes    []string     `json:"removedRoutes"`
@@ -382,28 +382,27 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// toolVersion and classifierRulesetVersion are placeholders until phase 5
-// wires them to build-time version injection (see PLAN.md#versioning).
+// toolVersion is 0.6.0 for fleet schema v1, bounded multi-module repository
+// discovery, integrity-checked resume/update state, and explicit comparison
+// coverage/status transitions. These change fleet artifacts and reuse
+// semantics but leave report schema 1.0 and analyzer classification intact.
+// It is bumped from v0.5.0, whose release added --repo/--ref and --org
+// --update.
 //
-// toolVersion is 0.5.0 for the v0.5.0 tag, bumped from the tagged v0.4.2
-// per PLAN.md#versioning's MINOR definition: new, backward-compatible fleet
-// CLI flags with safe (off-by-default) defaults — `--repo`/`--ref` (fleet
-// shorthand for a single remote repository, docs/adr/0038), `--org --update`
-// (skip a target unchanged since the last complete run, docs/adr/0039), and
-// `--render-html` (fleet.html generation opt-in, docs/adr/0037), plus the
-// mutual-exclusivity rule between `--resume`/`--update`/`--force` and the
-// `analysis.followModules` visibility fix (docs/adr/0036). No report schema
-// or classification-semantics change. (v0.4.2 covered the fleet.html
-// zero-route explainer (docs/adr/0035); v0.4.1 covered fleet's interactive
-// resume/overwrite/cancel prompt (docs/adr/0034); v0.4.0 covered fleet
-// --target-config-dir (docs/adr/0033); v0.3.1 covered fleet's live progress
-// reporting (docs/adr/0032) and a checkpoint-map data race fix; v0.3.0
-// covered fleet --use-target-config (docs/adr/0031); v0.2.0 covered fleet's
-// `--out` default (docs/adr/0028), the fleet.html evidence dashboard and its
-// auth-config/enumeration-coverage visibility (docs/adr/0029, docs/adr/0030),
-// and the `--out .` sibling-directory fix (docs/adr/0027).)
+// Also in this release: a path-traversal fix for untrusted target names in
+// fleet render/--baseline loading (fleet.SafeTargetDir/RegularFileNoSymlink),
+// a determinism fix for stale-auth-config finding ordering
+// (internal/classify/findings.go — map iteration could reorder findings
+// across byte-identical runs), limits.maxOutputBytes now actually enforced
+// per rendered artifact (previously validated as a config value but never
+// checked), --include-tests actually wired into both the typed and
+// syntax-only loaders (previously parsed and schema-validated but fully
+// inert regardless of how it was set), and schema/config-1.json's "fleet"
+// property, missing entirely despite Config.Fleet being a real, validated
+// field — additionalProperties:false made this a real external
+// schema-validator rejection of valid configuration.
 const (
-	toolVersion              = "0.5.0"
+	toolVersion              = "0.6.0"
 	classifierRulesetVersion = "0.1.0"
 )
 
@@ -414,7 +413,7 @@ const (
 const ToolVersion = toolVersion
 
 // NewInventoryReport builds a Report with no authentication judgment, policy
-// results, summary, or findings, matching docs/report-contract.md's
+// results, summary, or findings, matching docs/reference.md's
 // "Inventory reports omit authentication judgment..." rule.
 func NewInventoryReport(profile model.AnalysisProfile, target Target) *Report {
 	return &Report{
