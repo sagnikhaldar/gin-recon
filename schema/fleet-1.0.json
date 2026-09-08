@@ -25,6 +25,7 @@
     "renderHtml": {"type": "boolean"},
     "repoAttempts": {"type": "integer", "minimum": 1, "maximum": 3},
     "repoTimeout": {"type": "string", "minLength": 1},
+    "suggestAuth": {"type": "boolean"},
     "totals": {"$ref": "#/$defs/counts"},
     "authConfig": {"type": "object", "additionalProperties": false, "required": ["middlewareCount", "wrappersCount"], "properties": {"middlewareCount": {"type": "integer", "minimum": 0}, "wrappersCount": {"type": "integer", "minimum": 0}}},
     "followModulesCount": {"type": "integer", "minimum": 0}
@@ -42,7 +43,8 @@
         "id": {"type": "string", "pattern": "^(root|module-[0-9a-f]{16})$"}, "path": {"type": "string"}, "modulePath": {"type": "string"},
         "kind": {"enum": ["go-module", "gin-module-no-routes", "gin-application"]}, "status": {"$ref": "#/$defs/status"}, "error": {"type": "string"}, "complete": {"type": "boolean"},
         "report": {"type": "string"}, "apiHtml": {"type": "string"}, "routes": {"type": "integer", "minimum": 0}, "proven": {"type": "integer", "minimum": 0}, "public": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0},
-        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}}
+        "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+        "suggestionArtifact": {"$ref": "#/$defs/artifact"}, "suggestionError": {"type": "string"}
       }
     },
     "inventory": {

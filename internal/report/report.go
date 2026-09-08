@@ -382,27 +382,31 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// toolVersion is 0.6.0 for fleet schema v1, bounded multi-module repository
-// discovery, integrity-checked resume/update state, and explicit comparison
-// coverage/status transitions. These change fleet artifacts and reuse
-// semantics but leave report schema 1.0 and analyzer classification intact.
-// It is bumped from v0.5.0, whose release added --repo/--ref and --org
-// --update.
+// toolVersion is 0.7.0: fleet's multi-module aggregation no longer fails an
+// entire target when only a non-Gin sibling module (one whose own go.mod
+// never requires github.com/gin-gonic/gin, and so could never define a real
+// Gin route) fails to load — a real case, not hypothetical: a "tools"
+// go.mod pinning devtool versions behind a //go:build tools tag has zero
+// buildable packages under a normal build context, and used to discard an
+// otherwise complete, successful scan of the actual application module
+// alongside it. It is bumped from v0.6.0, whose release added fleet
+// --suggest-auth, discovery category counts, and org-scale fixes.
 //
-// Also in this release: a path-traversal fix for untrusted target names in
-// fleet render/--baseline loading (fleet.SafeTargetDir/RegularFileNoSymlink),
-// a determinism fix for stale-auth-config finding ordering
-// (internal/classify/findings.go — map iteration could reorder findings
-// across byte-identical runs), limits.maxOutputBytes now actually enforced
-// per rendered artifact (previously validated as a config value but never
-// checked), --include-tests actually wired into both the typed and
-// syntax-only loaders (previously parsed and schema-validated but fully
-// inert regardless of how it was set), and schema/config-1.json's "fleet"
-// property, missing entirely despite Config.Fleet being a real, validated
-// field — additionalProperties:false made this a real external
-// schema-validator rejection of valid configuration.
+// Also in this release: suggest-auth's nameHint no longer matches a
+// canonical symbol's full import path (a repository or directory name
+// containing a hint substring — "otp-service", "auth-lib" — no longer
+// flags an unrelated symbol inside it); a module whose "./..." matches zero
+// packages now reports why instead of an empty error string; fleet
+// --target-config-dir's reviewed configs are snapshotted durably into --out
+// and reused automatically on later runs there, even with the flag
+// omitted; and every scanned target now gets a target-configs-draft/ review
+// queue (streamed per-target via a new OnTargetComplete hook, with
+// integrity-checked suggestion enrichment and reviewState tracking) —
+// --org runs get this by default, --targets/--repo opt in via
+// --suggest-auth. Drafts are informational only and never read by
+// --target-config-dir/--use-target-config/--config.
 const (
-	toolVersion              = "0.6.0"
+	toolVersion              = "0.7.0"
 	classifierRulesetVersion = "0.1.0"
 )
 

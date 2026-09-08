@@ -68,6 +68,11 @@ type ModuleResult struct {
 	Public     int        `json:"public,omitempty"`
 	Unknown    int        `json:"unknown,omitempty"`
 	Artifacts  []Artifact `json:"artifacts,omitempty"`
+	// SuggestionArtifact is separate from audit Artifacts because suggestions
+	// are review enrichment, not classification evidence. It is nevertheless
+	// integrity-checked before update/resume may reuse that enrichment.
+	SuggestionArtifact *Artifact `json:"suggestionArtifact,omitempty"`
+	SuggestionError    string    `json:"suggestionError,omitempty"`
 }
 
 type RepositoryInventory struct {
@@ -226,6 +231,7 @@ type Aggregate struct {
 	RenderHTML       bool     `json:"renderHtml"`
 	RepoAttempts     int      `json:"repoAttempts"`
 	RepoTimeout      string   `json:"repoTimeout"`
+	SuggestAuth      bool     `json:"suggestAuth,omitempty"`
 	// Totals sums every target's own Routes/Proven/Public/Unknown — the
 	// fleet-wide evidence rollup fleet.html's metrics row shows. Computed
 	// once after every target finishes (Run), not recomputed by a later
@@ -374,6 +380,10 @@ type RunOptions struct {
 	// package deliberately does not, matching its existing config/report
 	// import boundary).
 	SuggestAuth bool
+
+	// OnTargetComplete runs synchronously at the serialized target-completion
+	// point, including for resumed, unchanged, and deadline-before-start results.
+	OnTargetComplete func(Target, TargetResult, string) error
 }
 
 func (o RunOptions) allowedHost(host string) (AllowedHost, bool) {
@@ -466,6 +476,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	var mu sync.Mutex // guards cp, saveCheckpoint, and completed/opts.Progress below
 	completed := 0
 	var checkpointErr error
+	var completionErr error
 
 	// reportProgress prints one line for a target the moment it's known —
 	// reused from a checkpoint or --update comparison, or just finished —
@@ -479,6 +490,9 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	// reader being able to tell apart, not both collapsed into one label.
 	reportProgress := func(t Target, res TargetResult, reused string) {
 		completed++
+		if opts.OnTargetComplete != nil && completionErr == nil {
+			completionErr = opts.OnTargetComplete(t, res, reused)
+		}
 		if opts.Progress == nil {
 			return
 		}
@@ -547,6 +561,14 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 				}
 				delete(cp.Complete, t.Name)
 				ok = false
+			} else if opts.SuggestAuth {
+				if err := validateSuggestionArtifacts(opts.OutDir, done); err != nil {
+					if opts.Stderr != nil {
+						fmt.Fprintf(opts.Stderr, "gin-recon: fleet: target %s saved suggestion enrichment is not reusable (%v); rescanning\n", t.Name, err)
+					}
+					delete(cp.Complete, t.Name)
+					ok = false
+				}
 			}
 		}
 		if ok {
@@ -603,6 +625,9 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 		}()
 	}
 	wg.Wait()
+	if completionErr != nil {
+		return nil, fmt.Errorf("fleet: publishing target completion: %w", completionErr)
+	}
 	if checkpointErr != nil {
 		return nil, checkpointErr
 	}
@@ -618,6 +643,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 		TargetConfigHash: want.TargetConfigHash, AllowDownloads: want.AllowDownloads,
 		UseTargetConfig: want.UseTargetConfig, RenderHTML: want.RenderHTML,
 		RepoAttempts: want.RepoAttempts, RepoTimeout: want.RepoTimeout,
+		SuggestAuth: opts.SuggestAuth,
 	}
 	agg.Coverage.Complete = true
 	for _, r := range results {
@@ -837,6 +863,13 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 
 	res.Status = StatusOK
 	res.Complete = true
+	// anyModuleSucceeded and anyGinModuleFailed decide the target's overall
+	// Status once every module has run (below), rather than inside the loop
+	// itself: a single failing module must still fail the whole target when
+	// it was the only module there was (nothing else was actually analyzed,
+	// regardless of whether that one module happened to require gin), but
+	// must not when a genuinely separate sibling module already succeeded.
+	var anyModuleSucceeded, anyGinModuleFailed bool
 	for _, module := range discovery.Modules {
 		moduleOut := stagedRaw
 		moduleHTMLOut := stagedHTML
@@ -853,14 +886,40 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 		res.Public += mr.Public
 		res.Unknown += mr.Unknown
 		if mr.Status != StatusOK {
-			res.Status = StatusFailed
 			res.Complete = false
+			if module.UsesGin {
+				anyGinModuleFailed = true
+			}
 			if res.Error == "" {
 				res.Error = fmt.Sprintf("module %s: %s", mr.Path, mr.Error)
 			}
-		} else if !mr.Complete {
-			res.Complete = false
+		} else {
+			anyModuleSucceeded = true
+			if !mr.Complete {
+				res.Complete = false
+			}
 		}
+	}
+	if anyGinModuleFailed || !anyModuleSucceeded {
+		// A real Gin module failing always fails the target outright, same
+		// as before this change. So does every module failing — including a
+		// single-module target's only module, non-Gin or not: nothing was
+		// actually analyzed, and reporting that as an "ok, 0 routes" target
+		// would hide a real failure rather than reflect an honestly empty
+		// one. The one case this deliberately no longer fails the whole
+		// target: a module that never required github.com/gin-gonic/gin in
+		// its own go.mod (so it could never define a single real Gin route)
+		// failing to load while a genuinely separate sibling module — the
+		// repository's real Gin application — already succeeded. A real,
+		// confirmed case found auditing a live organization: a sibling
+		// "tools" go.mod pinning devtool versions behind a //go:build tools
+		// tag has zero buildable packages under a normal build context and
+		// fails to load, while the actual application module scans with
+		// full coverage and zero errors of its own — letting that unrelated
+		// tooling problem discard a real, complete scan is exactly the
+		// silent-loss failure mode this tool exists to avoid, not a case it
+		// should itself cause.
+		res.Status = StatusFailed
 	}
 	if res.Status != StatusOK {
 		for i := range res.Modules {
@@ -893,12 +952,20 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 		res.APIHTML = ""
 		for i := range res.Modules {
 			res.Modules[i].Artifacts = nil
+			res.Modules[i].SuggestionArtifact = nil
 			res.Modules[i].Report = ""
 			res.Modules[i].APIHTML = ""
 		}
 	}
 	formats := formatsWithJSON(opts.Formats)
 	for i := range res.Modules {
+		if res.Modules[i].Status != StatusOK {
+			// A non-Gin sibling module that failed to load (see above) was
+			// never staged in the first place — nothing to validate or
+			// publish for it, and its own empty Report is correct as-is,
+			// not a sign the artifact tree is missing something.
+			continue
+		}
 		stagedModuleDir := ""
 		if len(res.Modules) > 1 {
 			stagedModuleDir = filepath.Join("modules", res.Modules[i].ID)
@@ -916,6 +983,16 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 			}
 			res.Modules[i].Artifacts = append(res.Modules[i].Artifacts, artifact)
 			res.Artifacts = append(res.Artifacts, artifact)
+		}
+		if opts.SuggestAuth && res.Modules[i].SuggestionError == "" {
+			stagedRel := filepath.Join(stagedModuleDir, "suggestions.json")
+			finalRel := filepath.Join(filepath.Dir(res.Modules[i].Report), "suggestions.json")
+			artifact, err := artifactForStagedTree("", stagedRaw, stagedRel, finalRel)
+			if err != nil {
+				res.Modules[i].SuggestionError = fmt.Sprintf("validating suggestion enrichment: %v", err)
+			} else {
+				res.Modules[i].SuggestionArtifact = &artifact
+			}
 		}
 		if res.Modules[i].APIHTML != "" {
 			stagedRel := filepath.Join(stagedModuleDir, "api.html")
@@ -1036,7 +1113,9 @@ func runModule(ctx context.Context, opts RunOptions, target Target, module modul
 	}
 
 	if opts.SuggestAuth {
-		runSuggestAuthEnrichment(ctx, opts, module, moduleOut, targetConfigPath)
+		if err := runSuggestAuthEnrichment(ctx, opts, module, moduleOut, targetConfigPath); err != nil {
+			res.SuggestionError = err.Error()
+		}
 	}
 	if decoded.Summary != nil {
 		res.Routes = decoded.Summary.TotalRoutes
@@ -1090,7 +1169,7 @@ func runModule(ctx context.Context, opts RunOptions, target Target, module modul
 // suggest-auth pass fails simply contributes no candidates to the later
 // fleet-wide aggregation — identical in effect to one that was never asked
 // for at all, not a reason to fail the module's own Status.
-func runSuggestAuthEnrichment(ctx context.Context, opts RunOptions, module moduleRoot, moduleOut, targetConfigPath string) {
+func runSuggestAuthEnrichment(ctx context.Context, opts RunOptions, module moduleRoot, moduleOut, targetConfigPath string) error {
 	args := []string{"suggest-auth", "--src", module.AbsPath, "--out", moduleOut, "--force"}
 	if targetConfigPath != "" {
 		args = append(args, "--config", targetConfigPath)
@@ -1099,7 +1178,10 @@ func runSuggestAuthEnrichment(ctx context.Context, opts RunOptions, module modul
 		args = append(args, "--allow-downloads")
 	}
 	cmd := exec.CommandContext(ctx, opts.BinaryPath, args...)
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("suggest-auth: %w", err)
+	}
+	return nil
 }
 
 func expectedRawArtifacts(formats []string) []string {

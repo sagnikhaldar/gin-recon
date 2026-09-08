@@ -33,7 +33,22 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] != "audit" {
+	if len(os.Args) < 2 {
+		os.Exit(1)
+	}
+	if os.Args[1] == "suggest-auth" {
+		fs := flag.NewFlagSet("suggest-auth", flag.ExitOnError)
+		out := fs.String("out", "", "")
+		fs.String("src", "", "")
+		fs.Bool("force", false, "")
+		fs.String("config", "", "")
+		fs.Bool("allow-downloads", false, "")
+		fs.Parse(os.Args[2:])
+		os.MkdirAll(*out, 0o755)
+		os.WriteFile(filepath.Join(*out, "suggestions.json"), []byte(` + "`" + `{"candidates":[]}` + "`" + `), 0o644)
+		return
+	}
+	if os.Args[1] != "audit" {
 		fmt.Fprintln(os.Stderr, "fake-audit: expected \"audit\" as the first argument")
 		os.Exit(1)
 	}
@@ -775,6 +790,85 @@ func TestRunScansEveryNestedModuleWithoutRootGoMod(t *testing.T) {
 	}
 }
 
+// TestRunNonGinModuleFailureDoesNotFailSiblingGinModule is a real, confirmed
+// case found auditing a live organization, not a hypothetical one: a
+// repository with a sibling "tools" go.mod (a common Go idiom pinning
+// devtool versions behind a //go:build tools tag, never requiring
+// github.com/gin-gonic/gin) that fails to load — its "./..." matches zero
+// buildable packages under a normal build context — used to fail the
+// *entire* target, discarding a genuinely separate, fully complete,
+// zero-error scan of the repository's actual Gin application module. A
+// module that never required gin in its own go.mod can never define a real
+// Gin route, so its own tooling problem must never be allowed to discard an
+// unrelated sibling module's real, complete evidence.
+func TestRunNonGinModuleFailureDoesNotFailSiblingGinModule(t *testing.T) {
+	bin := buildFakeAudit(t)
+	repo := t.TempDir()
+
+	appDir := filepath.Join(repo, "app")
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "go.mod"), []byte("module example.com/app\n\nrequire github.com/gin-gonic/gin v1.9.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "behavior"), []byte("with-routes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	toolsDir := filepath.Join(repo, "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(toolsDir, "go.mod"), []byte("module example.com/tools\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(toolsDir, "behavior"), []byte("fail"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := &Manifest{Version: 1, Targets: []Target{{Name: "monorepo", Src: repo}}}
+	outDir := t.TempDir()
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"), Manifest: manifest,
+		ManifestData: []byte("fixture"), Formats: []string{"json"}, OutDir: outDir,
+		Concurrency: 1, BinaryPath: bin, ToolVersion: "test",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	result := agg.Targets[0]
+	if result.Status != StatusOK {
+		t.Fatalf("Status = %v, want ok: a non-Gin sibling module's failure must not fail the target", result.Status)
+	}
+	if result.Complete {
+		t.Error("Complete = true, want false: one module genuinely could not be analyzed")
+	}
+	if result.Routes != 5 || result.Proven != 3 {
+		t.Errorf("rollup routes/proven = %d/%d, want 5/3 from the surviving app module alone", result.Routes, result.Proven)
+	}
+	if len(result.Modules) != 2 {
+		t.Fatalf("Modules = %+v, want both the failed tools module and the successful app module recorded", result.Modules)
+	}
+	for _, module := range result.Modules {
+		switch module.Path {
+		case "app":
+			if module.Status != StatusOK || module.Report == "" {
+				t.Errorf("app module = %+v, want ok with a real report", module)
+			}
+			if _, err := os.Stat(filepath.Join(outDir, filepath.FromSlash(module.Report))); err != nil {
+				t.Errorf("app module report %s missing: %v", module.Report, err)
+			}
+		case "tools":
+			if module.Status != StatusFailed || module.Report != "" {
+				t.Errorf("tools module = %+v, want failed with no report", module)
+			}
+		default:
+			t.Errorf("unexpected module path %q", module.Path)
+		}
+	}
+}
+
 func TestRunRetriesRemoteTargetAndRecordsAttempts(t *testing.T) {
 	bin := buildFakeAudit(t)
 	attempts := 0
@@ -1165,5 +1259,47 @@ func TestRunEmitsMachineReadableProgress(t *testing.T) {
 	}
 	if event.Kind != "fleet-progress" || event.Target != "service" || event.Status != StatusOK || event.Current != 1 || event.Total != 1 {
 		t.Fatalf("progress event = %+v", event)
+	}
+}
+
+func TestRunCompletionCallbackFailureIsOperational(t *testing.T) {
+	bin := buildFakeAudit(t)
+	target := Target{Name: "service", Src: targetDir(t, "complete")}
+	_, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     &Manifest{Version: 1, Targets: []Target{target}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: t.TempDir(), Concurrency: 1, BinaryPath: bin, ToolVersion: "test",
+		OnTargetComplete: func(Target, TargetResult, string) error { return fmt.Errorf("draft unavailable") },
+	})
+	if err == nil || !strings.Contains(err.Error(), "draft unavailable") {
+		t.Fatalf("completion publication error = %v", err)
+	}
+}
+
+func TestRunResumeRescansMissingSuggestionArtifact(t *testing.T) {
+	bin := buildFakeAudit(t)
+	target := Target{Name: "service", Src: targetDir(t, "complete")}
+	outDir := t.TempDir()
+	opts := RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     &Manifest{Version: 1, Targets: []Target{target}}, ManifestData: []byte("fixture"),
+		Formats: []string{"json"}, OutDir: outDir, Concurrency: 1, BinaryPath: bin, ToolVersion: "test", SuggestAuth: true,
+	}
+	if _, err := Run(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(outDir, "targets", "service", "suggestions.json")); err != nil {
+		t.Fatal(err)
+	}
+	opts.Resume = true
+	agg, err := Run(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agg.Resume.Reused != 0 {
+		t.Fatalf("resume reused target with missing suggestions: %+v", agg.Resume)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "targets", "service", "suggestions.json")); err != nil {
+		t.Fatalf("rescan did not regenerate suggestions: %v", err)
 	}
 }

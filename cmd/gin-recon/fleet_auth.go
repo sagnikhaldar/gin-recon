@@ -159,8 +159,23 @@ func aggregateFleetAuthSuggestions(agg *fleet.Aggregate, outDir string) (*FleetA
 			SampleRoutes:    samples,
 		})
 	}
+	// Mirrors analyzer.rankLess's own tier order (suggest.go) — NameHint and
+	// KnownNonAuth dominate first, the same as a single repo's own
+	// suggest-auth output, before RepoCount/RouteCount ever get consulted.
+	// A real bug fixed here, not a hypothetical one: without this, global
+	// infrastructure middleware present in every scanned repository (CORS,
+	// panic recovery, request logging, APM instrumentation) has the highest
+	// possible RepoCount and would rank above genuine, repo-specific auth
+	// candidates — exactly backwards for a reviewer trying to prioritize
+	// what to check first.
 	sort.Slice(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
+		if a.NameHint != b.NameHint {
+			return a.NameHint
+		}
+		if a.KnownNonAuth != b.KnownNonAuth {
+			return b.KnownNonAuth
+		}
 		if a.RepoCount != b.RepoCount {
 			return a.RepoCount > b.RepoCount
 		}

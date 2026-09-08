@@ -57,6 +57,15 @@ const discoveredTargetsFilename = "discovered-targets.json"
 // later, after the original --config path may have moved or changed.
 const configSnapshotBasename = "config-snapshot"
 
+// targetConfigsSnapshotDirName is where --target-config-dir's actually-used
+// contents are copied into --out, for the same reason configSnapshotBasename
+// exists for --config: a reviewed authMiddleware config, per target, is
+// real evidence a human/AI checked against source before writing it down —
+// not something this run's own output should ever depend on the operator's
+// original directory still existing to reconstruct later.
+const targetConfigsSnapshotDirName = "target-configs-snapshot"
+const targetConfigsSnapshotMarker = ".gin-recon-complete"
+
 // fleetHTMLSibling resolves --out's rendered-output directory and the
 // relative link back to --out from inside it
 // (docs/adr/0023-fleet-raw-rendered-split.md). Anchored to --out's own
@@ -99,6 +108,10 @@ var fleetGitHubAPIBaseForTests string
 // os.Executable() under `go test` resolves to the test binary itself, which
 // doesn't understand "audit" as a subcommand.
 var fleetBinaryPathForTests string
+
+// fleetCloneForTests replaces git cloning in integration tests. Nil in every
+// real invocation.
+var fleetCloneForTests fleet.CloneFunc
 
 // isInteractiveTerminalForTests overrides isInteractiveTerminal's result —
 // nil in every real invocation, falling through to the real os.Stdin
@@ -175,6 +188,27 @@ func resolveFleetConflictInteractively(conflictPath string, stdout io.Writer) fl
 // buildFleetScope each own one concern so this function reads as the
 // stages of a fleet run, not an undifferentiated block.
 func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
+	// A prior run at this same --out already reviewed and published its own
+	// target-configs-snapshot/ (writeFleetTargetConfigSnapshot below) — reuse
+	// it automatically when --target-config-dir wasn't passed this time, so a
+	// reviewed authMiddleware config, once established, survives indefinitely
+	// across runs at this --out without the operator ever needing to keep an
+	// external directory around, let alone re-supply it after losing it (a
+	// real incident, not a hypothetical one). Passing --target-config-dir
+	// explicitly still always wins and replaces this run's own persisted set
+	// going forward — the same "explicit flag beats a prior default" rule
+	// every other capability switch in this command already follows.
+	if opts.TargetConfigDir == "" {
+		candidate := filepath.Join(opts.OutDir, targetConfigsSnapshotDirName)
+		reusable, err := reusableTargetConfigSnapshot(candidate, filepath.Join(opts.OutDir, fleetAggregateFilename))
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		if reusable {
+			opts.TargetConfigDir = candidate
+		}
+	}
 	fleetContext, cancelFleet := context.WithTimeout(context.Background(), opts.FleetTimeout)
 	defer cancelFleet()
 	effectiveConfigPath, configSnapshot, cleanupConfig, err := freezeFleetConfig(opts.ConfigPath)
@@ -340,6 +374,15 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 			progressFormat = "json"
 		}
 	}
+	collectSuggestions := fleetSuggestionEnrichmentEnabled(opts)
+	var draftWriter *targetConfigDraftWriter
+	if collectSuggestions {
+		draftWriter, err = newTargetConfigDraftWriter(opts.OutDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet: %v\n", err)
+			return cli.ExitOperationalError
+		}
+	}
 	agg, err := fleet.Run(fleetContext, fleet.RunOptions{
 		ManifestPath:    manifestPath,
 		Manifest:        manifest,
@@ -363,7 +406,14 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		RepoAttempts:    opts.RepoAttempts,
 		RepoTimeout:     opts.RepoTimeout,
 		Preseed:         preseed,
-		SuggestAuth:     opts.SuggestAuth,
+		SuggestAuth:     collectSuggestions,
+		Clone:           fleetCloneForTests,
+		OnTargetComplete: func(target fleet.Target, result fleet.TargetResult, reuse string) error {
+			if draftWriter == nil {
+				return nil
+			}
+			return draftWriter.Write(target, result, reuse)
+		},
 	})
 	if stderrBuf.Len() > 0 {
 		stderr.Write(stderrBuf.Bytes())
@@ -418,6 +468,18 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 			return code
 		}
 	}
+	// Unlike the --org-only snapshots above, this runs for --targets too:
+	// --target-config-dir holds individually reviewed authMiddleware
+	// evidence, potentially for many repositories, that took real review
+	// work to produce — not something a --targets manifest and its own
+	// --config can be assumed to already keep durable together the way
+	// writeFleetConfigSnapshot's own doc comment reasons about a single
+	// shared --config file. A directory the operator points --out at is
+	// exactly as capable of being lost as one they point --target-config-dir
+	// at, so this run's own --out becomes the durable copy either way.
+	if code := writeFleetTargetConfigSnapshot(opts, effectiveTargetConfigDir, stderr); code != cli.ExitSuccess {
+		return code
+	}
 	if opts.Baseline != "" {
 		fleetDelta, err = fleet.CompareFleetBaseline(baseline, opts.OutDir, agg)
 		if err != nil {
@@ -468,7 +530,7 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}
-	if opts.SuggestAuth {
+	if collectSuggestions {
 		writeFleetAuthSuggestions(agg, opts.OutDir, stderr)
 	}
 	if agg.Coverage.Complete {
@@ -499,6 +561,10 @@ func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
 		}
 	}
 	return cli.ExitSuccess
+}
+
+func fleetSuggestionEnrichmentEnabled(opts *cli.Options) bool {
+	return opts.SuggestAuth || opts.Org != ""
 }
 
 // buildFleetAllowedHosts converts fleet.allowedRemoteHosts from --config
@@ -846,6 +912,106 @@ func writeFleetConfigSnapshot(opts *cli.Options, data []byte, stderr io.Writer) 
 	return cli.ExitSuccess
 }
 
+// isExistingDir reports whether path is an existing, real (non-symlink)
+// directory — used only to detect a prior run's own published
+// target-configs-snapshot/, never to validate untrusted input (that's
+// cli.Validate's job for the --target-config-dir flag itself).
+func isExistingDir(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.IsDir()
+}
+
+func reusableTargetConfigSnapshot(path, aggregatePath string) (bool, error) {
+	if !isExistingDir(path) {
+		return false, nil
+	}
+	data, err := fleet.ReadBoundedFile(filepath.Join(path, targetConfigsSnapshotMarker))
+	markedComplete := err == nil && string(data) == "target-config-snapshot-v1\n"
+	// fleet.json's committed content hash remains the authority. The marker
+	// distinguishes a staged publication from a legacy directory, but neither
+	// is trusted unless its reviewed bytes still match the committed aggregate.
+	aggregateData, readErr := fleet.ReadBoundedFile(aggregatePath)
+	if readErr != nil {
+		return false, fmt.Errorf("%s cannot be verified against %s: %w", path, aggregatePath, readErr)
+	}
+	var prior struct {
+		TargetConfigHash string `json:"targetConfigHash"`
+	}
+	if err := json.Unmarshal(aggregateData, &prior); err != nil {
+		return false, fmt.Errorf("%s exists without a completion marker and %s is invalid: %w", path, aggregatePath, err)
+	}
+	effective, cleanup, err := freezeFleetTargetConfigDir(path)
+	if err != nil {
+		return false, fmt.Errorf("verifying %s: %w", path, err)
+	}
+	defer cleanup()
+	actualHash, err := fleet.HashTargetConfigDirectory(effective)
+	if err != nil {
+		return false, fmt.Errorf("hashing %s: %w", path, err)
+	}
+	if prior.TargetConfigHash == "" || actualHash != prior.TargetConfigHash {
+		markerNote := ""
+		if !markedComplete {
+			markerNote = " without a completion marker"
+		}
+		return false, fmt.Errorf("%s exists%s and does not match the targetConfigHash in %s; pass an explicit reviewed --target-config-dir", path, markerNote, aggregatePath)
+	}
+	return true, nil
+}
+
+// writeFleetTargetConfigSnapshot copies sourceDir — the already-frozen,
+// already-validated effective --target-config-dir (see
+// freezeFleetTargetConfigDir: no symlinks, no path escapes, bounded size)
+// — into --out/targetConfigsSnapshotDirName, so this run's own published
+// output carries a durable copy of exactly which reviewed per-target configs
+// produced it, independent of the operator's original directory later being
+// moved, edited, or lost entirely. A no-op when --target-config-dir wasn't
+// given (sourceDir is only ever "" in that case, mirroring
+// freezeFleetTargetConfigDir's own contract).
+func writeFleetTargetConfigSnapshot(opts *cli.Options, sourceDir string, stderr io.Writer) int {
+	if sourceDir == "" {
+		return cli.ExitSuccess
+	}
+	dest := filepath.Join(opts.OutDir, targetConfigsSnapshotDirName)
+	staged, err := os.MkdirTemp(opts.OutDir, ".target-configs-snapshot-stage-*")
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: staging %s: %v\n", targetConfigsSnapshotDirName, err)
+		return cli.ExitOperationalError
+	}
+	defer os.RemoveAll(staged)
+	err = filepath.WalkDir(sourceDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(staged, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(destPath, 0o700)
+		}
+		data, err := fleet.ReadBoundedFile(path)
+		if err != nil {
+			return err
+		}
+		return fleet.WriteFileAtomic(destPath, data, 0o600)
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: snapshotting --target-config-dir into %s: %v\n", targetConfigsSnapshotDirName, err)
+		return cli.ExitOperationalError
+	}
+	if err := fleet.WriteFileAtomic(filepath.Join(staged, targetConfigsSnapshotMarker), []byte("target-config-snapshot-v1\n"), 0o600); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: completing %s: %v\n", targetConfigsSnapshotDirName, err)
+		return cli.ExitOperationalError
+	}
+	if err := fleet.PublishDirectory(staged, dest); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: fleet: publishing %s: %v\n", targetConfigsSnapshotDirName, err)
+		return cli.ExitOperationalError
+	}
+	return cli.ExitSuccess
+}
+
 func freezeFleetConfig(path string) (effective string, data []byte, cleanup func(), err error) {
 	if path == "" {
 		return "", nil, func() {}, nil
@@ -887,6 +1053,9 @@ func freezeFleetTargetConfigDir(path string) (effective string, cleanup func(), 
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("%s is a symlink", current)
+		}
+		if !entry.IsDir() && entry.Name() == targetConfigsSnapshotMarker {
+			return nil
 		}
 		rel, err := filepath.Rel(path, current)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {

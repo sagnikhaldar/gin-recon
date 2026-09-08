@@ -78,6 +78,49 @@ func TestAggregateFleetAuthSuggestionsMergesAcrossTargets(t *testing.T) {
 	}
 }
 
+// TestAggregateFleetAuthSuggestionsRanksNameHintBeforeRepoCount is a
+// regression test for a real bug: the fleet-wide sort originally ordered
+// purely by RepoCount then RouteCount, never consulting NameHint/KnownNonAuth
+// at all — unlike analyzer.rankLess, which every single-repo suggest-auth
+// output already honors. Global infrastructure middleware present in every
+// scanned repository (CORS, panic recovery, request logging) has the
+// highest possible RepoCount and would have ranked above a genuine,
+// repo-specific auth candidate with a real name hint but a lower RepoCount —
+// exactly backwards for a reviewer prioritizing what to check first.
+func TestAggregateFleetAuthSuggestionsRanksNameHintBeforeRepoCount(t *testing.T) {
+	outDir := t.TempDir()
+	// "cors" appears in all 3 repos (RepoCount 3) but is not auth-shaped.
+	for _, name := range []string{"repo-a", "repo-b", "repo-c"} {
+		writeFakeSuggestions(t, filepath.Join(outDir, "targets", name, "suggestions.json"),
+			`{"canonicalSymbol":"github.com/gin-contrib/cors.Default","routeCount":10,"totalRoutes":10,"appliesToAllRoutes":true,"nameHint":false,"knownNonAuth":true,"sampleRoutes":[]}`)
+	}
+	// "RequireAuth" appears in only 1 repo (RepoCount 1) but is name-hinted.
+	writeFakeSuggestions(t, filepath.Join(outDir, "targets", "repo-a", "suggestions.json"),
+		`{"canonicalSymbol":"github.com/gin-contrib/cors.Default","routeCount":10,"totalRoutes":10,"appliesToAllRoutes":true,"nameHint":false,"knownNonAuth":true,"sampleRoutes":[]},`+
+			`{"canonicalSymbol":"github.com/acme/svc/internal/auth.RequireAuth","routeCount":2,"totalRoutes":10,"appliesToAllRoutes":false,"nameHint":true,"knownNonAuth":false,"sampleRoutes":["GET /x"]}`)
+
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "repo-a", Status: fleet.StatusOK, Complete: true, Report: filepath.Join("targets", "repo-a", "routes.json")},
+		{Name: "repo-b", Status: fleet.StatusOK, Complete: true, Report: filepath.Join("targets", "repo-b", "routes.json")},
+		{Name: "repo-c", Status: fleet.StatusOK, Complete: true, Report: filepath.Join("targets", "repo-c", "routes.json")},
+	}}
+
+	got, err := aggregateFleetAuthSuggestions(agg, outDir)
+	if err != nil {
+		t.Fatalf("aggregateFleetAuthSuggestions: %v", err)
+	}
+	if len(got.Candidates) != 2 {
+		t.Fatalf("Candidates = %+v, want exactly 2", got.Candidates)
+	}
+	if got.Candidates[0].CanonicalSymbol != "github.com/acme/svc/internal/auth.RequireAuth" {
+		t.Errorf("Candidates[0] = %q (RepoCount %d), want the name-hinted RequireAuth ranked first despite its lower RepoCount than cors.Default (RepoCount %d)",
+			got.Candidates[0].CanonicalSymbol, got.Candidates[0].RepoCount, got.Candidates[1].RepoCount)
+	}
+	if got.Candidates[1].CanonicalSymbol != "github.com/gin-contrib/cors.Default" {
+		t.Errorf("Candidates[1] = %q, want cors.Default ranked second", got.Candidates[1].CanonicalSymbol)
+	}
+}
+
 // TestAggregateFleetAuthSuggestionsSkipsTargetsWithoutSuggestions confirms a
 // target whose own suggest-auth pass never produced a file (failed, or
 // reused from --update/--resume rather than freshly scanned) is silently

@@ -23,6 +23,7 @@ package analyzer
 import (
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/sagnikhaldar/gin-recon/internal/model"
 )
@@ -54,6 +55,24 @@ type SuggestAuthResult struct {
 // limiting by identity) across the Gin ecosystem's own naming conventions —
 // a structural hint only, per the package doc comment.
 var authNameHint = regexp.MustCompile(`(?i)auth|login|logout|token|session|verify|guard|require|permit|acl|jwt|bearer|csrf|xsrf|role|scope|rbac|api[-_]?key|apikey|protect|admin|sso|saml|oidc|signature|hmac|otp|mfa|whitelist|allowlist`)
+
+// authNameHintTarget is the part of a canonical symbol authNameHint actually
+// matches against: the symbol's own package name plus its identifier
+// (function, or (*Type).Method), with every import-path segment above the
+// package itself stripped off. Matching the pattern against the full
+// canonical symbol instead — module host, org, repository, and every
+// intermediate directory — produces real false positives: a repository or
+// directory whose own name happens to contain a hint substring (an
+// "-otp-service" or "-auth-lib" repo, a "session/" directory) would flag
+// every symbol inside it regardless of what that symbol's own name says,
+// including plain plumbing like a Recovery or request logger that has
+// nothing to do with authentication.
+func authNameHintTarget(canonicalSymbol string) string {
+	if i := strings.LastIndexByte(canonicalSymbol, '/'); i >= 0 {
+		return canonicalSymbol[i+1:]
+	}
+	return canonicalSymbol
+}
 
 // knownNonAuthSymbols are well-known Gin ecosystem plumbing canonical
 // symbols with no auth semantics at all — see the package doc comment for
@@ -130,7 +149,7 @@ func SuggestAuth(loaded *Loaded) *SuggestAuthResult {
 			RouteCount:         len(a.routes),
 			TotalRoutes:        totalRoutes,
 			AppliesToAllRoutes: totalRoutes > 0 && len(a.routes) == totalRoutes,
-			NameHint:           !knownNonAuthSymbols[symbol] && authNameHint.MatchString(symbol),
+			NameHint:           !knownNonAuthSymbols[symbol] && authNameHint.MatchString(authNameHintTarget(symbol)),
 			KnownNonAuth:       knownNonAuthSymbols[symbol],
 			SampleRoutes:       samples,
 		})

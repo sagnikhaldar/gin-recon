@@ -115,6 +115,18 @@ func Load(ctx context.Context, opts LoadOptions) (*Loaded, error) {
 	// must exit 1, not silently produce an empty "successful" report for a
 	// root that was never actually analyzable at all.
 	if allPackagesFailed(pkgs) {
+		// A real, confirmed case, not hypothetical: a module whose "./..."
+		// matches zero packages at all (an empty tools-only go.mod with no
+		// .go files is a real example found auditing a live organization)
+		// makes packages.Load return an empty pkgs slice with no error of
+		// its own — allPackagesFailed(nil) is correctly true (there is
+		// nothing to analyze), but joinPackageErrors has nothing to visit
+		// and silently returns "", leaving the message below with nothing
+		// after its own colon and no way for a reader to tell what
+		// actually went wrong.
+		if len(pkgs) == 0 {
+			return nil, fmt.Errorf(`loading packages under %s: "./..." matched no packages (no buildable Go files under this build context)`, opts.Src)
+		}
 		return nil, fmt.Errorf("loading packages under %s: %s", opts.Src, joinPackageErrors(pkgs))
 	}
 

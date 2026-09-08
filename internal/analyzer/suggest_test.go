@@ -89,6 +89,35 @@ func TestSuggestAuthRanksNameHintedMiddlewareFirst(t *testing.T) {
 	}
 }
 
+func TestAuthNameHintTargetIgnoresUnrelatedImportPathSegments(t *testing.T) {
+	cases := []struct {
+		symbol string
+		want   bool
+	}{
+		// Real bug found reviewing real fleet-auth-candidates.json output:
+		// a repository named "sc-platform-otp-service" made every symbol in
+		// it hint true, including plain Recovery/logging middleware, purely
+		// because "otp-service" contains "otp" — nothing to do with the
+		// symbol's own name.
+		{"github.com/smallcase/sc-platform-otp-service/api/routes/middleware.CustomRecovery", false},
+		{"github.com/smallcase/sc-platform-otp-service/api/routes/middleware.RequestResponseLogger", false},
+		// The package's own name still counts: this is a deliberate,
+		// meaningful part of the symbol's identity, unlike a repository name
+		// or an unrelated ancestor directory.
+		{"github.com/example/auth.Handle", true},
+		// A genuine auth-named identifier still hints true regardless of
+		// where it lives.
+		{"github.com/smallcase/las-be-unity/internal/api/ops.(*OpsAPI).VendorAuthMiddleware", true},
+		{"github.com/gin-gonic/gin.RequestID", false},
+	}
+	for _, tc := range cases {
+		got := authNameHint.MatchString(authNameHintTarget(tc.symbol))
+		if got != tc.want {
+			t.Errorf("authNameHint on authNameHintTarget(%q) = %v, want %v", tc.symbol, got, tc.want)
+		}
+	}
+}
+
 func TestSuggestAuthNeverPopulatesRouteAuthClassification(t *testing.T) {
 	// SuggestAuth must run pure Inventory, not Audit — a route's Auth field
 	// must stay nil, proving suggestions cannot leak into classification.

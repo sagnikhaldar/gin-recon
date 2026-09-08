@@ -44,6 +44,39 @@ func TestReusableTargetRejectsIncompleteResult(t *testing.T) {
 	}
 }
 
+func TestSuggestionReuseRejectsNonCanonicalOrTamperedArtifact(t *testing.T) {
+	root := t.TempDir()
+	canonical := filepath.Join("targets", "service", "suggestions.json")
+	path := filepath.Join(root, canonical)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"candidates":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := artifactForFile(root, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := TargetResult{Name: "service", Status: StatusOK, Complete: true, Modules: []ModuleResult{{
+		ID: "root", Status: StatusOK, Complete: true,
+		Report: filepath.Join("targets", "service", "routes.json"), SuggestionArtifact: &artifact,
+	}}}
+	wrong := artifact
+	wrong.Path = filepath.Join("targets", "other", "suggestions.json")
+	result.Modules[0].SuggestionArtifact = &wrong
+	if err := validateSuggestionArtifacts(root, result); err == nil {
+		t.Fatal("non-canonical suggestion path accepted")
+	}
+	result.Modules[0].SuggestionArtifact = &artifact
+	if err := os.WriteFile(path, []byte(`{"candidates":[1]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSuggestionArtifacts(root, result); err == nil {
+		t.Fatal("tampered suggestion artifact accepted")
+	}
+}
+
 func TestTargetFingerprintIgnoresGitHubProvenanceButNotSource(t *testing.T) {
 	first := Target{
 		Name: "service", Git: &GitSource{URL: "https://github.com/acme/service.git", Ref: "main"},

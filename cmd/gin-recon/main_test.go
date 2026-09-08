@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1163,6 +1164,65 @@ func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
 	}
 }
 
+func TestRunFleetOrgAutomaticallyPublishesDraftsDuringScan(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal([]map[string]any{
+			{"name": "repo-a", "clone_url": "https://github.com/myorg/repo-a.git", "default_branch": "main", "size": 1},
+			{"name": "repo-b", "clone_url": "https://github.com/myorg/repo-b.git", "default_branch": "main", "size": 1},
+		})
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	fleetGitHubAPIBaseForTests = srv.URL
+	defer func() { fleetGitHubAPIBaseForTests = "" }()
+
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	cloneCount := 0
+	fleetCloneForTests = func(_ context.Context, _, _ string, destination, _ string) error {
+		cloneCount++
+		if info, err := os.Stat(filepath.Join(outDir, targetConfigDraftDirName)); err != nil || !info.IsDir() {
+			return fmt.Errorf("draft directory did not exist before clone %d: %v", cloneCount, err)
+		}
+		if cloneCount == 2 {
+			if _, err := os.Stat(filepath.Join(outDir, targetConfigDraftDirName, "repo-a.json")); err != nil {
+				return fmt.Errorf("repo-a draft was not visible before repo-b started: %v", err)
+			}
+		}
+		return os.CopyFS(destination, os.DirFS(fixtureDir(t, "auth-wrappers")))
+	}
+	defer func() { fleetCloneForTests = nil }()
+
+	cfgPath := filepath.Join(root, "cfg.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"api.github.com"},{"host":"github.com"}]}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"fleet", "--org", "myorg", "--config", cfgPath, "--out", outDir,
+		"--allow-remote-targets", "--allow-downloads", "--concurrency", "1",
+	}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d; stderr: %s", code, stderr.String())
+	}
+	for _, name := range []string{"repo-a", "repo-b"} {
+		data, err := os.ReadFile(filepath.Join(outDir, targetConfigDraftDirName, name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var draft targetConfigDraft
+		if err := json.Unmarshal(data, &draft); err != nil {
+			t.Fatal(err)
+		}
+		if draft.ReviewState != "candidates-to-review" || len(draft.Candidates) == 0 {
+			t.Fatalf("%s draft = %+v", name, draft)
+		}
+	}
+}
+
 // TestRunFleetOrgResumeToleratesPushedAtDrift is a regression test for a
 // real bug found live against a real organization
 // (docs/adr/0026-fleet-org-resume-ignores-provenance-drift.md): --resume
@@ -1763,6 +1823,205 @@ func TestRunFleetTargetsDoesNotWriteConfigSnapshot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outDir, "config-snapshot.json")); !os.IsNotExist(err) {
 		t.Errorf("config-snapshot.json should not exist for a --targets run, stat err = %v", err)
+	}
+}
+
+// TestRunFleetTargetsWritesTargetConfigSnapshot is the real-world fix for a
+// real incident: --target-config-dir's reviewed per-target authMiddleware
+// configs — individually checked against source, real review work — lived
+// only in an operator-owned directory outside the tool's own knowledge, and
+// that directory was later wiped with nothing to recover it from. --out now
+// gets its own durable copy, for --targets runs too, not just --org
+// (unlike config-snapshot.json, which docs/adr/0025-fleet-org-config-snapshot.md
+// deliberately scopes to --org alone).
+// TestRunFleetSuggestAuthWritesUnreviewedTargetConfigDraft confirms
+// fleet_target_config_draft.go's own actual behavior end to end: a target
+// scanned with --suggest-auth and no real reviewed config gets a
+// target-configs-draft/<name>.json listing its own nameHint candidates, and
+// — the safety property this whole file exists for — that draft has zero
+// effect on classification: the routes it names stay exactly as
+// unauthenticated as they'd be with no draft at all, because
+// --target-config-dir never reads from target-configs-draft/.
+func TestRunFleetSuggestAuthWritesUnreviewedTargetConfigDraft(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(dir, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"fleet", "--targets", manifestPath, "--suggest-auth", "--out", outDir,
+	}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	draftData, err := os.ReadFile(filepath.Join(outDir, "target-configs-draft", "repo-a.json"))
+	if err != nil {
+		t.Fatalf("target-configs-draft/repo-a.json: %v", err)
+	}
+	var draft targetConfigDraft
+	if err := json.Unmarshal(draftData, &draft); err != nil {
+		t.Fatalf("decoding draft: %v", err)
+	}
+	if draft.Warning == "" {
+		t.Error("draft._warning is empty, want an explicit unreviewed warning")
+	}
+	// LoggedAuth is itself a transparent wrapper (always calls through,
+	// never a guard on its own) — inventory sees it as the outermost
+	// registered symbol at every wrapped call site here, never the guard it
+	// wraps, without an authWrappers config telling it to unwrap. That it
+	// still surfaces as a nameHint candidate ("Auth" in the name) is exactly
+	// the case a draft must be reviewed, not trusted: naming alone can't
+	// tell a real guard from a wrapper that needs a different config key
+	// entirely (authWrappers, not authMiddleware).
+	const wantSymbol = "gin-recon-fixtures/auth-wrappers.LoggedAuth"
+	if _, ok := draft.Candidates[wantSymbol]; !ok {
+		t.Errorf("draft = %+v, want Candidates entry for %s", draft, wantSymbol)
+	}
+
+	// The safety property: the draft must never have been consulted for
+	// classification — every route stays exactly as unauthenticated as a
+	// run with no --target-config-dir at all would leave it.
+	var agg fleet.Aggregate
+	aggData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(aggData, &agg); err != nil {
+		t.Fatal(err)
+	}
+	if agg.Targets[0].Proven != 0 {
+		t.Errorf("Proven = %d, want 0: an unreviewed draft must never affect classification", agg.Targets[0].Proven)
+	}
+}
+
+func TestRunFleetTargetsWritesTargetConfigSnapshot(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(dir, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetConfigDir := filepath.Join(dir, "target-configs")
+	if err := os.MkdirAll(targetConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const targetCfgContent = `{"version":1,"authMiddleware":{}}`
+	if err := os.WriteFile(filepath.Join(targetConfigDir, "repo-a.json"), []byte(targetCfgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"fleet", "--targets", manifestPath, "--target-config-dir", targetConfigDir, "--out", outDir,
+	}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	got, err := os.ReadFile(filepath.Join(outDir, "target-configs-snapshot", "repo-a.json"))
+	if err != nil {
+		t.Fatalf("target-configs-snapshot/repo-a.json: %v", err)
+	}
+	if string(got) != targetCfgContent {
+		t.Errorf("target-configs-snapshot/repo-a.json = %q, want %q", got, targetCfgContent)
+	}
+}
+
+// TestRunFleetReusesPublishedTargetConfigSnapshotWithoutTargetConfigDir is
+// the real fix for the actual complaint: --target-config-dir shouldn't need
+// to be re-supplied, or ever manually recreated, on every run — once a
+// reviewed config has been used and published to this --out's own
+// target-configs-snapshot/, a later run at the same --out must keep
+// applying it automatically even with --target-config-dir omitted entirely,
+// and even after the original directory it came from is gone for good.
+func TestRunFleetReusesPublishedTargetConfigSnapshotWithoutTargetConfigDir(t *testing.T) {
+	fleetBinaryPathForTests = buildRealGinReconBinary(t)
+	defer func() { fleetBinaryPathForTests = "" }()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "repo-a")
+	if err := os.CopyFS(src, os.DirFS(fixtureDir(t, "auth-wrappers"))); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(dir, "targets.json")
+	manifest := fmt.Sprintf(`{"version":1,"targets":[{"name":"repo-a","src":%q}]}`, src)
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The directory this first run's --target-config-dir points at is
+	// deliberately transient (its own t.TempDir(), gone once the subtest
+	// ends) — proving the second run below cannot possibly still be reading
+	// from it.
+	targetConfigDir := t.TempDir()
+	const targetCfgContent = `{"version":1,"authMiddleware":{"gin-recon-fixtures/auth-wrappers.RequireAuth":{"tags":["authenticated"]}},"authWrappers":["gin-recon-fixtures/auth-wrappers.LoggedAuth"]}`
+	if err := os.WriteFile(filepath.Join(targetConfigDir, "repo-a.json"), []byte(targetCfgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(dir, "out")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"fleet", "--targets", manifestPath, "--target-config-dir", targetConfigDir, "--out", outDir, "--force",
+	}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("first run exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	var firstAgg fleet.Aggregate
+	firstData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(firstData, &firstAgg); err != nil {
+		t.Fatal(err)
+	}
+	if !firstAgg.Targets[0].TargetConfigDir || firstAgg.Targets[0].Proven == 0 {
+		t.Fatalf("first run target = %+v, want targetConfigDir=true with proven routes", firstAgg.Targets[0])
+	}
+
+	// Prove the original directory can genuinely never be read again.
+	if err := os.RemoveAll(targetConfigDir); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{
+		"fleet", "--targets", manifestPath, "--out", outDir, "--force",
+	}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("second run exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	var secondAgg fleet.Aggregate
+	secondData, err := os.ReadFile(filepath.Join(outDir, "fleet.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(secondData, &secondAgg); err != nil {
+		t.Fatal(err)
+	}
+	if !secondAgg.Targets[0].TargetConfigDir || secondAgg.Targets[0].Proven == 0 {
+		t.Fatalf("second run (no --target-config-dir) target = %+v, want targetConfigDir=true with proven routes carried forward from the published snapshot", secondAgg.Targets[0])
 	}
 }
 

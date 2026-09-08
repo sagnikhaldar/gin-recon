@@ -212,6 +212,31 @@ func reusableTarget(rawRoot, htmlRoot string, result TargetResult, currentFinger
 	return nil
 }
 
+func validateSuggestionArtifacts(rawRoot string, result TargetResult) error {
+	if result.Status == StatusNotGoModule {
+		return nil
+	}
+	for _, module := range result.Modules {
+		if module.Status != StatusOK {
+			continue
+		}
+		if module.SuggestionArtifact == nil {
+			if module.SuggestionError != "" {
+				return fmt.Errorf("module %q suggestion enrichment failed: %s", module.ID, module.SuggestionError)
+			}
+			return fmt.Errorf("module %q has no integrity-tracked suggestion enrichment", module.ID)
+		}
+		wantPath := filepath.ToSlash(filepath.Join(filepath.Dir(module.Report), "suggestions.json"))
+		if module.SuggestionArtifact.Tree != "" || cleanArtifactPath(module.SuggestionArtifact.Path) != wantPath {
+			return fmt.Errorf("module %q has non-canonical suggestion artifact path %q", module.ID, module.SuggestionArtifact.Path)
+		}
+		if err := verifyArtifact(rawRoot, "", *module.SuggestionArtifact); err != nil {
+			return fmt.Errorf("module %q suggestion enrichment: %w", module.ID, err)
+		}
+	}
+	return nil
+}
+
 func validateReusableArtifactSet(result TargetResult, formats []string, renderHTML bool) error {
 	if len(result.Modules) == 0 {
 		return fmt.Errorf("result has no module inventory")
@@ -419,6 +444,12 @@ type directoryPublication struct {
 // transaction additionally guarantees rollback for ordinary runtime errors.
 func publishDirectories(publications ...directoryPublication) error {
 	return publishDirectoriesWithRename(os.Rename, publications...)
+}
+
+// PublishDirectory replaces destination with a fully staged sibling directory
+// and restores the prior destination after ordinary publication failures.
+func PublishDirectory(staged, destination string) error {
+	return publishDirectories(directoryPublication{staged: staged, destination: destination})
 }
 
 type renameFunc func(oldPath, newPath string) error
