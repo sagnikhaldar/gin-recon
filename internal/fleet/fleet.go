@@ -384,6 +384,12 @@ type RunOptions struct {
 	// OnTargetComplete runs synchronously at the serialized target-completion
 	// point, including for resumed, unchanged, and deadline-before-start results.
 	OnTargetComplete func(Target, TargetResult, string) error
+
+	// progressStage emits an intra-target stage line (discover/audit/publish)
+	// before the target's own completion line — set internally by Run itself,
+	// never by a caller, so every progress line funnels through the same
+	// mutex-guarded writer.
+	progressStage func(Target, string)
 }
 
 func (o RunOptions) allowedHost(host string) (AllowedHost, bool) {
@@ -477,6 +483,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 	completed := 0
 	var checkpointErr error
 	var completionErr error
+	var progressWriteMu sync.Mutex
 
 	// reportProgress prints one line for a target the moment it's known —
 	// reused from a checkpoint or --update comparison, or just finished —
@@ -496,6 +503,8 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 		if opts.Progress == nil {
 			return
 		}
+		progressWriteMu.Lock()
+		defer progressWriteMu.Unlock()
 		if opts.ProgressFormat == "json" {
 			line := struct {
 				Kind       string `json:"kind"`
@@ -520,6 +529,19 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 			suffix = fmt.Sprintf(" (%d routes)", res.Routes)
 		}
 		fmt.Fprintf(opts.Progress, "[%d/%d] %s: %s%s\n", completed, len(targets), t.Name, res.Status, suffix)
+	}
+	opts.progressStage = func(t Target, stage string) {
+		if opts.Progress == nil {
+			return
+		}
+		progressWriteMu.Lock()
+		defer progressWriteMu.Unlock()
+		if opts.ProgressFormat == "json" {
+			data, _ := json.Marshal(struct{ Kind, Target, Stage string }{"fleet-stage", t.Name, stage})
+			fmt.Fprintln(opts.Progress, string(data))
+			return
+		}
+		fmt.Fprintf(opts.Progress, "[stage] %s: %s\n", t.Name, stage)
 	}
 
 	for i, t := range targets {
@@ -746,6 +768,9 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 		}
 	}
 
+	if opts.progressStage != nil {
+		opts.progressStage(t, "discover")
+	}
 	src, cleanup, err := resolveSource(ctx, opts, manifestDir, t)
 	if err != nil {
 		res.Status = StatusFailed
@@ -789,6 +814,9 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 		res.Status = StatusNotGoModule
 		res.Complete = true
 		return res
+	}
+	if opts.progressStage != nil {
+		opts.progressStage(t, "audit: discover+classify")
 	}
 
 	targetOut, err := SafeTargetDir(opts.OutDir, t.Name)
@@ -1011,6 +1039,9 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 	publications := []directoryPublication{{staged: stagedRaw, destination: targetOut}}
 	if stagedHTML != "" {
 		publications = append(publications, directoryPublication{staged: stagedHTML, destination: targetHTMLOut})
+	}
+	if opts.progressStage != nil {
+		opts.progressStage(t, "publish")
 	}
 	if err := publishDirectories(publications...); err != nil {
 		res.Status = StatusFailed

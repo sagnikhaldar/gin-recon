@@ -616,7 +616,7 @@ func TestRunReportsProgress(t *testing.T) {
 		t.Fatalf("unexpected statuses: %+v", agg.Targets)
 	}
 
-	want := "[1/2] a: ok (5 routes)\n[2/2] b: failed\n"
+	want := "[stage] a: discover\n[stage] a: audit: discover+classify\n[stage] a: publish\n[1/2] a: ok (5 routes)\n[stage] b: discover\n[stage] b: audit: discover+classify\n[2/2] b: failed\n"
 	if progress.String() != want {
 		t.Errorf("progress output = %q, want %q", progress.String(), want)
 	}
@@ -658,7 +658,7 @@ func TestRunReportsProgressForResumedTargets(t *testing.T) {
 		t.Fatalf("resumed Run: %v", err)
 	}
 
-	want := "[1/2] a: ok (resumed)\n[2/2] b: ok (0 routes)\n"
+	want := "[1/2] a: ok (resumed)\n[stage] b: discover\n[stage] b: audit: discover+classify\n[stage] b: publish\n[2/2] b: ok (0 routes)\n"
 	if progress.String() != want {
 		t.Errorf("progress output = %q, want %q", progress.String(), want)
 	}
@@ -736,7 +736,7 @@ func TestRunPreseedReusesUnchangedTarget(t *testing.T) {
 		t.Errorf("Resume.Reused = %d, want 0: this wasn't a checkpoint resume", agg.Resume.Reused)
 	}
 
-	want := "[1/2] unchanged: ok (unchanged)\n[2/2] changed: ok (0 routes)\n"
+	want := "[1/2] unchanged: ok (unchanged)\n[stage] changed: discover\n[stage] changed: audit: discover+classify\n[stage] changed: publish\n[2/2] changed: ok (0 routes)\n"
 	if progress.String() != want {
 		t.Errorf("progress output = %q, want %q", progress.String(), want)
 	}
@@ -1247,6 +1247,10 @@ func TestRunEmitsMachineReadableProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lines := bytes.Split(bytes.TrimSpace(progress.Bytes()), []byte("\n"))
+	if len(lines) != 4 {
+		t.Fatalf("progress events = %d, want three stages plus completion: %q", len(lines), progress.String())
+	}
 	var event struct {
 		Kind    string `json:"kind"`
 		Target  string `json:"target"`
@@ -1254,7 +1258,7 @@ func TestRunEmitsMachineReadableProgress(t *testing.T) {
 		Current int    `json:"current"`
 		Total   int    `json:"total"`
 	}
-	if err := json.Unmarshal(bytes.TrimSpace(progress.Bytes()), &event); err != nil {
+	if err := json.Unmarshal(lines[len(lines)-1], &event); err != nil {
 		t.Fatalf("progress is not JSON: %v: %q", err, progress.String())
 	}
 	if event.Kind != "fleet-progress" || event.Target != "service" || event.Status != StatusOK || event.Current != 1 || event.Total != 1 {

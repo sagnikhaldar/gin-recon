@@ -1167,8 +1167,14 @@ func TestRunFleetOrgMaxReposIncompleteTriggersFailOn(t *testing.T) {
 func TestRunFleetOrgAutomaticallyPublishesDraftsDuringScan(t *testing.T) {
 	fleetBinaryPathForTests = buildRealGinReconBinary(t)
 	defer func() { fleetBinaryPathForTests = "" }()
+	const testToken = "local-org-scan-test-token"
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", testToken)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testToken {
+			t.Errorf("default config did not authenticate org discovery")
+		}
 		body, _ := json.Marshal([]map[string]any{
 			{"name": "repo-a", "clone_url": "https://github.com/myorg/repo-a.git", "default_branch": "main", "size": 1},
 			{"name": "repo-b", "clone_url": "https://github.com/myorg/repo-b.git", "default_branch": "main", "size": 1},
@@ -1182,7 +1188,10 @@ func TestRunFleetOrgAutomaticallyPublishesDraftsDuringScan(t *testing.T) {
 	root := t.TempDir()
 	outDir := filepath.Join(root, "out")
 	cloneCount := 0
-	fleetCloneForTests = func(_ context.Context, _, _ string, destination, _ string) error {
+	fleetCloneForTests = func(_ context.Context, _, _ string, destination, token string) error {
+		if token != testToken {
+			return fmt.Errorf("default config did not authenticate cloning")
+		}
 		cloneCount++
 		if info, err := os.Stat(filepath.Join(outDir, targetConfigDraftDirName)); err != nil || !info.IsDir() {
 			return fmt.Errorf("draft directory did not exist before clone %d: %v", cloneCount, err)
@@ -1196,17 +1205,22 @@ func TestRunFleetOrgAutomaticallyPublishesDraftsDuringScan(t *testing.T) {
 	}
 	defer func() { fleetCloneForTests = nil }()
 
-	cfgPath := filepath.Join(root, "cfg.json")
-	if err := os.WriteFile(cfgPath, []byte(`{"version":1,"fleet":{"allowedRemoteHosts":[{"host":"api.github.com"},{"host":"github.com"}]}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	var stdout, stderr bytes.Buffer
 	code := run([]string{
-		"fleet", "--org", "myorg", "--config", cfgPath, "--out", outDir,
+		"fleet", "--org", "myorg", "--out", outDir,
 		"--allow-remote-targets", "--allow-downloads", "--concurrency", "1",
 	}, &stdout, &stderr)
 	if code != cli.ExitSuccess {
 		t.Fatalf("exit code = %d; stderr: %s", code, stderr.String())
+	}
+	for _, filename := range []string{fleetDefaultConfigFilename, "config-snapshot.json"} {
+		data, err := os.ReadFile(filepath.Join(outDir, filename))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != fleetDefaultConfig || bytes.Contains(data, []byte(testToken)) {
+			t.Errorf("%s must contain the default config without credential values", filename)
+		}
 	}
 	for _, name := range []string{"repo-a", "repo-b"} {
 		data, err := os.ReadFile(filepath.Join(outDir, targetConfigDraftDirName, name+".json"))

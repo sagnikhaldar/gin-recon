@@ -72,13 +72,13 @@ organization has been scanned once.
 2. Add a reviewed `fleet-config.json` at that repository's root, at minimum
    naming `github.com` in `fleet.allowedRemoteHosts` (see
    [docs/reference.md](../../docs/reference.md#fleet-options) for the full
-   shape). The workflow's own `GIN_RECON_GITHUB_TOKEN` env var matches the
+   shape). The workflow's own `GH_TOKEN` env var matches the
    `tokenEnv` name used in that doc's example config - keep them matching if
    you rename either one.
 3. Set an Actions variable named `GIN_RECON_ORG` to the GitHub organization
    login to scan (repository or organization Settings -> Secrets and
    variables -> Actions -> Variables).
-4. Add a secret named `GIN_RECON_GITHUB_TOKEN` - a token with read access to
+4. Add a secret named `GH_TOKEN` - a token with read access to
    the organization's repositories, scoped only for that. This is separate
    from the workflow's own `GITHUB_TOKEN`, which can't see other
    repositories in the org.

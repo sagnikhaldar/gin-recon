@@ -188,6 +188,13 @@ func resolveFleetConflictInteractively(conflictPath string, stdout io.Writer) fl
 // buildFleetScope each own one concern so this function reads as the
 // stages of a fleet run, not an undifferentiated block.
 func runFleet(opts *cli.Options, stdout, stderr io.Writer) int {
+	if opts.Org != "" && opts.ConfigPath == "" {
+		if err := ensureFleetOrgConfig(opts); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: fleet: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		fmt.Fprintf(stderr, "gin-recon: fleet: using default org config %s\n", opts.ConfigPath)
+	}
 	// A prior run at this same --out already reviewed and published its own
 	// target-configs-snapshot/ (writeFleetTargetConfigSnapshot below) — reuse
 	// it automatically when --target-config-dir wasn't passed this time, so a
@@ -576,7 +583,11 @@ func buildFleetAllowedHosts(cfg *config.Config) []fleet.AllowedHost {
 	}
 	hosts := make([]fleet.AllowedHost, 0, len(cfg.Fleet.AllowedRemoteHosts))
 	for _, h := range cfg.Fleet.AllowedRemoteHosts {
-		hosts = append(hosts, fleet.AllowedHost{Host: h.Host, TokenEnv: h.TokenEnv})
+		tokenEnv := h.TokenEnv
+		if (h.Host == "github.com" || h.Host == "api.github.com") && (tokenEnv == "GH_TOKEN" || tokenEnv == "GITHUB_TOKEN") {
+			tokenEnv = fleetGitHubTokenEnv()
+		}
+		hosts = append(hosts, fleet.AllowedHost{Host: h.Host, TokenEnv: tokenEnv})
 	}
 	return hosts
 }
@@ -1212,6 +1223,16 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 					fmt.Fprintf(stderr, "gin-recon: fleet render: target %q: %v\n", t.Name, err)
 					return cli.ExitOperationalError
 				}
+			}
+			if moduleResult.Status != fleet.StatusOK {
+				// A successful application target can retain an unsuccessful
+				// tooling/sibling module. It has no published report to render;
+				// preserve the failure instead of inventing a routes.json path.
+				moduleResult.Report, moduleResult.APIHTML = "", ""
+				moduleResult.Artifacts, moduleResult.SuggestionArtifact = nil, nil
+				moduleResult.Routes, moduleResult.Proven = 0, 0
+				moduleResult.Public, moduleResult.Unknown = 0, 0
+				continue
 			}
 
 			reportRel := filepath.Join("targets", t.Name, "routes.json")
