@@ -336,6 +336,8 @@ func runInventory(opts *cli.Options, stdout, stderr io.Writer) int {
 		rep.FallbackSurfaces = result.FallbackSurfaces
 		rep.Diagnostics = result.Diagnostics
 		rep.ScanCoverage = result.ScanCoverage
+		rep.Documentation = result.Documentation
+		rep.Specifications = result.Specifications
 		return writeReport(rep, opts, cfg, stdout, stderr, cli.ExitSuccess)
 	}
 
@@ -372,6 +374,8 @@ func runInventory(opts *cli.Options, stdout, stderr io.Writer) int {
 	rep.FallbackSurfaces = result.FallbackSurfaces
 	rep.Diagnostics = result.Diagnostics
 	rep.ScanCoverage = result.ScanCoverage
+	rep.Documentation = result.Documentation
+	rep.Specifications = result.Specifications
 
 	return writeReport(rep, opts, cfg, stdout, stderr, cli.ExitSuccess)
 }
@@ -500,6 +504,8 @@ func runAudit(opts *cli.Options, stdout, stderr io.Writer) int {
 	rep.FallbackSurfaces = result.FallbackSurfaces
 	rep.Diagnostics = result.Diagnostics
 	rep.ScanCoverage = result.ScanCoverage
+	rep.Documentation = result.Documentation
+	rep.Specifications = result.Specifications
 
 	var delta *report.Delta
 	if baselineReport != nil {

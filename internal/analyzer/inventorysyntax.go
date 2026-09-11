@@ -3,6 +3,7 @@ package analyzer
 import (
 	"github.com/sagnikhaldar/gin-recon/internal/analyzer/gin"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
+	"github.com/sagnikhaldar/gin-recon/internal/spec"
 )
 
 // syntaxCoverageAffectingCodes mirrors coverageAffectingCodes for the
@@ -38,7 +39,9 @@ func InventorySyntax(loaded *LoadedSyntax) *InventoryResult {
 		Diagnostics:      append([]model.Diagnostic{}, loaded.Diagnostics...),
 	}
 
+	var globalDocs []*model.APIDocumentation
 	for _, sf := range loaded.Files {
+		globalDocs = append(globalDocs, swagGlobalsInFile(sf.File)...)
 		reg := gin.DiscoverFileSyntax(loaded.Fset, sf.File)
 		for i := range reg.Routes {
 			reg.Routes[i].BuildContext = loaded.BuildContext
@@ -48,10 +51,12 @@ func InventorySyntax(loaded *LoadedSyntax) *InventoryResult {
 		result.FallbackSurfaces = append(result.FallbackSurfaces, reg.FallbackSurfaces...)
 		result.Diagnostics = append(result.Diagnostics, reg.Diagnostics...)
 	}
+	result.Documentation = mergeGlobalDocumentation(globalDocs)
 
 	relativizeSources(result, loaded.Root, nil)
 	normalize(result)
 	result.ScanCoverage = buildSyntaxScanCoverage(loaded, result.Diagnostics)
+	result.Specifications = spec.Discover(loaded.Root, result.Routes, result.ScanCoverage)
 	return result
 }
 

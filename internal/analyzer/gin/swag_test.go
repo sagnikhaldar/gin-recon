@@ -104,17 +104,17 @@ func H() {}`,
 			},
 		},
 		{
-			name: "malformed router directive (empty brackets, no path) does not crash",
+			name: "malformed router directive is explicit evidence",
 			src: `// @Router
 func H() {}`,
-			want: nil,
+			want: &model.SwagInfo{Issues: []model.SwagIssue{{Directive: "@Router", Message: "expected @Router <path> [<method>]"}}},
 		},
 		{
-			name: "unrecognized directive alongside a recognized one",
+			name: "response directive alongside prose",
 			src: `// @Success 200 {object} User
 // @Summary Get a user
 func H() {}`,
-			want: &model.SwagInfo{Summary: "Get a user"},
+			want: &model.SwagInfo{Summary: "Get a user", Responses: []model.SwagResponse{{Status: "200", Description: "Response", Schema: &model.SchemaEvidence{GoType: "User", Evidence: model.DocumentationEvidence{Source: "swag", Status: "unresolved"}}, Evidence: model.DocumentationEvidence{Source: "swag", Status: "declared"}}}},
 		},
 	}
 
@@ -140,7 +140,9 @@ func assertSwagInfoEqual(t *testing.T, got, want *model.SwagInfo) {
 		got.Deprecated != want.Deprecated ||
 		got.RouterPath != want.RouterPath ||
 		got.RouterMethod != want.RouterMethod ||
-		!stringSlicesEqual(got.Tags, want.Tags) {
+		!stringSlicesEqual(got.Tags, want.Tags) ||
+		len(got.Issues) != len(want.Issues) ||
+		len(got.Responses) != len(want.Responses) {
 		t.Errorf("ParseSwagAnnotations() = %+v, want %+v", got, want)
 	}
 }

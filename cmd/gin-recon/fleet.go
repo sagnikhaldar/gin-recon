@@ -1213,6 +1213,7 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 
 		agg.Targets[i].Routes, agg.Targets[i].Proven = 0, 0
 		agg.Targets[i].Public, agg.Targets[i].Unknown = 0, 0
+		agg.Targets[i].Specifications = nil
 		agg.Targets[i].Report, agg.Targets[i].APIHTML = "", ""
 		agg.Targets[i].Artifacts = nil
 
@@ -1264,6 +1265,7 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 
 			moduleResult.Routes, moduleResult.Proven = 0, 0
 			moduleResult.Public, moduleResult.Unknown = 0, 0
+			moduleResult.Specifications = rep.Specifications
 			if rep.Summary != nil {
 				moduleResult.Routes = rep.Summary.TotalRoutes
 				moduleResult.Proven = rep.Summary.ProvenByConfirmedShape + rep.Summary.ProvenByAttestedUnresolved
@@ -1273,6 +1275,9 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 			moduleResult.Report = filepath.ToSlash(reportRel)
 			moduleResult.APIHTML = ""
 			moduleResult.Artifacts = nil
+			if moduleResult.Specifications != nil {
+				agg.Targets[i].Specifications = append(agg.Targets[i].Specifications, fleet.ModuleSpecificationSummary{ModuleID: moduleResult.ID, ModulePath: moduleResult.ModulePath, Catalog: moduleResult.Specifications})
+			}
 
 			targetRawOut, err := fleet.ResolveArtifactPath(rawDir, filepath.Dir(reportRel))
 			if err != nil {
@@ -1358,6 +1363,7 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 		agg.Formats[i] = string(f)
 	}
 	agg.RenderHTML = true
+	agg.RepositoryGroups = fleet.GroupRepositories(agg.Targets)
 	fleet.RefreshScanFingerprint(&agg)
 
 	// fleet.json itself is updated too, not just fleet.html — each target's

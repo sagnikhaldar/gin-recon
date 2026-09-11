@@ -154,6 +154,185 @@ type ResponseEvidence struct {
 	Resolved bool    `json:"resolved"`
 }
 
+// DocumentationEvidence records where a documentation value came from and
+// whether it was resolved. It is deliberately separate from Confidence:
+// authored documentation can be faithfully parsed while still naming a Go
+// type that static analysis could not resolve.
+type DocumentationEvidence struct {
+	Source     string   `json:"source"`
+	Status     string   `json:"status"`
+	Provenance *Source  `json:"provenance,omitempty"`
+	Conflicts  []string `json:"conflicts,omitempty"`
+}
+
+// SchemaEvidence is the canonical, source-aware schema representation shared
+// by annotation parsing and OpenAPI rendering. Ref names a component in the
+// owning SwagInfo.Components map. Type is intentionally omitted for an
+// unresolved named type: unresolved documentation must never turn into an
+// authoritative empty object.
+type SchemaEvidence struct {
+	Ref                  string                    `json:"ref,omitempty"`
+	Type                 string                    `json:"type,omitempty"`
+	Format               string                    `json:"format,omitempty"`
+	GoType               string                    `json:"goType,omitempty"`
+	Nullable             bool                      `json:"nullable,omitempty"`
+	OmitEmpty            bool                      `json:"omitEmpty,omitempty"`
+	Items                *SchemaEvidence           `json:"items,omitempty"`
+	AdditionalProperties *SchemaEvidence           `json:"additionalProperties,omitempty"`
+	Properties           map[string]SchemaEvidence `json:"properties,omitempty"`
+	Required             []string                  `json:"required,omitempty"`
+	Enum                 []any                     `json:"enum,omitempty"`
+	Default              any                       `json:"default,omitempty"`
+	Example              any                       `json:"example,omitempty"`
+	Minimum              *float64                  `json:"minimum,omitempty"`
+	Maximum              *float64                  `json:"maximum,omitempty"`
+	MinLength            *int                      `json:"minLength,omitempty"`
+	MaxLength            *int                      `json:"maxLength,omitempty"`
+	Pattern              string                    `json:"pattern,omitempty"`
+	CustomSerialization  bool                      `json:"customSerialization,omitempty"`
+	Evidence             DocumentationEvidence     `json:"evidence"`
+}
+
+type SwagRouter struct {
+	Path       string                `json:"path"`
+	Method     string                `json:"method,omitempty"`
+	Deprecated bool                  `json:"deprecated,omitempty"`
+	Evidence   DocumentationEvidence `json:"evidence"`
+}
+
+type SwagParameter struct {
+	Name        string                `json:"name"`
+	In          string                `json:"in"`
+	Description string                `json:"description,omitempty"`
+	Required    bool                  `json:"required"`
+	Schema      *SchemaEvidence       `json:"schema,omitempty"`
+	Evidence    DocumentationEvidence `json:"evidence"`
+}
+
+type SwagHeader struct {
+	Name        string                `json:"name"`
+	Description string                `json:"description,omitempty"`
+	Schema      *SchemaEvidence       `json:"schema,omitempty"`
+	Evidence    DocumentationEvidence `json:"evidence"`
+}
+
+type SwagResponse struct {
+	Status      string                `json:"status"`
+	Description string                `json:"description"`
+	ContentType string                `json:"contentType,omitempty"`
+	Schema      *SchemaEvidence       `json:"schema,omitempty"`
+	Headers     []SwagHeader          `json:"headers,omitempty"`
+	Evidence    DocumentationEvidence `json:"evidence"`
+}
+
+type SwagSecurity struct {
+	Name     string                `json:"name"`
+	Scopes   []string              `json:"scopes,omitempty"`
+	Evidence DocumentationEvidence `json:"evidence"`
+}
+
+type SwagIssue struct {
+	Directive string `json:"directive"`
+	Message   string `json:"message"`
+}
+
+type APITagDocumentation struct {
+	Name        string                `json:"name"`
+	Description string                `json:"description,omitempty"`
+	Evidence    DocumentationEvidence `json:"evidence"`
+}
+
+// DocumentedSecurityScheme is authored documentation, not validated audit
+// configuration. Formatters may preserve it as a claim but it can never
+// produce operation.security or AuthProven.
+type DocumentedSecurityScheme struct {
+	Type             string                `json:"type"`
+	Name             string                `json:"name,omitempty"`
+	In               string                `json:"in,omitempty"`
+	Scheme           string                `json:"scheme,omitempty"`
+	BearerFormat     string                `json:"bearerFormat,omitempty"`
+	AuthorizationURL string                `json:"authorizationUrl,omitempty"`
+	TokenURL         string                `json:"tokenUrl,omitempty"`
+	Scopes           map[string]string     `json:"scopes,omitempty"`
+	Evidence         DocumentationEvidence `json:"evidence"`
+}
+
+// APIDocumentation is module/application-scoped global annotation evidence.
+// It is optional so reports produced before global-doc discovery remain
+// byte-compatible when no supported directive is present.
+type APIDocumentation struct {
+	Title               string                              `json:"title,omitempty"`
+	Version             string                              `json:"version,omitempty"`
+	Description         string                              `json:"description,omitempty"`
+	TermsOfService      string                              `json:"termsOfService,omitempty"`
+	ContactName         string                              `json:"contactName,omitempty"`
+	ContactURL          string                              `json:"contactUrl,omitempty"`
+	ContactEmail        string                              `json:"contactEmail,omitempty"`
+	LicenseName         string                              `json:"licenseName,omitempty"`
+	LicenseURL          string                              `json:"licenseUrl,omitempty"`
+	Host                string                              `json:"host,omitempty"`
+	BasePath            string                              `json:"basePath,omitempty"`
+	Schemes             []string                            `json:"schemes,omitempty"`
+	Tags                []APITagDocumentation               `json:"tags,omitempty"`
+	SecurityDefinitions map[string]DocumentedSecurityScheme `json:"securityDefinitions,omitempty"`
+	Security            []SwagSecurity                      `json:"security,omitempty"`
+	Extensions          map[string]any                      `json:"extensions,omitempty"`
+	Issues              []SwagIssue                         `json:"issues,omitempty"`
+	Evidence            DocumentationEvidence               `json:"evidence"`
+	Fields              map[string]DocumentationEvidence    `json:"fields,omitempty"`
+}
+
+type SpecificationOperation struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
+}
+
+type SpecificationRecord struct {
+	ID         string                   `json:"id"`
+	Path       string                   `json:"path"`
+	Dialect    string                   `json:"dialect"`
+	Version    string                   `json:"version"`
+	Title      string                   `json:"title,omitempty"`
+	APIVersion string                   `json:"apiVersion,omitempty"`
+	Authorship string                   `json:"authorship"`
+	Provenance DocumentationEvidence    `json:"provenance"`
+	SHA256     string                   `json:"sha256"`
+	Bytes      int64                    `json:"bytes"`
+	Operations []SpecificationOperation `json:"operations,omitempty"`
+	LocalRefs  []string                 `json:"localRefs,omitempty"`
+}
+
+type SpecificationIssue struct {
+	Code    string `json:"code"`
+	Path    string `json:"path,omitempty"`
+	Message string `json:"message"`
+}
+
+type DocumentationMetric struct {
+	Numerator   int    `json:"numerator"`
+	Denominator int    `json:"denominator"`
+	Status      string `json:"status"`
+}
+
+type DocumentationMetrics struct {
+	SourceFiles        DocumentationMetric      `json:"sourceFiles"`
+	ObservedOperations DocumentationMetric      `json:"observedOperations"`
+	CodeOnly           []SpecificationOperation `json:"codeOnly,omitempty"`
+	DocumentationOnly  []SpecificationOperation `json:"documentationOnly,omitempty"`
+	AmbiguousOwnership []SpecificationOperation `json:"ambiguousOwnership,omitempty"`
+	IncompleteScope    bool                     `json:"incompleteScope"`
+}
+
+// SpecificationCatalog describes bounded, offline discovery. Status is
+// complete, unknown, or unavailable; an empty complete catalog means no
+// source documents were found, not that discovery was skipped.
+type SpecificationCatalog struct {
+	Status         string                `json:"status"`
+	Specifications []SpecificationRecord `json:"specifications"`
+	Issues         []SpecificationIssue  `json:"issues"`
+	Metrics        DocumentationMetrics  `json:"metrics"`
+}
+
 // SwagInfo is best-effort evidence mined from a swaggo/swag-style
 // (https://github.com/swaggo/swag) doc comment directly above a route's
 // handler function declaration. Per
@@ -167,12 +346,23 @@ type ResponseEvidence struct {
 // altering the route. Nil when the handler's doc comment contains no
 // recognized swag directive at all — the overwhelmingly common case.
 type SwagInfo struct {
-	Summary      string   `json:"summary,omitempty"`
-	Description  string   `json:"description,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	Deprecated   bool     `json:"deprecated,omitempty"`
-	RouterPath   string   `json:"routerPath,omitempty"`
-	RouterMethod string   `json:"routerMethod,omitempty"`
+	Summary      string                           `json:"summary,omitempty"`
+	Description  string                           `json:"description,omitempty"`
+	Tags         []string                         `json:"tags,omitempty"`
+	Deprecated   bool                             `json:"deprecated,omitempty"`
+	ID           string                           `json:"id,omitempty"`
+	Accept       []string                         `json:"accept,omitempty"`
+	Produce      []string                         `json:"produce,omitempty"`
+	RouterPath   string                           `json:"routerPath,omitempty"`
+	RouterMethod string                           `json:"routerMethod,omitempty"`
+	Routers      []SwagRouter                     `json:"routers,omitempty"`
+	Parameters   []SwagParameter                  `json:"parameters,omitempty"`
+	Responses    []SwagResponse                   `json:"responses,omitempty"`
+	Security     []SwagSecurity                   `json:"security,omitempty"`
+	Extensions   map[string]any                   `json:"extensions,omitempty"`
+	Components   map[string]SchemaEvidence        `json:"components,omitempty"`
+	Issues       []SwagIssue                      `json:"issues,omitempty"`
+	Fields       map[string]DocumentationEvidence `json:"fields,omitempty"`
 }
 
 // IOEvidence is optional, static/hybrid-only request/response shape evidence

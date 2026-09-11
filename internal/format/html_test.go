@@ -39,6 +39,32 @@ func TestHTMLProducesWellFormedSelfContainedPage(t *testing.T) {
 	}
 }
 
+func TestHTMLViewerFiltersMethodAndAuthAndHidesEmptyGroups(t *testing.T) {
+	rep := inventoryWithRoutes(routeAt("GET", "/users/:id"))
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`selectControl("method-filter"`,
+		`selectControl("auth-filter"`,
+		`No operations match these filters.`,
+		`group.hidden = !visibleInGroup`,
+		`filterCount.textContent = visible + " of " + allRows.length + " operations"`,
+		`row.dataset.auth || "unclassified"`,
+		`"aria-label": "Clear operation search"`,
+		`clearSearch.hidden = filterInput.value.length === 0`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("viewer missing filter behavior %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `}, "Reset")`) {
+		t.Errorf("viewer still creates a standalone Reset button")
+	}
+}
+
 // TestHTMLFooterReadsNoteFromSpecNotAHardcodedCopy is the regression for a
 // duplication bug: the footer used to hardcode its own copy of the
 // schema-inference caveat, separate from and able to drift out of sync with

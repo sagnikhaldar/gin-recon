@@ -195,18 +195,20 @@ func (d Delta) MarshalJSON() ([]byte, error) {
 // on an inventory report at all — see NewInventoryReport and NewAuditReport,
 // which are the only supported constructors.
 type Report struct {
-	SchemaVersion            string                  `json:"schemaVersion"`
-	ToolName                 string                  `json:"tool"`
-	ToolVersion              string                  `json:"toolVersion"`
-	ClassifierRulesetVersion string                  `json:"classifierRulesetVersion"`
-	Command                  Command                 `json:"command"`
-	AnalysisProfile          model.AnalysisProfile   `json:"analysisProfile"`
-	Target                   Target                  `json:"target"`
-	Routes                   []model.Route           `json:"routes"`
-	GlobalMiddleware         []model.Middleware      `json:"globalMiddleware"`
-	FallbackSurfaces         []model.FallbackSurface `json:"fallbackSurfaces"`
-	ScanCoverage             model.ScanCoverage      `json:"scanCoverage"`
-	Diagnostics              []model.Diagnostic      `json:"diagnostics"`
+	SchemaVersion            string                      `json:"schemaVersion"`
+	ToolName                 string                      `json:"tool"`
+	ToolVersion              string                      `json:"toolVersion"`
+	ClassifierRulesetVersion string                      `json:"classifierRulesetVersion"`
+	Command                  Command                     `json:"command"`
+	AnalysisProfile          model.AnalysisProfile       `json:"analysisProfile"`
+	Target                   Target                      `json:"target"`
+	Routes                   []model.Route               `json:"routes"`
+	GlobalMiddleware         []model.Middleware          `json:"globalMiddleware"`
+	FallbackSurfaces         []model.FallbackSurface     `json:"fallbackSurfaces"`
+	ScanCoverage             model.ScanCoverage          `json:"scanCoverage"`
+	Diagnostics              []model.Diagnostic          `json:"diagnostics"`
+	Documentation            *model.APIDocumentation     `json:"documentation,omitempty"`
+	Specifications           *model.SpecificationCatalog `json:"specifications,omitempty"`
 
 	// Audit-only. Tagged "-" because plain struct-tag omitempty cannot express
 	// this field's actual rule: appear as a required array key (even "[]")
@@ -229,19 +231,21 @@ type Report struct {
 // delegate the common fields to encoding/json and hand-splice the
 // conditional audit-only fields around it.
 type reportEnvelope struct {
-	SchemaVersion            string                  `json:"schemaVersion"`
-	ToolName                 string                  `json:"tool"`
-	ToolVersion              string                  `json:"toolVersion"`
-	ClassifierRulesetVersion string                  `json:"classifierRulesetVersion"`
-	Command                  Command                 `json:"command"`
-	AnalysisProfile          model.AnalysisProfile   `json:"analysisProfile"`
-	Target                   Target                  `json:"target"`
-	Routes                   []model.Route           `json:"routes"`
-	GlobalMiddleware         []model.Middleware      `json:"globalMiddleware"`
-	FallbackSurfaces         []model.FallbackSurface `json:"fallbackSurfaces"`
-	ScanCoverage             model.ScanCoverage      `json:"scanCoverage"`
-	Diagnostics              []model.Diagnostic      `json:"diagnostics"`
-	Delta                    *Delta                  `json:"delta,omitempty"`
+	SchemaVersion            string                      `json:"schemaVersion"`
+	ToolName                 string                      `json:"tool"`
+	ToolVersion              string                      `json:"toolVersion"`
+	ClassifierRulesetVersion string                      `json:"classifierRulesetVersion"`
+	Command                  Command                     `json:"command"`
+	AnalysisProfile          model.AnalysisProfile       `json:"analysisProfile"`
+	Target                   Target                      `json:"target"`
+	Routes                   []model.Route               `json:"routes"`
+	GlobalMiddleware         []model.Middleware          `json:"globalMiddleware"`
+	FallbackSurfaces         []model.FallbackSurface     `json:"fallbackSurfaces"`
+	ScanCoverage             model.ScanCoverage          `json:"scanCoverage"`
+	Diagnostics              []model.Diagnostic          `json:"diagnostics"`
+	Documentation            *model.APIDocumentation     `json:"documentation,omitempty"`
+	Specifications           *model.SpecificationCatalog `json:"specifications,omitempty"`
+	Delta                    *Delta                      `json:"delta,omitempty"`
 }
 
 // envelope defaults every nil top-level slice to empty. schema/report-1.0.json
@@ -285,6 +289,8 @@ func (r Report) envelope() reportEnvelope {
 		FallbackSurfaces:         fallbackSurfaces,
 		ScanCoverage:             r.ScanCoverage,
 		Diagnostics:              diagnostics,
+		Documentation:            r.Documentation,
+		Specifications:           r.Specifications,
 		Delta:                    r.Delta,
 	}
 }
@@ -363,6 +369,8 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 		FallbackSurfaces:         env.FallbackSurfaces,
 		ScanCoverage:             env.ScanCoverage,
 		Diagnostics:              env.Diagnostics,
+		Documentation:            env.Documentation,
+		Specifications:           env.Specifications,
 		Delta:                    env.Delta,
 	}
 
@@ -382,31 +390,30 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// toolVersion is 0.7.0: fleet's multi-module aggregation no longer fails an
-// entire target when only a non-Gin sibling module (one whose own go.mod
-// never requires github.com/gin-gonic/gin, and so could never define a real
-// Gin route) fails to load — a real case, not hypothetical: a "tools"
-// go.mod pinning devtool versions behind a //go:build tools tag has zero
-// buildable packages under a normal build context, and used to discard an
-// otherwise complete, successful scan of the actual application module
-// alongside it. It is bumped from v0.6.0, whose release added fleet
-// --suggest-auth, discovery category counts, and org-scale fixes.
-//
-// Also in this release: suggest-auth's nameHint no longer matches a
-// canonical symbol's full import path (a repository or directory name
-// containing a hint substring — "otp-service", "auth-lib" — no longer
-// flags an unrelated symbol inside it); a module whose "./..." matches zero
-// packages now reports why instead of an empty error string; fleet
-// --target-config-dir's reviewed configs are snapshotted durably into --out
-// and reused automatically on later runs there, even with the flag
-// omitted; and every scanned target now gets a target-configs-draft/ review
-// queue (streamed per-target via a new OnTargetComplete hook, with
-// integrity-checked suggestion enrichment and reviewState tracking) —
-// --org runs get this by default, --targets/--repo opt in via
-// --suggest-auth. Drafts are informational only and never read by
-// --target-config-dir/--use-target-config/--config.
+// toolVersion is 0.8.0: swaggo/swag annotation parsing goes well beyond
+// @Summary/@Description/@Tags/@Router/@Deprecated — @Param, @Success/
+// @Failure/@Response (real per-status response schemas), @Header, and
+// @Security are now recognized per-operation, alongside a second,
+// file-level parser for @title/@version/@host/@basePath/@schemes/
+// @tag.name and every @securityDefinitions.* variant (basic/apiKey/
+// oauth2 flows) — real security-scheme declarations, not just per-route
+// hints. A new internal/spec package adds a third, independent OpenAPI
+// evidence source: a bounded, read-only, offline walk of the repository
+// for already-committed OpenAPI 3.x/Swagger 2 JSON or YAML files,
+// cataloged and cross-referenced against the routes the analyzer itself
+// discovered — it never follows a remote reference, executes a
+// generator, or modifies a source spec. fleet.json also gains a
+// repositoryGroups index separating repositories with observed routes
+// from zero-route reference outcomes (complete Gin zero-route, unverified
+// zero-route, non-Gin Go, non-Go, failed, inconclusive), without changing
+// scan, resume, or coverage semantics; fleet.html presents the split as a
+// primary table plus a collapsible reference table with independent
+// filters. All of this is additive — schema major versions for both
+// report and fleet stay at 1.0. It is bumped from v0.7.0, whose release
+// fixed fleet's multi-module aggregation, suggest-auth's nameHint
+// false-positive, and added target-configs-draft/target-configs-snapshot.
 const (
-	toolVersion              = "0.7.0"
+	toolVersion              = "0.8.0"
 	classifierRulesetVersion = "0.1.0"
 )
 

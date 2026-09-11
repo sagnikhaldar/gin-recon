@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -2408,6 +2409,7 @@ func TestRunFleetRenderRefreshesRouteEvidenceCounts(t *testing.T) {
 	// Simulate a fleet.json written before this field existed.
 	agg.Targets[0].Routes, agg.Targets[0].Proven, agg.Targets[0].Public, agg.Targets[0].Unknown = 0, 0, 0, 0
 	agg.Totals.Routes, agg.Totals.Proven, agg.Totals.Public, agg.Totals.Unknown = 0, 0, 0, 0
+	agg.RepositoryGroups = nil
 	staleData, err := json.MarshalIndent(&agg, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -2436,6 +2438,10 @@ func TestRunFleetRenderRefreshesRouteEvidenceCounts(t *testing.T) {
 	}
 	if refreshed.Totals.Routes != refreshed.Targets[0].Routes {
 		t.Errorf("Totals.Routes = %d, want %d (recomputed from the refreshed target)", refreshed.Totals.Routes, refreshed.Targets[0].Routes)
+	}
+	wantGroups := fleet.GroupRepositories(refreshed.Targets)
+	if !reflect.DeepEqual(refreshed.RepositoryGroups, wantGroups) {
+		t.Errorf("RepositoryGroups = %#v, want recomputed %#v", refreshed.RepositoryGroups, wantGroups)
 	}
 }
 

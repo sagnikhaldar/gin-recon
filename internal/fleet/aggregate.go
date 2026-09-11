@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -37,6 +38,9 @@ func ParseAggregate(data []byte, allowLegacy bool) (*Aggregate, error) {
 	}
 	if aggregate.Targets == nil {
 		return nil, fmt.Errorf("invalid fleet aggregate: targets must be an array")
+	}
+	if aggregate.RepositoryGroups != nil && !reflect.DeepEqual(aggregate.RepositoryGroups, GroupRepositories(aggregate.Targets)) {
+		return nil, fmt.Errorf("invalid fleet aggregate: repositoryGroups does not match targets")
 	}
 	seen := make(map[string]bool, len(aggregate.Targets))
 	for _, target := range aggregate.Targets {

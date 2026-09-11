@@ -19,6 +19,8 @@
     "fallbackSurfaces": { "type": "array", "items": { "$ref": "#/$defs/fallbackSurface" } },
     "scanCoverage": { "$ref": "#/$defs/scanCoverage" },
     "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+    "documentation": { "$ref": "#/$defs/apiDocumentation" },
+    "specifications": { "$ref": "#/$defs/specificationCatalog" },
     "summary": { "$ref": "#/$defs/summary" },
     "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
     "policyEvaluation": { "$ref": "#/$defs/policyEvaluation" },
@@ -135,10 +137,69 @@
         "description": { "type": "string" },
         "tags": { "type": "array", "items": { "type": "string" } },
         "deprecated": { "type": "boolean" },
+        "id": { "type": "string" },
+        "accept": { "type": "array", "items": { "type": "string" } },
+        "produce": { "type": "array", "items": { "type": "string" } },
         "routerPath": { "type": "string" },
-        "routerMethod": { "type": "string" }
+        "routerMethod": { "type": "string" },
+        "routers": { "type": "array", "items": { "$ref": "#/$defs/swagRouter" } },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/swagParameter" } },
+        "responses": { "type": "array", "items": { "$ref": "#/$defs/swagResponse" } },
+        "security": { "type": "array", "items": { "$ref": "#/$defs/swagSecurity" } },
+        "extensions": { "type": "object" },
+        "components": { "type": "object", "additionalProperties": { "$ref": "#/$defs/schemaEvidence" } },
+        "issues": { "type": "array", "items": { "$ref": "#/$defs/swagIssue" } },
+        "fields": { "type": "object", "additionalProperties": { "$ref": "#/$defs/documentationEvidence" } }
       }
     },
+    "documentationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "status"],
+      "properties": {
+        "source": { "type": "string" },
+        "status": { "enum": ["declared", "resolved", "partial", "unresolved", "ambiguous", "unsupported", "conflict"] },
+        "provenance": { "$ref": "#/$defs/source" },
+        "conflicts": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "schemaEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence"],
+      "properties": {
+        "ref": { "type": "string" }, "type": { "type": "string" }, "format": { "type": "string" }, "goType": { "type": "string" },
+        "nullable": { "type": "boolean" }, "omitEmpty": { "type": "boolean" }, "items": { "$ref": "#/$defs/schemaEvidence" }, "additionalProperties": { "$ref": "#/$defs/schemaEvidence" },
+        "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/schemaEvidence" } },
+        "required": { "type": "array", "items": { "type": "string" } }, "enum": { "type": "array" }, "default": {}, "example": {},
+        "minimum": { "type": "number" }, "maximum": { "type": "number" }, "minLength": { "type": "integer", "minimum": 0 }, "maxLength": { "type": "integer", "minimum": 0 },
+        "pattern": { "type": "string" }, "customSerialization": { "type": "boolean" }, "evidence": { "$ref": "#/$defs/documentationEvidence" }
+      }
+    },
+    "swagRouter": { "type": "object", "additionalProperties": false, "required": ["path", "evidence"], "properties": { "path": {"type":"string"}, "method":{"type":"string"}, "deprecated":{"type":"boolean"}, "evidence":{"$ref":"#/$defs/documentationEvidence"} } },
+    "swagParameter": { "type": "object", "additionalProperties": false, "required": ["name", "in", "required", "evidence"], "properties": { "name":{"type":"string"}, "in":{"enum":["path","query","header","body","formData"]}, "description":{"type":"string"}, "required":{"type":"boolean"}, "schema":{"$ref":"#/$defs/schemaEvidence"}, "evidence":{"$ref":"#/$defs/documentationEvidence"} } },
+    "swagHeader": { "type": "object", "additionalProperties": false, "required": ["name", "evidence"], "properties": { "name":{"type":"string"}, "description":{"type":"string"}, "schema":{"$ref":"#/$defs/schemaEvidence"}, "evidence":{"$ref":"#/$defs/documentationEvidence"} } },
+    "swagResponse": { "type": "object", "additionalProperties": false, "required": ["status", "description", "evidence"], "properties": { "status":{"type":"string"}, "description":{"type":"string"}, "contentType":{"type":"string"}, "schema":{"$ref":"#/$defs/schemaEvidence"}, "headers":{"type":"array","items":{"$ref":"#/$defs/swagHeader"}}, "evidence":{"$ref":"#/$defs/documentationEvidence"} } },
+    "swagSecurity": { "type": "object", "additionalProperties": false, "required": ["name", "evidence"], "properties": { "name":{"type":"string"}, "scopes":{"type":"array","items":{"type":"string"}}, "evidence":{"$ref":"#/$defs/documentationEvidence"} } },
+    "swagIssue": { "type": "object", "additionalProperties": false, "required": ["directive", "message"], "properties": { "directive":{"type":"string"}, "message":{"type":"string"} } },
+    "apiTagDocumentation": { "type":"object", "additionalProperties":false, "required":["name","evidence"], "properties":{"name":{"type":"string"},"description":{"type":"string"},"evidence":{"$ref":"#/$defs/documentationEvidence"}} },
+    "documentedSecurityScheme": { "type":"object", "additionalProperties":false, "required":["type","evidence"], "properties":{"type":{"type":"string"},"name":{"type":"string"},"in":{"type":"string"},"scheme":{"type":"string"},"bearerFormat":{"type":"string"},"authorizationUrl":{"type":"string"},"tokenUrl":{"type":"string"},"scopes":{"type":"object","additionalProperties":{"type":"string"}},"evidence":{"$ref":"#/$defs/documentationEvidence"}} },
+    "apiDocumentation": {
+      "type":"object", "additionalProperties":false, "required":["evidence"],
+      "properties": {
+        "title":{"type":"string"},"version":{"type":"string"},"description":{"type":"string"},"termsOfService":{"type":"string"},
+        "contactName":{"type":"string"},"contactUrl":{"type":"string"},"contactEmail":{"type":"string"},"licenseName":{"type":"string"},"licenseUrl":{"type":"string"},
+        "host":{"type":"string"},"basePath":{"type":"string"},"schemes":{"type":"array","items":{"type":"string"}},"tags":{"type":"array","items":{"$ref":"#/$defs/apiTagDocumentation"}},
+        "securityDefinitions":{"type":"object","additionalProperties":{"$ref":"#/$defs/documentedSecurityScheme"}},"security":{"type":"array","items":{"$ref":"#/$defs/swagSecurity"}},
+        "extensions":{"type":"object"},"issues":{"type":"array","items":{"$ref":"#/$defs/swagIssue"}},"evidence":{"$ref":"#/$defs/documentationEvidence"},"fields":{"type":"object","additionalProperties":{"$ref":"#/$defs/documentationEvidence"}}
+      }
+    },
+    "specificationOperation":{"type":"object","additionalProperties":false,"required":["method","path"],"properties":{"method":{"type":"string"},"path":{"type":"string"}}},
+    "specificationRecord":{"type":"object","additionalProperties":false,"required":["id","path","dialect","version","authorship","provenance","sha256","bytes"],"properties":{"id":{"type":"string"},"path":{"type":"string"},"dialect":{"enum":["openapi3","swagger2"]},"version":{"type":"string"},"title":{"type":"string"},"apiVersion":{"type":"string"},"authorship":{"enum":["authored","generated","unknown"]},"provenance":{"$ref":"#/$defs/documentationEvidence"},"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"bytes":{"type":"integer","minimum":0},"operations":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"localRefs":{"type":"array","items":{"type":"string"}}}},
+    "specificationIssue":{"type":"object","additionalProperties":false,"required":["code","message"],"properties":{"code":{"type":"string"},"path":{"type":"string"},"message":{"type":"string"}}},
+    "documentationMetric":{"type":"object","additionalProperties":false,"required":["numerator","denominator","status"],"properties":{"numerator":{"type":"integer","minimum":0},"denominator":{"type":"integer","minimum":0},"status":{"enum":["complete","unknown","unavailable"]}}},
+    "documentationMetrics":{"type":"object","additionalProperties":false,"required":["sourceFiles","observedOperations","incompleteScope"],"properties":{"sourceFiles":{"$ref":"#/$defs/documentationMetric"},"observedOperations":{"$ref":"#/$defs/documentationMetric"},"codeOnly":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"documentationOnly":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"ambiguousOwnership":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"incompleteScope":{"type":"boolean"}}},
+    "specificationCatalog":{"type":"object","additionalProperties":false,"required":["status","specifications","issues","metrics"],"properties":{"status":{"enum":["complete","unknown","unavailable"]},"specifications":{"type":"array","items":{"$ref":"#/$defs/specificationRecord"}},"issues":{"type":"array","items":{"$ref":"#/$defs/specificationIssue"}},"metrics":{"$ref":"#/$defs/documentationMetrics"}}},
     "authClassification": {
       "type": "object",
       "additionalProperties": false,

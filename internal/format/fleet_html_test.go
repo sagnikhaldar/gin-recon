@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
+	"github.com/sagnikhaldar/gin-recon/internal/model"
 	"github.com/sagnikhaldar/gin-recon/internal/report"
 )
 
@@ -37,21 +38,16 @@ func TestFleetHTMLRendersTargets(t *testing.T) {
 // plus route-evidence counts — gin-recon's own proven/public/unknown
 // vocabulary (docs/adr/0008), not a copy of any sibling tool's own
 // per-repository metrics.
-// TestFleetHTMLExplainsZeroRouteOKTargets is a regression test for a real
-// live finding: several "ok" targets in a real org scan showed 0 routes
-// with no bug at all — they're shared libraries other services import and
-// mount routes from (gin-recon scans one repository at a time), or use a
-// different web framework entirely. Confirmed by inspecting real source
-// (las-be-lender-bfin's webhook.Init(router *gin.RouterGroup, ...) only
-// registers routes once imported and called by las-be-flow, which is
-// where those exact routes are already counted). Rather than leave a
-// reader to reverse-engineer that, the dashboard must say so directly.
-func TestFleetHTMLExplainsZeroRouteOKTargets(t *testing.T) {
+// A zero-route process exit is not itself a clean Gin result. The reference
+// table must distinguish complete Gin evidence from an incomplete scan and
+// metadata-free legacy input instead of describing all three as clean.
+func TestFleetHTMLSeparatesZeroRouteEvidence(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
-		{Name: "svc-a", Status: fleet.StatusOK, Routes: 0},
+		{Name: "svc-a", Status: fleet.StatusOK, Complete: true, Modules: []fleet.ModuleResult{{Kind: fleet.ModuleGinNoRoutes, Status: fleet.StatusOK, Complete: true}}},
 		{Name: "svc-b", Status: fleet.StatusOK, Routes: 5},
 		{Name: "svc-c", Status: fleet.StatusFailed},
-		{Name: "svc-d", Status: fleet.StatusNotGoModule},
+		{Name: "svc-d", Status: fleet.StatusOK, Complete: false, Modules: []fleet.ModuleResult{{Kind: fleet.ModuleGinNoRoutes, Status: fleet.StatusOK, Complete: false}}},
+		{Name: "legacy", Status: fleet.StatusOK, Complete: true},
 	}}
 
 	out, err := FleetHTML(agg, nil, nil, "../out")
@@ -59,28 +55,41 @@ func TestFleetHTMLExplainsZeroRouteOKTargets(t *testing.T) {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
 	html := string(out)
-	if !strings.Contains(html, "0*</span>") {
-		t.Errorf("expected the 0* mark for svc-a\n%s", html)
+	if !strings.Contains(html, "Gin detected, no routes") {
+		t.Errorf("expected complete Gin zero-route evidence to be labeled\n%s", html)
 	}
-	if !strings.Contains(html, "1 target scanned cleanly but found no routes") {
-		t.Errorf("expected the zero-route explainer note counting exactly 1\n%s", html)
+	if got := strings.Count(html, "No routes, unverified</span>"); got != 2 {
+		t.Errorf("unverified label count = %d, want 2 for incomplete and legacy results\n%s", got, html)
 	}
-	if strings.Contains(html, ">5</span>") && strings.Contains(html, "5*") {
-		t.Errorf("svc-b has real routes and must not get the 0* mark\n%s", html)
+	if strings.Contains(html, "scanned cleanly") {
+		t.Errorf("incomplete or metadata-free zero-route results must not be called clean\n%s", html)
 	}
 }
 
-// TestFleetHTMLOmitsZeroRouteNoteWhenNotApplicable confirms the note
-// doesn't appear at all when nothing would need it.
-func TestFleetHTMLOmitsZeroRouteNoteWhenNotApplicable(t *testing.T) {
-	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK, Routes: 5}}}
+func TestFleetHTMLKeepsFailedTargetWithObservedRoutesInPrimaryTable(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "partial-routes", Status: fleet.StatusFailed, Complete: false, Routes: 2, Error: "later module failed"},
+		{Name: "failed-zero", Status: fleet.StatusFailed, Complete: false, Error: "clone failed"},
+	}}
 
 	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
-	if strings.Contains(string(out), "found no routes of their own") {
-		t.Errorf("should not show the zero-route note when no target needs it\n%s", out)
+	html := string(out)
+	primaryStart := strings.Index(html, "id=\"gr-route-targets-table\"")
+	referenceStart := strings.Index(html, "id=\"gr-reference-targets-table\"")
+	if primaryStart < 0 || referenceStart < 0 || primaryStart >= referenceStart {
+		t.Fatalf("expected separate primary and reference tables\n%s", html)
+	}
+	if !strings.Contains(html[primaryStart:referenceStart], "partial-routes") {
+		t.Errorf("failed target with retained routes missing from primary table\n%s", html)
+	}
+	if strings.Contains(html[primaryStart:referenceStart], "failed-zero") {
+		t.Errorf("zero-route failure leaked into primary table\n%s", html)
+	}
+	if !strings.Contains(html[referenceStart:], "failed-zero") {
+		t.Errorf("zero-route failure missing from reference table\n%s", html)
 	}
 }
 
@@ -360,6 +369,71 @@ func TestFleetHTMLRendersScopeForOrgRun(t *testing.T) {
 	}
 }
 
+func TestFleetHTMLMakesArchivedAndForkOptInsProminent(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusNotGoModule, Complete: true}}}
+	scope := &fleet.Scope{Org: "myorg", IncludeArchived: true, IncludeForks: true}
+
+	out, err := FleetHTML(agg, nil, scope, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	for _, want := range []string{
+		"Expanded repository scope.",
+		"explicit <code>--include-archived</code> opt-in",
+		"explicit <code>--include-forks</code> opt-in",
+		"report has not silently removed them",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("output missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestFleetHTMLShowsDefaultArchivedAndForkExclusions(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusNotGoModule, Complete: true}}}
+	scope := &fleet.Scope{Org: "myorg"}
+
+	out, err := FleetHTML(agg, nil, scope, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	if got := strings.Count(html, "excluded (default)"); got != 2 {
+		t.Errorf("default exclusion label count = %d, want 2\n%s", got, html)
+	}
+	if strings.Contains(html, "Expanded repository scope.") {
+		t.Errorf("default scope must not be described as expanded\n%s", html)
+	}
+}
+
+func TestFleetHTMLSeparatesAndEscapesDiscoveryDispositions(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "selected", Status: fleet.StatusNotGoModule, Complete: true}}}
+	scope := &fleet.Scope{
+		Org: "myorg",
+		Discovery: &fleet.DiscoverySummary{Repositories: []fleet.RepositoryDisposition{
+			{FullName: "myorg/selected", Status: "selected"},
+			{FullName: "<script>omitted</script>", Status: "filtered", Reason: "<img src=x onerror=alert(1)>"},
+		}},
+	}
+
+	out, err := FleetHTML(agg, nil, scope, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	if !strings.Contains(html, "Discovery dispositions not audited (1)") ||
+		!strings.Contains(html, "discovery decisions, not fabricated audit results") {
+		t.Errorf("expected a separately identified discovery-disposition table\n%s", html)
+	}
+	if strings.Contains(html, "<script>omitted</script>") || strings.Contains(html, "<img src=x onerror=alert(1)>") {
+		t.Errorf("discovery disposition content was not escaped\n%s", html)
+	}
+	if strings.Contains(html, "<code>myorg/selected</code>") {
+		t.Errorf("selected repository should not appear in the not-audited disposition table\n%s", html)
+	}
+}
+
 func TestFleetHTMLOmitsScopeForTargetsRun(t *testing.T) {
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
 	out, err := FleetHTML(agg, nil, nil, "../out")
@@ -372,16 +446,103 @@ func TestFleetHTMLOmitsScopeForTargetsRun(t *testing.T) {
 }
 
 func TestFleetHTMLIncludesFilterControls(t *testing.T) {
-	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc-a", Status: fleet.StatusOK}}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", Status: fleet.StatusOK, Routes: 1},
+		{Name: "svc-b", Status: fleet.StatusNotGoModule, Complete: true},
+	}}
 	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatalf("FleetHTML: unexpected error: %v", err)
 	}
 	html := string(out)
-	for _, want := range []string{"data-gr-filter-search", "data-gr-filter-status", "data-gr-search=", "function update"} {
+	for _, want := range []string{
+		"data-gr-filter=\"gr-route-targets-table\"",
+		"data-gr-filter=\"gr-reference-targets-table\"",
+		"data-gr-filter-search",
+		"data-gr-filter-status",
+		"data-gr-filter-category",
+		"data-gr-filter-completion",
+		"data-gr-filter-evidence",
+		"data-gr-filter-framework",
+		"data-gr-filter-docs",
+		"data-gr-filter-clear",
+		"data-gr-filter-empty",
+		"data-gr-group=\"complete\"",
+		"data-gr-group=\"incomplete\"",
+		"data-gr-search=",
+		"function update",
+		"group.hidden = !rows.some",
+		`target.tagName === "DETAILS"`,
+	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("output missing %q", want)
 		}
+	}
+	if strings.Contains(html, ">Reset<") || strings.Contains(html, "Reset filters") {
+		t.Errorf("output still contains standalone reset controls")
+	}
+}
+
+func TestFleetHTMLRendersSavedSpecificationChooserAndSeparateMetrics(t *testing.T) {
+	catalog := &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{{ID: "one", Path: "api/openapi.yaml", Dialect: "openapi3", Version: "3.1.0", Title: "Payments", APIVersion: "v2", Authorship: "authored", SHA256: strings.Repeat("a", 64)}}, Metrics: model.DocumentationMetrics{SourceFiles: model.DocumentationMetric{Numerator: 205, Denominator: 205, Status: "complete"}, ObservedOperations: model.DocumentationMetric{Numerator: 66, Denominator: 287, Status: "complete"}, IncompleteScope: true}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc", Status: fleet.StatusOK, Complete: false, Routes: 287, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/svc", Catalog: catalog}}}}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	for _, want := range []string{"data-gr-docs=\"openapi3\"", "Payments v2 · openapi3 3.1.0", "source files 100.0% (205/205)", "observed API operations documented 23.0% (66/287)", "incomplete scope"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestFleetHTMLMissingDenominatorsAreNA(t *testing.T) {
+	catalog := &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{}, Metrics: model.DocumentationMetrics{SourceFiles: model.DocumentationMetric{Status: "unknown"}, ObservedOperations: model.DocumentationMetric{Status: "unknown"}}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "empty", Status: fleet.StatusOK, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/empty", Catalog: catalog}}}}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(out), "N/A") < 2 {
+		t.Fatalf("missing N/A metrics: %s", out)
+	}
+}
+
+func TestFleetHTMLDoesNotContradictTargetSpecificAuthEvidence(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", Status: fleet.StatusOK, Complete: true, Routes: 2, Proven: 2, TargetConfigDir: true},
+	}}
+	agg.Totals.Routes = 2
+	agg.Totals.Proven = 2
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	if strings.Contains(html, "Every route below defaults to") {
+		t.Errorf("fleet-wide zero authMiddleware must not contradict target-specific proven evidence\n%s", html)
+	}
+	if !strings.Contains(html, `gr-badge--good">2</span> proven`) {
+		t.Errorf("expected proven route evidence rollup\n%s", html)
+	}
+}
+
+func TestFleetHTMLTreatsCompleteNonGoResultAsCompleteOutcome(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "docs-only", Status: fleet.StatusNotGoModule, Complete: true},
+	}}
+
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatalf("FleetHTML: unexpected error: %v", err)
+	}
+	html := string(out)
+	if !strings.Contains(html, `<span class="gr-metric__value">1</span><span class="gr-metric__label">Complete targets</span>`) ||
+		!strings.Contains(html, `gr-badge--neutral">not-go-module</span> <span class="gr-badge gr-badge--good">complete</span>`) {
+		t.Errorf("complete non-Go classification rendered as incomplete\n%s", html)
 	}
 }
 

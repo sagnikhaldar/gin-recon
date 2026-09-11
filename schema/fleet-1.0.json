@@ -11,6 +11,7 @@
     "tool": {"const": "gin-recon"},
     "toolVersion": {"type": "string", "minLength": 1},
     "targets": {"type": "array", "items": {"$ref": "#/$defs/target"}},
+    "repositoryGroups": {"$ref": "#/$defs/repositoryGroups"},
     "scope": {"$ref": "#/$defs/scope"},
     "coverage": {"$ref": "#/$defs/coverage"},
     "resume": {"$ref": "#/$defs/reuse"},
@@ -31,6 +32,20 @@
     "followModulesCount": {"type": "integer", "minimum": 0}
   },
   "$defs": {
+    "repositoryGroups": {
+      "type": "object", "additionalProperties": false, "required": ["withRoutes", "reference"],
+      "properties": {
+        "withRoutes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}},
+        "reference": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/repositoryReference"}}
+      }
+    },
+    "repositoryReference": {
+      "type": "object", "additionalProperties": false, "required": ["name", "category"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "category": {"enum": ["gin-no-routes", "no-routes-unverified", "non-gin", "not-go-module", "failed", "inconclusive"]}
+      }
+    },
     "status": {"enum": ["ok", "not-go-module", "inconclusive", "failed"]},
     "coverage": {"type": "object", "additionalProperties": false, "required": ["complete"], "properties": {"complete": {"type": "boolean"}}},
     "reuse": {"type": "object", "additionalProperties": false, "required": ["requested", "reused", "checkpoint"], "properties": {"requested": {"type": "boolean"}, "reused": {"type": "integer", "minimum": 0}, "checkpoint": {"type": "boolean"}}},
@@ -44,7 +59,7 @@
         "kind": {"enum": ["go-module", "gin-module-no-routes", "gin-application"]}, "status": {"$ref": "#/$defs/status"}, "error": {"type": "string"}, "complete": {"type": "boolean"},
         "report": {"type": "string"}, "apiHtml": {"type": "string"}, "routes": {"type": "integer", "minimum": 0}, "proven": {"type": "integer", "minimum": 0}, "public": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0},
         "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
-        "suggestionArtifact": {"$ref": "#/$defs/artifact"}, "suggestionError": {"type": "string"}
+        "suggestionArtifact": {"$ref": "#/$defs/artifact"}, "suggestionError": {"type": "string"}, "specifications": {"$ref":"#/$defs/specificationCatalog"}
       }
     },
     "inventory": {
@@ -99,8 +114,16 @@
       "properties": {
         "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"}, "src": {"type": "string"}, "gitUrl": {"type": "string"}, "status": {"$ref": "#/$defs/status"}, "error": {"type": "string"}, "complete": {"type": "boolean"},
         "report": {"type": "string"}, "apiHtml": {"type": "string"}, "inventory": {"$ref": "#/$defs/inventory"}, "repository": {"$ref": "#/$defs/repository"}, "modules": {"type": "array", "items": {"$ref": "#/$defs/module"}}, "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
-        "sourceFingerprint": {"type": "string"}, "attempts": {"type": "integer", "minimum": 0}, "durationMs": {"type": "integer", "minimum": 0}, "routes": {"type": "integer", "minimum": 0}, "proven": {"type": "integer", "minimum": 0}, "public": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0}, "targetConfig": {"type": "boolean"}, "targetConfigDir": {"type": "boolean"}
+        "sourceFingerprint": {"type": "string"}, "attempts": {"type": "integer", "minimum": 0}, "durationMs": {"type": "integer", "minimum": 0}, "routes": {"type": "integer", "minimum": 0}, "proven": {"type": "integer", "minimum": 0}, "public": {"type": "integer", "minimum": 0}, "unknown": {"type": "integer", "minimum": 0}, "targetConfig": {"type": "boolean"}, "targetConfigDir": {"type": "boolean"}, "specifications":{"type":"array","items":{"$ref":"#/$defs/moduleSpecificationSummary"}}
       }
-    }
+    },
+    "documentationEvidence":{"type":"object","additionalProperties":false,"required":["source","status"],"properties":{"source":{"type":"string"},"status":{"type":"string"},"provenance":{"type":"object","additionalProperties":false,"required":["file","line"],"properties":{"file":{"type":"string"},"line":{"type":["integer","null"]}}},"conflicts":{"type":"array","items":{"type":"string"}}}},
+    "specificationOperation":{"type":"object","additionalProperties":false,"required":["method","path"],"properties":{"method":{"type":"string"},"path":{"type":"string"}}},
+    "specificationRecord":{"type":"object","additionalProperties":false,"required":["id","path","dialect","version","authorship","provenance","sha256","bytes"],"properties":{"id":{"type":"string"},"path":{"type":"string"},"dialect":{"enum":["openapi3","swagger2"]},"version":{"type":"string"},"title":{"type":"string"},"apiVersion":{"type":"string"},"authorship":{"enum":["authored","generated","unknown"]},"provenance":{"$ref":"#/$defs/documentationEvidence"},"sha256":{"type":"string"},"bytes":{"type":"integer","minimum":0},"operations":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"localRefs":{"type":"array","items":{"type":"string"}}}},
+    "specificationIssue":{"type":"object","additionalProperties":false,"required":["code","message"],"properties":{"code":{"type":"string"},"path":{"type":"string"},"message":{"type":"string"}}},
+    "documentationMetric":{"type":"object","additionalProperties":false,"required":["numerator","denominator","status"],"properties":{"numerator":{"type":"integer","minimum":0},"denominator":{"type":"integer","minimum":0},"status":{"type":"string"}}},
+    "documentationMetrics":{"type":"object","additionalProperties":false,"required":["sourceFiles","observedOperations","incompleteScope"],"properties":{"sourceFiles":{"$ref":"#/$defs/documentationMetric"},"observedOperations":{"$ref":"#/$defs/documentationMetric"},"codeOnly":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"documentationOnly":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"ambiguousOwnership":{"type":"array","items":{"$ref":"#/$defs/specificationOperation"}},"incompleteScope":{"type":"boolean"}}},
+    "specificationCatalog":{"type":"object","additionalProperties":false,"required":["status","specifications","issues","metrics"],"properties":{"status":{"enum":["complete","unknown","unavailable"]},"specifications":{"type":"array","items":{"$ref":"#/$defs/specificationRecord"}},"issues":{"type":"array","items":{"$ref":"#/$defs/specificationIssue"}},"metrics":{"$ref":"#/$defs/documentationMetrics"}}},
+    "moduleSpecificationSummary":{"type":"object","additionalProperties":false,"required":["moduleId","modulePath","catalog"],"properties":{"moduleId":{"type":"string"},"modulePath":{"type":"string"},"catalog":{"$ref":"#/$defs/specificationCatalog"}}}
   }
 }

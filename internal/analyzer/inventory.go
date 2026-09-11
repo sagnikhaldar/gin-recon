@@ -9,6 +9,7 @@ import (
 
 	"github.com/sagnikhaldar/gin-recon/internal/analyzer/gin"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
+	"github.com/sagnikhaldar/gin-recon/internal/spec"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -42,6 +43,8 @@ type InventoryResult struct {
 	FallbackSurfaces []model.FallbackSurface
 	Diagnostics      []model.Diagnostic
 	ScanCoverage     model.ScanCoverage
+	Documentation    *model.APIDocumentation
+	Specifications   *model.SpecificationCatalog
 }
 
 // Inventory runs Gin discovery across every function in every loaded
@@ -72,6 +75,8 @@ func discover(loaded *Loaded) (*InventoryResult, *gin.API, map[*types.Func]gin.F
 	api, ok := gin.Find(imports)
 	if !ok {
 		result.ScanCoverage = buildScanCoverage(loaded, nil)
+		result.Documentation = collectSwagGlobalDocumentation(loaded.Packages)
+		result.Specifications = spec.Discover(loaded.Root, result.Routes, result.ScanCoverage)
 		return result, nil, nil
 	}
 
@@ -135,10 +140,12 @@ func discover(loaded *Loaded) (*InventoryResult, *gin.API, map[*types.Func]gin.F
 		}
 	}
 
-	applySwagAnnotations(result, index)
+	applySwagAnnotations(result, index, loaded.Packages)
+	result.Documentation = collectSwagGlobalDocumentation(loaded.Packages)
 	relativizeSources(result, loaded.Root, externalFiles)
 	normalize(result)
 	result.ScanCoverage = buildScanCoverage(loaded, result.Diagnostics)
+	result.Specifications = spec.Discover(loaded.Root, result.Routes, result.ScanCoverage)
 	return result, api, index
 }
 
@@ -154,7 +161,7 @@ func discover(loaded *Loaded) (*InventoryResult, *gin.API, map[*types.Func]gin.F
 // symbol (anonymous, unresolved, or a symbol outside this module's own
 // funcIndex) is left completely unchanged — this is purely additive
 // evidence, never a source of new coverage gaps.
-func applySwagAnnotations(result *InventoryResult, funcIndex map[*types.Func]gin.FuncInfo) {
+func applySwagAnnotations(result *InventoryResult, funcIndex map[*types.Func]gin.FuncInfo, pkgs []*packages.Package) {
 	symbolIndex := BuildSymbolIndex(funcIndex)
 	for i := range result.Routes {
 		route := &result.Routes[i]
@@ -171,6 +178,10 @@ func applySwagAnnotations(result *InventoryResult, funcIndex map[*types.Func]gin
 		}
 		if diag := gin.ApplySwagFromDoc(route, fi.Decl.Doc); diag != nil {
 			result.Diagnostics = append(result.Diagnostics, *diag)
+		}
+		if route.Swag != nil {
+			newSwagSchemaResolver(fn.Pkg(), pkgs).resolveInfo(route.Swag)
+			gin.ApplySwagProvenance(route.Swag, route.Source)
 		}
 	}
 }

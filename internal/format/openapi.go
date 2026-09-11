@@ -14,6 +14,7 @@ package format
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,15 +27,39 @@ import (
 // document is the OpenAPI 3.1 root object, restricted to the fields this
 // formatter actually populates.
 type document struct {
-	OpenAPI    string              `json:"openapi"`
-	Info       oaInfo              `json:"info"`
-	Paths      map[string]pathItem `json:"paths"`
-	Components *oaComponents       `json:"components,omitempty"`
+	OpenAPI              string                      `json:"openapi"`
+	Info                 oaInfo                      `json:"info"`
+	Servers              []oaServer                  `json:"servers,omitempty"`
+	Tags                 []oaTag                     `json:"tags,omitempty"`
+	Paths                map[string]pathItem         `json:"paths"`
+	Components           *oaComponents               `json:"components,omitempty"`
+	Documentation        *model.APIDocumentation     `json:"x-gin-recon-documentation,omitempty"`
+	SourceSpecifications *model.SpecificationCatalog `json:"x-gin-recon-source-specifications,omitempty"`
 }
 
 type oaInfo struct {
-	Title       string `json:"title"`
-	Version     string `json:"version"`
+	Title          string     `json:"title"`
+	Version        string     `json:"version"`
+	Description    string     `json:"description,omitempty"`
+	TermsOfService string     `json:"termsOfService,omitempty"`
+	Contact        *oaContact `json:"contact,omitempty"`
+	License        *oaLicense `json:"license,omitempty"`
+}
+type oaContact struct {
+	Name  string `json:"name,omitempty"`
+	URL   string `json:"url,omitempty"`
+	Email string `json:"email,omitempty"`
+}
+type oaLicense struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
+}
+type oaServer struct {
+	URL         string `json:"url"`
+	Description string `json:"description,omitempty"`
+}
+type oaTag struct {
+	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -52,7 +77,7 @@ type oaInfo struct {
 // format.HTML's footer reads this same field back out of the document it
 // wraps rather than keeping a second hardcoded copy, so the two surfaces
 // cannot drift out of sync with each other.
-const schemaInferenceNote = "gin-recon does not yet infer request/response body schemas from handler code (a planned capability, not a permanent limitation): every operation below carries only a generic default response, not real request/response shapes. Route, path, method, and security evidence above is fully analyzed and accurate."
+const schemaInferenceNote = "gin-recon does not yet infer undocumented request and response schemas from arbitrary handler behavior. Schemas are emitted only when supported static evidence resolves them; annotation-declared schemas remain distinct from observed handler I/O, and unresolved types are diagnosed and omitted rather than rendered as authoritative empty objects. Route identity and configured security evidence remain analyzer-authoritative."
 
 // pathItem uses named fields (not a map) so field order in the Go struct —
 // preserved by encoding/json — gives deterministic method ordering matching
@@ -161,6 +186,7 @@ type operation struct {
 	Tags        []string               `json:"tags,omitempty"`
 	Deprecated  bool                   `json:"deprecated,omitempty"`
 	Parameters  []oaParameter          `json:"parameters,omitempty"`
+	RequestBody *oaRequestBody         `json:"requestBody,omitempty"`
 	Responses   map[string]oaResponse  `json:"responses"`
 	Security    *[]map[string][]string `json:"security,omitempty"`
 	Extensions  map[string]ginReconExt `json:"-"` // flattened into "x-gin-recon" by MarshalJSON
@@ -198,15 +224,49 @@ type oaParameter struct {
 }
 
 type oaSchema struct {
-	Type string `json:"type"`
+	Ref                  string                       `json:"$ref,omitempty"`
+	Type                 any                          `json:"type,omitempty"`
+	Format               string                       `json:"format,omitempty"`
+	Items                *oaSchema                    `json:"items,omitempty"`
+	AdditionalProperties *oaSchema                    `json:"additionalProperties,omitempty"`
+	Properties           map[string]oaSchema          `json:"properties,omitempty"`
+	Required             []string                     `json:"required,omitempty"`
+	Enum                 []any                        `json:"enum,omitempty"`
+	Default              any                          `json:"default,omitempty"`
+	Example              any                          `json:"example,omitempty"`
+	Minimum              *float64                     `json:"minimum,omitempty"`
+	Maximum              *float64                     `json:"maximum,omitempty"`
+	MinLength            *int                         `json:"minLength,omitempty"`
+	MaxLength            *int                         `json:"maxLength,omitempty"`
+	Pattern              string                       `json:"pattern,omitempty"`
+	Evidence             *model.DocumentationEvidence `json:"x-gin-recon-evidence,omitempty"`
+	CustomSerialization  bool                         `json:"x-gin-recon-custom-serialization,omitempty"`
+	OmitEmpty            bool                         `json:"x-gin-recon-omitempty,omitempty"`
 }
 
 type oaResponse struct {
-	Description string `json:"description"`
+	Description string                 `json:"description"`
+	Headers     map[string]oaHeader    `json:"headers,omitempty"`
+	Content     map[string]oaMediaType `json:"content,omitempty"`
+}
+
+type oaHeader struct {
+	Description string    `json:"description,omitempty"`
+	Schema      *oaSchema `json:"schema,omitempty"`
+}
+type oaMediaType struct {
+	Schema  *oaSchema `json:"schema,omitempty"`
+	Example any       `json:"example,omitempty"`
+}
+type oaRequestBody struct {
+	Description string                 `json:"description,omitempty"`
+	Required    bool                   `json:"required,omitempty"`
+	Content     map[string]oaMediaType `json:"content"`
 }
 
 type oaComponents struct {
 	SecuritySchemes map[string]config.SecurityScheme `json:"securitySchemes,omitempty"`
+	Schemas         map[string]oaSchema              `json:"schemas,omitempty"`
 }
 
 // ginReconExt is docs/openapi-strategy.md's "Traceability" extension,
@@ -256,7 +316,11 @@ type ginReconExt struct {
 	// a reader can tell "gin-recon's own generic text" from "prose that came
 	// from somewhere outside static analysis" — the one piece of provenance
 	// the merged Summary/Description strings alone no longer carry.
-	EvidenceSource string `json:"evidenceSource,omitempty"`
+	EvidenceSource          string                                 `json:"evidenceSource,omitempty"`
+	DocumentationSecurity   []model.SwagSecurity                   `json:"documentationSecurity,omitempty"`
+	DocumentationIssues     []model.SwagIssue                      `json:"documentationIssues,omitempty"`
+	DocumentationExtensions map[string]any                         `json:"documentationExtensions,omitempty"`
+	DocumentationFields     map[string]model.DocumentationEvidence `json:"documentationFields,omitempty"`
 }
 
 // OpenAPI renders rep as an OpenAPI 3.1 document. cfg supplies title/version
@@ -272,9 +336,13 @@ type ginReconExt struct {
 // are responsible for surfacing them (cmd/gin-recon writes them to stderr).
 func OpenAPI(rep *report.Report, cfg *config.Config) ([]byte, []model.Diagnostic, error) {
 	doc := document{
-		OpenAPI: "3.1.0",
-		Info:    infoFrom(rep, cfg),
-		Paths:   map[string]pathItem{},
+		OpenAPI:              "3.1.0",
+		Info:                 infoFrom(rep, cfg),
+		Servers:              serversFrom(rep),
+		Tags:                 tagsFrom(rep),
+		Paths:                map[string]pathItem{},
+		Documentation:        rep.Documentation,
+		SourceSpecifications: rep.Specifications,
 	}
 
 	usedOperationIDs := map[string]int{}
@@ -284,8 +352,11 @@ func OpenAPI(rep *report.Report, cfg *config.Config) ([]byte, []model.Diagnostic
 		diagnostics = append(diagnostics, buildOperation(&doc, route, rep, cfg, usedOperationIDs)...)
 	}
 
-	if schemes := securitySchemesFrom(cfg); len(schemes) > 0 {
-		doc.Components = &oaComponents{SecuritySchemes: schemes}
+	schemes := securitySchemesFrom(cfg)
+	schemas, componentDiagnostics := collectSwagComponents(rep)
+	diagnostics = append(diagnostics, componentDiagnostics...)
+	if len(schemes) > 0 || len(schemas) > 0 {
+		doc.Components = &oaComponents{SecuritySchemes: schemes, Schemas: schemas}
 	}
 
 	data, err := json.MarshalIndent(doc, "", "  ")
@@ -308,6 +379,24 @@ func infoFrom(rep *report.Report, cfg *config.Config) oaInfo {
 	if rep.Target.Module != "" {
 		info.Title = repoNameFrom(rep.Target.Module) + " API"
 	}
+	if d := rep.Documentation; d != nil {
+		if d.Title != "" {
+			info.Title = d.Title
+		}
+		if d.Version != "" {
+			info.Version = d.Version
+		}
+		if d.Description != "" {
+			info.Description = d.Description + "\n\n" + schemaInferenceNote
+		}
+		info.TermsOfService = d.TermsOfService
+		if d.ContactName != "" || d.ContactURL != "" || d.ContactEmail != "" {
+			info.Contact = &oaContact{Name: d.ContactName, URL: d.ContactURL, Email: d.ContactEmail}
+		}
+		if d.LicenseName != "" {
+			info.License = &oaLicense{Name: d.LicenseName, URL: d.LicenseURL}
+		}
+	}
 	if cfg != nil && cfg.OpenAPI != nil {
 		if cfg.OpenAPI.Title != "" {
 			info.Title = cfg.OpenAPI.Title
@@ -317,6 +406,45 @@ func infoFrom(rep *report.Report, cfg *config.Config) oaInfo {
 		}
 	}
 	return info
+}
+
+func serversFrom(rep *report.Report) []oaServer {
+	d := rep.Documentation
+	if d == nil {
+		return nil
+	}
+	base := d.BasePath
+	if base == "" {
+		base = "/"
+	}
+	if !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	if d.Host == "" {
+		if d.BasePath != "" {
+			return []oaServer{{URL: base, Description: "Documented relative base path"}}
+		}
+		return nil
+	}
+	schemes := d.Schemes
+	if len(schemes) == 0 {
+		schemes = []string{"https"}
+	}
+	out := make([]oaServer, 0, len(schemes))
+	for _, scheme := range schemes {
+		out = append(out, oaServer{URL: scheme + "://" + d.Host + base, Description: "Derived from authored swag host/basePath/schemes"})
+	}
+	return out
+}
+func tagsFrom(rep *report.Report) []oaTag {
+	if rep.Documentation == nil {
+		return nil
+	}
+	out := make([]oaTag, 0, len(rep.Documentation.Tags))
+	for _, tag := range rep.Documentation.Tags {
+		out = append(out, oaTag{Name: tag.Name, Description: tag.Description})
+	}
+	return out
 }
 
 // repoNameFrom returns a Go module path's last slash-separated segment —
@@ -376,18 +504,21 @@ func buildOperation(doc *document, route model.Route, rep *report.Report, cfg *c
 		Responses:   map[string]oaResponse{"default": {Description: "Unspecified response — schema not inferred; see the document description."}},
 		Extensions:  map[string]ginReconExt{"x-gin-recon": ginReconExtensionFor(route, rep, cfg, catchAll)},
 	}
-	applySwagEvidence(op, route)
+	diagnostics := applySwagEvidence(op, route)
+	if route.Swag != nil && route.Swag.ID != "" {
+		op.OperationID = uniqueDocumentedOperationID(route.Swag.ID, usedIDs)
+	}
 	applySecurity(op, route, cfg)
 
 	if existing := item.get(route.Method); existing != nil {
 		diag := mergeRegistration(existing, op, route, oapiPath)
 		doc.Paths[oapiPath] = item
-		return diag
+		return append(diagnostics, diag...)
 	}
 
 	item.set(route.Method, op)
 	doc.Paths[oapiPath] = item
-	return nil
+	return diagnostics
 }
 
 // applySwagEvidence overlays a route's swaggo/swag doc-comment evidence
@@ -401,10 +532,11 @@ func buildOperation(doc *document, route model.Route, rep *report.Report, cfg *c
 // evidence remain exactly as already computed, matching ADR 0007's
 // precedence that analyzer evidence is authoritative for everything except
 // prose gin-recon cannot otherwise derive.
-func applySwagEvidence(op *operation, route model.Route) {
+func applySwagEvidence(op *operation, route model.Route) []model.Diagnostic {
 	if route.Swag == nil {
-		return
+		return nil
 	}
+	var diagnostics []model.Diagnostic
 	changed := false
 	if route.Swag.Summary != "" {
 		op.Summary = route.Swag.Summary
@@ -422,6 +554,24 @@ func applySwagEvidence(op *operation, route model.Route) {
 		op.Deprecated = true
 		changed = true
 	}
+	for _, router := range route.Swag.Routers {
+		if router.Deprecated && router.Path == swaggerPathForRoute(route.GinPath) && (router.Method == "" || router.Method == route.Method) {
+			op.Deprecated = true
+			changed = true
+			break
+		}
+	}
+	if route.Swag.ID != "" {
+		changed = true
+	}
+	applySwagParameters(op, route.Swag, &diagnostics, route.Source)
+	applySwagResponses(op, route.Swag, &diagnostics, route.Source)
+	ext := op.Extensions["x-gin-recon"]
+	ext.DocumentationSecurity = route.Swag.Security // documentary only: never assigned to operation.security
+	ext.DocumentationIssues = route.Swag.Issues
+	ext.DocumentationExtensions = route.Swag.Extensions
+	ext.DocumentationFields = route.Swag.Fields
+	op.Extensions["x-gin-recon"] = ext
 	// evidenceSource is a whole-operation marker, not per-field — see
 	// ginReconExt.EvidenceSource's doc comment — so it is set once here
 	// whenever swag actually replaced anything.
@@ -430,6 +580,209 @@ func applySwagEvidence(op *operation, route model.Route) {
 		ext.EvidenceSource = "swag"
 		op.Extensions["x-gin-recon"] = ext
 	}
+	return diagnostics
+}
+
+func swaggerPathForRoute(path string) string { converted, _ := convertGinPath(path); return converted }
+
+func applySwagParameters(op *operation, swag *model.SwagInfo, diagnostics *[]model.Diagnostic, source *model.Source) {
+	var body *model.SwagParameter
+	form := map[string]oaSchema{}
+	formRequired := []string{}
+	for i := range swag.Parameters {
+		p := swag.Parameters[i]
+		schema, ok := openAPISchemaForSwag(swag, p.Schema)
+		if !ok {
+			*diagnostics = append(*diagnostics, unresolvedSwagDiagnostic("parameter "+p.Name, p.Schema, source))
+			continue
+		}
+		switch p.In {
+		case "body":
+			if body != nil {
+				*diagnostics = append(*diagnostics, model.Diagnostic{Code: "swag-request-body-conflict", Severity: model.DiagnosticWarning, Message: "multiple @Param body declarations; first declaration retained", Source: source})
+				continue
+			}
+			body = &p
+			content := swag.Accept
+			if len(content) == 0 {
+				content = []string{"application/json"}
+			}
+			op.RequestBody = &oaRequestBody{Description: p.Description, Required: p.Required, Content: mediaContent(content, &schema)}
+		case "formData":
+			form[p.Name] = schema
+			if p.Required {
+				formRequired = append(formRequired, p.Name)
+			}
+		default:
+			op.Parameters = upsertParameter(op.Parameters, oaParameter{Name: p.Name, In: p.In, Required: p.Required, Schema: schema, Description: p.Description})
+		}
+	}
+	if len(form) > 0 {
+		slices.Sort(formRequired)
+		s := oaSchema{Type: "object", Properties: form, Required: formRequired}
+		content := swag.Accept
+		if len(content) == 0 {
+			content = []string{"multipart/form-data"}
+		}
+		if op.RequestBody == nil {
+			op.RequestBody = &oaRequestBody{Content: mediaContent(content, &s)}
+		} else {
+			*diagnostics = append(*diagnostics, model.Diagnostic{Code: "swag-request-body-conflict", Severity: model.DiagnosticWarning, Message: "body and formData parameters cannot both be represented as one OpenAPI requestBody; body retained", Source: source})
+		}
+	}
+}
+
+func applySwagResponses(op *operation, swag *model.SwagInfo, diagnostics *[]model.Diagnostic, source *model.Source) {
+	if len(swag.Responses) == 0 {
+		return
+	}
+	op.Responses = map[string]oaResponse{}
+	for _, r := range swag.Responses {
+		resp := oaResponse{Description: r.Description}
+		if resp.Description == "" {
+			resp.Description = "Response"
+		}
+		if r.Schema != nil {
+			if schema, ok := openAPISchemaForSwag(swag, r.Schema); ok {
+				content := swag.Produce
+				if len(content) == 0 {
+					content = []string{"application/json"}
+				}
+				resp.Content = mediaContent(content, &schema)
+			} else {
+				*diagnostics = append(*diagnostics, unresolvedSwagDiagnostic("response "+r.Status, r.Schema, source))
+			}
+		}
+		for _, h := range r.Headers {
+			schema, ok := openAPISchemaForSwag(swag, h.Schema)
+			if !ok {
+				*diagnostics = append(*diagnostics, unresolvedSwagDiagnostic("response header "+h.Name, h.Schema, source))
+				continue
+			}
+			if resp.Headers == nil {
+				resp.Headers = map[string]oaHeader{}
+			}
+			resp.Headers[h.Name] = oaHeader{Description: h.Description, Schema: &schema}
+		}
+		if _, exists := op.Responses[r.Status]; exists {
+			*diagnostics = append(*diagnostics, model.Diagnostic{Code: "swag-response-conflict", Severity: model.DiagnosticWarning, Message: "duplicate documented response status " + r.Status + "; last declaration retained", Source: source})
+		}
+		op.Responses[r.Status] = resp
+	}
+}
+
+func upsertParameter(params []oaParameter, incoming oaParameter) []oaParameter {
+	for i := range params {
+		if params[i].Name == incoming.Name && params[i].In == incoming.In {
+			params[i] = incoming
+			return params
+		}
+	}
+	return append(params, incoming)
+}
+func mediaContent(types []string, schema *oaSchema) map[string]oaMediaType {
+	out := map[string]oaMediaType{}
+	for _, t := range types {
+		out[t] = oaMediaType{Schema: schema}
+	}
+	return out
+}
+func unresolvedSwagDiagnostic(subject string, schema *model.SchemaEvidence, source *model.Source) model.Diagnostic {
+	status, goType := "unresolved", ""
+	if schema != nil {
+		status, goType = schema.Evidence.Status, schema.GoType
+	}
+	return model.Diagnostic{Code: "swag-schema-unresolved", Severity: model.DiagnosticWarning, Message: fmt.Sprintf("%s schema %q is %s; omitted rather than emitted as an authoritative empty object", subject, goType, status), Source: source}
+}
+
+func openAPISchema(in *model.SchemaEvidence) (oaSchema, bool) {
+	if in == nil {
+		return oaSchema{}, false
+	}
+	if in.Ref == "" && in.Type == "" {
+		return oaSchema{}, false
+	}
+	out := oaSchema{Format: in.Format, Enum: in.Enum, Default: in.Default, Example: in.Example, Minimum: in.Minimum, Maximum: in.Maximum, MinLength: in.MinLength, MaxLength: in.MaxLength, Pattern: in.Pattern, Evidence: &in.Evidence, CustomSerialization: in.CustomSerialization, OmitEmpty: in.OmitEmpty}
+	if in.Ref != "" {
+		out.Ref = "#/components/schemas/" + in.Ref
+	} else if in.Nullable {
+		out.Type = []string{in.Type, "null"}
+	} else {
+		out.Type = in.Type
+	}
+	if in.Items != nil {
+		if v, ok := openAPISchema(in.Items); ok {
+			out.Items = &v
+		}
+	}
+	if in.AdditionalProperties != nil {
+		if v, ok := openAPISchema(in.AdditionalProperties); ok {
+			out.AdditionalProperties = &v
+		}
+	}
+	if len(in.Properties) > 0 {
+		out.Properties = map[string]oaSchema{}
+		for k, v := range in.Properties {
+			if x, ok := openAPISchema(&v); ok {
+				out.Properties[k] = x
+			}
+		}
+	}
+	out.Required = in.Required
+	return out, true
+}
+
+func openAPISchemaForSwag(swag *model.SwagInfo, in *model.SchemaEvidence) (oaSchema, bool) {
+	if !schemaRefsKnown(in, swag.Components, map[*model.SchemaEvidence]bool{}, 0) {
+		return oaSchema{}, false
+	}
+	return openAPISchema(in)
+}
+
+func schemaRefsKnown(in *model.SchemaEvidence, components map[string]model.SchemaEvidence, seen map[*model.SchemaEvidence]bool, depth int) bool {
+	if in == nil || depth > 64 {
+		return in == nil
+	}
+	if seen[in] {
+		return true
+	}
+	seen[in] = true
+	if in.Ref != "" {
+		_, ok := components[in.Ref]
+		return ok
+	}
+	if !schemaRefsKnown(in.Items, components, seen, depth+1) || !schemaRefsKnown(in.AdditionalProperties, components, seen, depth+1) {
+		return false
+	}
+	for _, value := range in.Properties {
+		copyValue := value
+		if !schemaRefsKnown(&copyValue, components, seen, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+func collectSwagComponents(rep *report.Report) (map[string]oaSchema, []model.Diagnostic) {
+	out := map[string]oaSchema{}
+	var diagnostics []model.Diagnostic
+	for _, route := range rep.Routes {
+		if route.Swag == nil {
+			continue
+		}
+		for id, schema := range route.Swag.Components {
+			if converted, ok := openAPISchema(&schema); ok {
+				if prior, exists := out[id]; exists {
+					if !reflect.DeepEqual(prior, converted) {
+						diagnostics = append(diagnostics, model.Diagnostic{Code: "swag-component-conflict", Severity: model.DiagnosticWarning, Message: "component " + id + " has conflicting schemas; first deterministic declaration retained", Source: route.Source})
+					}
+					continue
+				}
+				out[id] = converted
+			}
+		}
+	}
+	return out, diagnostics
 }
 
 // mergeRegistration folds incoming's x-gin-recon evidence into existing's
@@ -562,6 +915,19 @@ func uniqueOperationID(method, oapiPath string, used map[string]int) string {
 		return base
 	}
 	return base + "-" + strconv.Itoa(count+1)
+}
+
+func uniqueDocumentedOperationID(documented string, used map[string]int) string {
+	base := strings.TrimSpace(documented)
+	if base == "" {
+		base = "operation"
+	}
+	count := used[base]
+	used[base] = count + 1
+	if count == 0 {
+		return base
+	}
+	return base + strconv.Itoa(count+1)
 }
 
 // pascalCase capitalizes the first letter of each run of alphanumeric

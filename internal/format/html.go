@@ -66,8 +66,8 @@ const htmlPageTemplate = `<!doctype html>
 </head>
 <body class="gr-shell">
 <header class="gr-site-header">
-<span class="gr-brand">%s<span>gin-recon</span></span>
-<div class="gr-header-meta">Generated offline, no network access at view time<br>gin-recon %s</div>
+<div class="gr-page gr-site-header__inner"><span class="gr-brand">%s<span>gin-recon</span></span>
+<div class="gr-header-meta">Offline API evidence<br>gin-recon %s</div></div>
 </header>
 <div id="app">Loading…</div>
 <script id="gin-recon-spec" type="application/json">%s</script>
@@ -78,22 +78,24 @@ const htmlPageTemplate = `<!doctype html>
 
 const htmlViewerCSS = `
 :root {
-  --bg: #ffffff; --fg: #1a1a1a; --muted: #6b7280; --border: #e5e7eb;
-  --card: #f9fafb; --code-bg: #f3f4f6;
+  --bg: var(--gr-bg); --fg: var(--gr-ink); --muted: var(--gr-muted); --border: var(--gr-border);
+  --card: var(--gr-panel); --code-bg: var(--gr-panel-muted);
   --get: #2563eb; --post: #16a34a; --put: #d97706; --patch: #7c3aed;
   --delete: #dc2626; --other: #6b7280;
-  --public: #16a34a; --proven: #2563eb; --unknown: #d97706;
-}
-@media (prefers-color-scheme: dark) {
-  :root { --bg: #0f1115; --fg: #e5e7eb; --muted: #9ca3af; --border: #262b36; --card: #171a21; --code-bg: #1c2028; }
+  --public: var(--gr-warn); --proven: var(--gr-good); --unknown: var(--gr-warn);
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
-#app { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
-#app header { margin-bottom: 20px; }
-#app header h1 { margin: 0 0 4px; font-size: 22px; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+#app { width:min(1180px, calc(100% - 32px)); margin:0 auto; padding:28px 0 64px; }
+#app header { margin-bottom: 14px; }
+#app header h1 { margin: 0 0 4px; font-size:clamp(26px, 4vw, 40px); line-height:1.15; letter-spacing:-.025em; }
 #app header .meta { color: var(--muted); font-size: 13px; }
-input#filter { width: 100%; padding: 8px 10px; margin: 16px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--fg); font-size: 14px; }
+.route-filters { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:16px 0; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--code-bg); }
+.route-filter-field { display:grid; gap:4px; min-width:150px; }
+.route-filter-field.search { min-width:min(360px, 100%); flex:1; }
+.route-filter-field label { color:var(--muted); font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.035em; }
+.route-filters input, .route-filters select { min-height:36px; border:1px solid var(--border); border-radius:7px; padding:7px 10px; background:var(--card); color:var(--fg); font:inherit; }
+.filter-count { margin-left:auto; padding-bottom:8px; color:var(--muted); font-size:12px; }
 details.tag-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
 details.tag-group > summary { cursor: pointer; padding: 10px 14px; background: var(--card); font-weight: 600; list-style: none; display: flex; justify-content: space-between; }
 details.tag-group > summary::-webkit-details-marker { display: none; }
@@ -108,15 +110,15 @@ details.tag-group > summary .count { color: var(--muted); font-weight: 400; }
 .method.delete { background: var(--delete); } .method.other { background: var(--other); }
 .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); }
-.badge.public { color: var(--public); border-color: var(--public); }
-.badge.proven { color: var(--proven); border-color: var(--proven); }
-.badge.unknown { color: var(--unknown); border-color: var(--unknown); }
+.badge.public { color: var(--public); border-color: var(--public); background:var(--gr-warn-soft); }
+.badge.proven { color: var(--proven); border-color: var(--proven); background:var(--gr-good-soft); }
+.badge.unknown { color: var(--unknown); border-color: var(--unknown); background:var(--gr-warn-soft); }
 .badge.evidence { color: var(--muted); border-color: var(--border); font-weight: 400; margin-left: 6px; }
 .op-body { padding: 4px 14px 14px 82px; color: var(--muted); }
 .op-body dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 8px 0; }
 .op-body dt { font-weight: 600; color: var(--fg); }
-.op-body dd { margin: 0; }
-.op-body code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.op-body dd { margin: 0; min-width:0; overflow-wrap:anywhere; }
+.op-body code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap:anywhere; }
 table.params { border-collapse: collapse; margin: 6px 0; width: 100%; }
 table.params th, table.params td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
@@ -136,6 +138,16 @@ li.schema-field { margin: 5px 0; }
 .schema-desc { color: var(--muted); font-size: 12px; margin: 1px 0 0; }
 pre.example { background: var(--code-bg); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 6px 0 0; }
 pre.example code { background: none; padding: 0; font-size: 12px; }
+@media (max-width:720px) {
+  #app { width:calc(100% - 20px); padding-top:20px; }
+  .route-filter-field, .route-filter-field.search { min-width:100%; }
+  .filter-count { margin-left:0; }
+  .op-row > summary { align-items:flex-start; flex-wrap:wrap; }
+  .op-body { padding-left:14px; }
+  .op-body dl { grid-template-columns:1fr; gap:2px; }
+  .op-body dd + dt { margin-top:8px; }
+}
+@media print { .route-filters { display:none; } #app { width:100%; } details.tag-group { break-inside:avoid; } }
 `
 
 // htmlViewerJS is intentionally framework-free vanilla JS. Every value that
@@ -421,6 +433,8 @@ const htmlViewerJS = `
     if (ext.analysisConfidence) row("Analysis confidence", el("code", null, ext.analysisConfidence));
     if (ext.registrationKind) row("Registration kind", el("code", null, ext.registrationKind));
     if (ext.catchAll) row("Catch-all", el("code", null, "true"));
+    if (ext.documentationSecurity && ext.documentationSecurity.length) row("Documented security (not validated)", el("span", null, ext.documentationSecurity.map(function (s) { return s.name + (s.scopes && s.scopes.length ? " [" + s.scopes.join(", ") + "]" : ""); }).join("; ")));
+    if (ext.documentationIssues && ext.documentationIssues.length) row("Documentation issues", el("span", null, ext.documentationIssues.map(function (i) { return i.directive + ": " + i.message; }).join("; ")));
     if (ext.unrefined && ext.unrefined.length) row("Unrefined", el("span", null, ext.unrefined.join(", ")));
     if (ext.diagnosticCodes && ext.diagnosticCodes.length) row("Diagnostic codes", el("span", null, ext.diagnosticCodes.join(", ")));
     body.appendChild(dl);
@@ -433,6 +447,7 @@ const htmlViewerJS = `
     Object.keys(op.responses || {}).sort().forEach(function (code) {
       var resp = op.responses[code];
       var section = schemaAndExampleSection("Response " + code, resp.description, resp.content, true);
+      if (section && resp.headers) section.appendChild(el("div", { class: "schema-desc" }, "Headers: " + Object.keys(resp.headers).sort().join(", ")));
       if (section) body.appendChild(section);
     });
     return body;
@@ -449,7 +464,23 @@ const htmlViewerJS = `
     details.appendChild(opBody(op));
     details.dataset.search = (method + " " + path + " " + (op.operationId || "") + " " +
       ((op["x-gin-recon"] && op["x-gin-recon"].handler) || "")).toLowerCase();
+    details.dataset.method = method;
+    details.dataset.auth = (op["x-gin-recon"] && op["x-gin-recon"].authStatus) || "";
     return details;
+  }
+
+  function filterField(label, control, extraClass) {
+    var field = el("div", { class: "route-filter-field" + (extraClass ? " " + extraClass : "") });
+    var id = control.getAttribute("id");
+    field.appendChild(el("label", id ? { for: id } : null, label));
+    field.appendChild(control);
+    return field;
+  }
+
+  function selectControl(id, options) {
+    var select = el("select", { id: id });
+    options.forEach(function (option) { select.appendChild(el("option", { value: option[0] }, option[1])); });
+    return select;
   }
 
   function render() {
@@ -462,8 +493,22 @@ const htmlViewerJS = `
       " · " + pathCount + " path(s)"));
     app.appendChild(header);
 
-    var filterInput = el("input", { id: "filter", type: "search", placeholder: "Filter by path, method, or handler…" });
-    app.appendChild(filterInput);
+    var filterInput = el("input", { id: "filter", type: "search", placeholder: "Path, method, or handler…" });
+    var methodFilter = selectControl("method-filter", [["", "All methods"], ["get", "GET"], ["post", "POST"], ["put", "PUT"], ["patch", "PATCH"], ["delete", "DELETE"], ["options", "OPTIONS"], ["head", "HEAD"], ["trace", "TRACE"]]);
+    var authFilter = selectControl("auth-filter", [["", "All auth evidence"], ["proven", "Proven"], ["public", "Public"], ["unknown", "Unknown"], ["unclassified", "No auth assertion"]]);
+    var clearSearch = el("button", { type: "button", class: "gr-search-clear", "aria-label": "Clear operation search", hidden: "" }, "×");
+    var filterCount = el("span", { class: "filter-count", role: "status", "aria-live": "polite" });
+    var filters = el("div", { class: "route-filters", role: "search", "aria-label": "Filter operations" });
+    var searchField = filterField("Search", filterInput, "search");
+    var searchControl = el("div", { class: "gr-search-control" });
+    searchControl.appendChild(filterInput);
+    searchControl.appendChild(clearSearch);
+    searchField.appendChild(searchControl);
+    filters.appendChild(searchField);
+    filters.appendChild(filterField("Method", methodFilter));
+    filters.appendChild(filterField("Authentication", authFilter));
+    filters.appendChild(filterCount);
+    app.appendChild(filters);
 
     var groups = {};
     var groupOrder = [];
@@ -479,14 +524,15 @@ const htmlViewerJS = `
     });
     groupOrder.sort();
 
-    if (groupOrder.length === 0) {
-      app.appendChild(el("div", { class: "empty" }, "No routes in this report."));
-    }
+    var noRoutes = el("div", { class: "empty" }, "No routes in this report.");
+    var noMatches = el("div", { class: "empty", hidden: "" }, "No operations match these filters.");
+    if (groupOrder.length === 0) app.appendChild(noRoutes);
 
     var allRows = [];
     groupOrder.forEach(function (tag) {
       var rows = groups[tag];
       var details = el("details", { class: "tag-group", open: "" });
+      details.dataset.tag = tag;
       var summary = el("summary");
       summary.appendChild(el("span", null, tag));
       summary.appendChild(el("span", { class: "count" }, rows.length + " operation(s)"));
@@ -494,6 +540,7 @@ const htmlViewerJS = `
       rows.forEach(function (row) { details.appendChild(row); allRows.push(row); });
       app.appendChild(details);
     });
+    app.appendChild(noMatches);
 
     // Read the caveat from the spec's own info.description rather than
     // keeping a second hardcoded copy here — internal/format/openapi.go's
@@ -505,12 +552,37 @@ const htmlViewerJS = `
     var footer = el("footer", null, footerText);
     app.appendChild(footer);
 
-    filterInput.addEventListener("input", function () {
-      var q = filterInput.value.toLowerCase();
+    function updateFilters() {
+      var q = filterInput.value.trim().toLowerCase();
+      var method = methodFilter.value;
+      var auth = authFilter.value;
+      var visible = 0;
       allRows.forEach(function (row) {
-        row.style.display = row.dataset.search.indexOf(q) >= 0 ? "" : "none";
+        var rowAuth = row.dataset.auth || "unclassified";
+        var show = (!q || row.dataset.search.indexOf(q) >= 0) &&
+          (!method || row.dataset.method === method) &&
+          (!auth || rowAuth === auth);
+        row.hidden = !show;
+        if (show) visible++;
       });
+      app.querySelectorAll("details.tag-group").forEach(function (group) {
+        var visibleInGroup = Array.prototype.some.call(group.querySelectorAll("details.op-row"), function (row) { return !row.hidden; });
+        group.hidden = !visibleInGroup;
+      });
+      filterCount.textContent = visible + " of " + allRows.length + " operations";
+      clearSearch.hidden = filterInput.value.length === 0;
+      noMatches.hidden = visible !== 0 || allRows.length === 0;
+    }
+
+    filterInput.addEventListener("input", updateFilters);
+    methodFilter.addEventListener("change", updateFilters);
+    authFilter.addEventListener("change", updateFilters);
+    clearSearch.addEventListener("click", function () {
+      filterInput.value = "";
+      updateFilters();
+      filterInput.focus();
     });
+    updateFilters();
   }
 
   render();

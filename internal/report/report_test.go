@@ -150,6 +150,34 @@ func TestAuditReportRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDocumentationEvidenceRoundTripsWithoutChangingLegacyAbsence(t *testing.T) {
+	r := NewInventoryReport(model.ProfileTyped, testTarget())
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decode(t, data)
+	if _, ok := m["documentation"]; ok {
+		t.Fatal("empty legacy report gained documentation")
+	}
+	if _, ok := m["specifications"]; ok {
+		t.Fatal("empty legacy report gained specifications")
+	}
+	r.Documentation = &model.APIDocumentation{Title: "Demo", Evidence: model.DocumentationEvidence{Source: "swag", Status: "declared"}}
+	r.Specifications = &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{}, Issues: []model.SpecificationIssue{}, Metrics: model.DocumentationMetrics{SourceFiles: model.DocumentationMetric{Numerator: 2, Denominator: 2, Status: "complete"}, ObservedOperations: model.DocumentationMetric{Numerator: 1, Denominator: 1, Status: "complete"}}}
+	data, err = json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip Report
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.Documentation == nil || roundTrip.Documentation.Title != "Demo" || roundTrip.Specifications == nil || roundTrip.Specifications.Metrics.ObservedOperations.Numerator != 1 {
+		t.Fatalf("roundTrip=%+v", roundTrip)
+	}
+}
+
 // TestOverwritingTopLevelSlicesWithNilStillMarshalsAsEmptyArrays is the
 // regression test for a real bug: cmd/gin-recon's first wiring of the
 // inventory command did `rep.GlobalMiddleware = result.GlobalMiddleware`

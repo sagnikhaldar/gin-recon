@@ -68,6 +68,8 @@ Exit code `2` means the requested gate matched: an expected policy result, not a
 
 For a first org scan, use your existing `GH_TOKEN` or `GITHUB_TOKEN` and omit `--config`: fleet creates `<out>/fleet-config.json` automatically without overwriting later operator edits.
 
+Fleet results keep every selected repository and its original status, coverage, module metadata, and artifact links. The additive `repositoryGroups` index in `fleet.json` separates repositories with observed routes from zero-route reference outcomes (complete Gin zero-route, unverified zero-route, non-Gin Go, non-Go, failed, or inconclusive) without changing scan, resume, or coverage semantics. A failed or incomplete repository with retained route evidence remains in the route-bearing group. `fleet.html` leads with a compact evidence overview and the route-bearing repositories, groups those rows by completed versus partial audit, and offers independent search, process, completion, and authentication-evidence filters with direct API drill-down. Reference outcomes and run scope/configuration remain available in collapsible sections. Archived repositories and forks remain excluded by default; explicit `--include-archived` or `--include-forks` opt-ins are preserved and called out in the HTML scope rather than silently narrowed.
+
 Full reference: [docs/reference.md](docs/reference.md) for every flag and the config format.
 
 ## The evidence model
@@ -92,7 +94,7 @@ This writes a versioned OpenAPI 3.1 document (`openapi.json`) alongside a self-c
 Generated documents are never invented. Analyzer-resolved evidence (route identity, method, path, auth) is always authoritative; the following sources can only enrich prose and schemas where code evidence is unresolved, in this order:
 
 1. **Analyzer-typed evidence** - an actually-bound Go request/response struct.
-2. **swag/swaggo doc-comment annotations** (`@Summary`, `@Description`, `@Tags`, `@Router`, `@Deprecated` above a handler) - parsed automatically on every scan, with no configuration required.
+2. **swag/swaggo doc-comment annotations** (operation prose, parameters/bodies, response schemas/headers, content types, repeated routers, and global API metadata in the maintained dialect) - parsed automatically on every scan, with no configuration required.
 3. **AI-assisted enrichment** - the bundled [`skills/openapi-doc`](skills/openapi-doc/SKILL.md) skill reads real handler code to fill in request/response schemas that gin-recon itself doesn't infer.
 
 See [docs/openapi.md](docs/openapi.md) for the full precedence rules and the swag annotation format.

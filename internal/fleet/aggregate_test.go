@@ -46,6 +46,37 @@ func TestParseAggregateRejectsInvalidModuleMetadata(t *testing.T) {
 	}
 }
 
+func TestParseAggregateValidatesOptionalRepositoryGroups(t *testing.T) {
+	valid := []byte(`{"schemaVersion":"1.0","kind":"fleet","tool":"gin-recon","toolVersion":"test","targets":[{"name":"routes","status":"ok","routes":1},{"name":"zero","status":"ok","complete":true,"modules":[{"id":"root","path":"","modulePath":"example.test/zero","kind":"gin-module-no-routes","status":"ok","complete":true}]}],"repositoryGroups":{"withRoutes":["routes"],"reference":[{"name":"zero","category":"gin-no-routes"}]}}`)
+	if _, err := ParseAggregate(valid, false); err != nil {
+		t.Fatalf("matching repositoryGroups rejected: %v", err)
+	}
+
+	for name, groups := range map[string]string{
+		"missing target": `{"withRoutes":[],"reference":[{"name":"zero","category":"gin-no-routes"}]}`,
+		"wrong category": `{"withRoutes":["routes"],"reference":[{"name":"zero","category":"non-gin"}]}`,
+		"wrong order":    `{"withRoutes":["routes"],"reference":[{"name":"zero","category":"gin-no-routes"},{"name":"aaa","category":"failed"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			data := []byte(`{"schemaVersion":"1.0","kind":"fleet","tool":"gin-recon","toolVersion":"test","targets":[{"name":"routes","status":"ok","routes":1},{"name":"zero","status":"ok","complete":true,"modules":[{"id":"root","path":"","modulePath":"example.test/zero","kind":"gin-module-no-routes","status":"ok","complete":true}]}],"repositoryGroups":` + groups + `}`)
+			if _, err := ParseAggregate(data, false); err == nil || !strings.Contains(err.Error(), "repositoryGroups does not match targets") {
+				t.Fatalf("ParseAggregate error = %v, want repositoryGroups mismatch", err)
+			}
+		})
+	}
+}
+
+func TestParseAggregateAllowsOlderFleetWithoutRepositoryGroups(t *testing.T) {
+	data := []byte(`{"schemaVersion":"1.0","kind":"fleet","tool":"gin-recon","toolVersion":"test","targets":[]}`)
+	aggregate, err := ParseAggregate(data, false)
+	if err != nil {
+		t.Fatalf("aggregate without repositoryGroups rejected: %v", err)
+	}
+	if aggregate.RepositoryGroups != nil {
+		t.Fatalf("repositoryGroups = %#v, want nil for older input", aggregate.RepositoryGroups)
+	}
+}
+
 func TestFleetSchemaDeclaresEveryContractField(t *testing.T) {
 	type schemaObject struct {
 		Properties map[string]json.RawMessage `json:"properties"`
@@ -63,6 +94,8 @@ func TestFleetSchemaDeclaresEveryContractField(t *testing.T) {
 		properties map[string]json.RawMessage
 	}{
 		{"aggregate", reflect.TypeOf(Aggregate{}), document.Properties},
+		{"repositoryGroups", reflect.TypeOf(RepositoryGroups{}), document.Defs["repositoryGroups"].Properties},
+		{"repositoryReference", reflect.TypeOf(RepositoryReference{}), document.Defs["repositoryReference"].Properties},
 		{"target", reflect.TypeOf(TargetResult{}), document.Defs["target"].Properties},
 		{"module", reflect.TypeOf(ModuleResult{}), document.Defs["module"].Properties},
 		{"artifact", reflect.TypeOf(Artifact{}), document.Defs["artifact"].Properties},

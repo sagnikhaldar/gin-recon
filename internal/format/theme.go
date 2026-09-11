@@ -31,6 +31,8 @@ const themeCSS = `
   --gr-warn-soft: #fdf3d9;
   --gr-bad: #a3231b;
   --gr-bad-soft: #fce9e7;
+  --gr-info: #2563a8;
+  --gr-info-soft: #e4f1fb;
   --gr-shadow: 0 6px 20px rgb(15 30 32 / 7%);
 }
 @media (prefers-color-scheme: dark) {
@@ -50,19 +52,53 @@ const themeCSS = `
     --gr-warn-soft: #3a2f10;
     --gr-bad: #f0847c;
     --gr-bad-soft: #3a1613;
+    --gr-info: #7ab8f5;
+    --gr-info-soft: #132b3e;
     --gr-shadow: 0 6px 20px rgb(0 0 0 / 30%);
   }
 }
 .gr-shell * { box-sizing: border-box; }
 .gr-shell {
+  margin: 0;
   background: var(--gr-bg);
   color: var(--gr-ink);
   font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .gr-shell a { color: var(--gr-link); }
+.gr-shell a:hover { text-decoration-thickness: 2px; }
+.gr-shell a:focus-visible, .gr-shell input:focus-visible, .gr-shell select:focus-visible, .gr-shell button:focus-visible, .gr-shell summary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--gr-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+.gr-search-control { position:relative; }
+.gr-search-control input[type="search"] { width:100%; padding-inline-end:38px; }
+.gr-search-control input[type="search"]::-webkit-search-cancel-button { appearance:none; -webkit-appearance:none; }
+.gr-search-clear {
+  position:absolute;
+  inset-inline-end:4px;
+  top:50%;
+  transform:translateY(-50%);
+  width:28px;
+  height:28px;
+  min-height:0;
+  border:0;
+  border-radius:6px;
+  padding:0;
+  background:transparent;
+  color:var(--gr-muted);
+  font:700 18px/1 ui-sans-serif, sans-serif;
+  cursor:pointer;
+}
+.gr-search-clear:hover { color:var(--gr-ink); background:var(--gr-panel-muted); }
+.gr-search-clear[hidden] { display:none; }
+.gr-page { width: min(1440px, calc(100% - 32px)); margin-inline: auto; }
+.gr-main { padding: 26px 0 56px; }
 .gr-site-header {
   border-bottom: 1px solid var(--gr-border);
-  padding: 16px 24px;
+  background: color-mix(in srgb, var(--gr-panel) 92%, transparent);
+}
+.gr-site-header__inner {
+  min-height: 62px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -79,8 +115,8 @@ const themeCSS = `
   color: var(--gr-ink);
 }
 .gr-brand__mark {
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   flex: none;
   overflow: visible;
 }
@@ -90,7 +126,7 @@ const themeCSS = `
 .gr-brand__node { fill: var(--gr-ink); }
 .gr-git-mark { flex: none; vertical-align: -2px; color: var(--gr-muted); }
 .gr-header-meta { color: var(--gr-muted); font-size: 13px; text-align: right; }
-.gr-hero { padding: 28px 24px 8px; }
+.gr-hero { padding: 0 0 5px; }
 .gr-eyebrow {
   margin: 0 0 6px;
   color: var(--gr-accent);
@@ -99,13 +135,13 @@ const themeCSS = `
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-.gr-hero h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); letter-spacing: -0.02em; }
-.gr-lede { max-width: 760px; margin: 8px 0 0; color: var(--gr-muted); font-size: 14px; }
+.gr-hero h1 { margin: 0; font-size: clamp(28px, 4vw, 44px); line-height:1.15; letter-spacing: -0.03em; }
+.gr-lede { max-width: 850px; margin: 8px 0 0; color: var(--gr-muted); font-size: 14px; }
 .gr-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 10px;
-  margin: 18px 24px 0;
+  margin: 14px 0 0;
 }
 .gr-metric {
   border: 1px solid var(--gr-border);
@@ -121,10 +157,10 @@ const themeCSS = `
   border-radius: 12px;
   background: var(--gr-panel);
   box-shadow: var(--gr-shadow);
-  margin: 18px 24px 0;
+  margin: 18px 0 0;
   overflow: hidden;
 }
-.gr-panel__title { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--gr-border); font-size: 13px; font-weight: 700; }
+.gr-panel__title { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--gr-border); font-size: 15px; font-weight: 700; }
 .gr-badge {
   display: inline-block;
   padding: 1px 8px;
@@ -153,7 +189,27 @@ const themeCSS = `
 }
 .gr-result-count { color: var(--gr-muted); font-size: 12px; margin-left: auto; align-self: flex-end; }
 .gr-table-wrap { overflow-x: auto; }
-.gr-footer { margin: 24px 24px 32px; color: var(--gr-muted); font-size: 12px; }
+.gr-footer { margin: 24px 0 0; color: var(--gr-muted); font-size: 12px; }
+@media (max-width: 720px) {
+  .gr-page { width:min(100% - 20px, 1440px); }
+  .gr-main { padding-top:20px; }
+  .gr-site-header__inner { align-items:flex-start; padding:12px 0; }
+  .gr-header-meta { max-width:55%; }
+  .gr-key-values { grid-template-columns:1fr; gap:2px; }
+  .gr-key-values dd + dt { margin-top:9px; }
+  .gr-filters { align-items:stretch; }
+  .gr-filters > div { width:100%; }
+  .gr-filters input, .gr-filters select { width:100%; }
+  .gr-result-count { margin-left:0; }
+}
+@media print {
+  :root { --gr-bg:#fff; --gr-panel:#fff; --gr-ink:#000; --gr-muted:#444; --gr-border:#bbb; }
+  .gr-page { width:100%; }
+  .gr-main { padding-top:16px; }
+  .gr-panel, .gr-metric { box-shadow:none; }
+  .gr-footer { margin-bottom:0; }
+  .gr-table tr[hidden] { display:table-row; }
+}
 `
 
 // brandMarkHTML is the inline form of assets/logo/mark.svg, shared by every

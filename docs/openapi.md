@@ -38,24 +38,27 @@ Roles and scopes are preserved in `x-gin-recon` unless their configured scheme h
 Analyzer-resolved evidence (route identity, method, path, handler, middleware, source, configured authentication) is always authoritative. Existing documentation and annotations can only enrich prose and schemas where code evidence is unresolved, in this order:
 
 1. **Analyzer-typed evidence.** An actually-bound Go request/response struct.
-2. **swag/swaggo doc-comment annotations** (`@Summary`, `@Description`, `@Tags`, `@Router`, `@Deprecated` above a handler). Parsed automatically on every scan, with no configuration required.
+2. **swag/swaggo doc-comment annotations** (the bounded operation/global matrix below). Parsed automatically on every scan, with no configuration required.
 3. **AI-assisted enrichment.** The bundled [`skills/openapi-doc`](../skills/openapi-doc/SKILL.md) skill reads real handler code to fill in request/response schemas that gin-recon itself doesn't infer.
 
-Existing Swagger annotations or an input OpenAPI document may supplement code-derived evidence this way too. User documentation may enrich summaries, descriptions, examples, tags, and schemas; it supplies a schema when code evidence is unresolved and may refine a code-derived schema only when structurally compatible with every resolved field, type, location, and requiredness constraint. A conflict retains the code-derived value, emits a structured diagnostic, marks the detail unrefined, and identifies both evidence origins. Manual security never overrides audit classification or configured scheme mapping.
+Existing Swagger annotations may supplement code-derived evidence this way. Source OpenAPI/Swagger documents are cataloged and reconciled but are not silently merged into or overwritten by generated output. Annotation documentation may enrich summaries, descriptions, examples, tags, and schemas; it supplies a schema when code evidence is unresolved. A conflict retains the code-derived value, emits a structured diagnostic, marks the detail unrefined, and identifies both evidence origins. Manual security never overrides audit classification or configured scheme mapping.
 
 This precedence exists because Go types, Gin binding/render calls, annotations, and existing OpenAPI documents may disagree, and a silent precedence rule could produce incorrect security or request/response documentation. Last-write-wins merging, trusting annotations over code, and inventing missing types are all deliberately rejected: they conceal uncertainty instead of surfacing it. The cost is that a user may need to resolve a conflict themselves rather than receive a superficially complete but misleading document; that trade is intentional.
 
 ### Swaggo/swag doc-comment annotations
 
-A handler function's own swaggo/swag-style Go doc comment is parsed as supplementary evidence and recorded on the route as `swag` (`model.SwagInfo`, `internal/analyzer/gin.ParseSwagAnnotations`). Only five directives are recognized:
+A handler function's own swaggo/swag-style Go doc comment is parsed as supplementary evidence and recorded on the route as `swag` (`model.SwagInfo`, `internal/analyzer/gin.ParseSwagAnnotations`). The maintained dialect is common swaggo/swag 1.8–1.16 syntax, not an open-ended promise for arbitrary future dialects:
 
 - `@Summary <text>`: single line.
 - `@Description <text>`: may repeat across consecutive lines, concatenated with a space, matching swaggo's own convention.
 - `@Tags <comma,separated,tags>`.
-- `@Router <path> [<HTTP_METHOD>]`: parsed for cross-checking only, never for setting a route's actual path or method.
+- repeated `@Router`/`@DeprecatedRouter <path> [<HTTP_METHOD>]`: parsed for cross-checking only, never for setting a route's actual path or method.
 - `@Deprecated`: a bare marker line.
+- `@ID`, `@Accept`, `@Produce`, `@Param`, `@Success`, `@Failure`, `@Response`, `@Header`, `@Security`, and `@x-*` extensions. Parameters cover path/query/header/body/form/file declarations plus required/default/example/enum/bound metadata. Responses cover status/default keys, headers, and object/array schemas.
 
-`@Param`/`@Success`/`@Failure` and swaggo's broader type-schema system are out of scope. A doc comment with no recognized directive yields no annotation at all, so this stays purely additive to the [report schema](reference.md#route-evidence)'s existing route shape.
+Global comments additionally cover API title/version/description/contact/license, host/base path/schemes, tags, security definitions, and documentary global security. Named schema resolution is offline and uses only the loader's existing Go AST/type graph; it never imports or executes target code. Supported shapes include primitives, package-qualified structs, aliases, pointers, arrays/slices/maps, embedding and JSON tags, generic instances, and cycles. Missing/external/ambiguous types carry explicit unresolved provenance and are omitted from OpenAPI rather than emitted as empty objects. Syntax-only mode has deliberately lower named-type recall.
+
+Source-document discovery separately catalogs bounded local OpenAPI 3.x and Swagger 2 JSON/YAML files without overwriting them or fetching remote references. It records dialect/title/version/path/hash/authorship status and reconciles unique documented operations with observed routes. Checked-in does not automatically mean authored; generated documents never count as authored coverage.
 
 `@Summary`, `@Description`, `@Tags`, and `@Deprecated`, when present, replace this formatter's own generic operation `summary`/`tags`/`deprecated` outright. This is a narrower rule than the general evidence-precedence ladder above specifically because these four fields have no analyzer-derived alternative worth preserving: the previous "summary" was a mechanically generated placeholder with zero authorial intent, not evidence a human reviewed. There is nothing to conflict with, so there is nothing to arbitrate.
 

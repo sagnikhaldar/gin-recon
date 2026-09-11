@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sagnikhaldar/gin-recon/internal/model"
 )
 
 // Status classifies one target's outcome. A target that isn't a Go module at
@@ -71,8 +73,9 @@ type ModuleResult struct {
 	// SuggestionArtifact is separate from audit Artifacts because suggestions
 	// are review enrichment, not classification evidence. It is nevertheless
 	// integrity-checked before update/resume may reuse that enrichment.
-	SuggestionArtifact *Artifact `json:"suggestionArtifact,omitempty"`
-	SuggestionError    string    `json:"suggestionError,omitempty"`
+	SuggestionArtifact *Artifact                   `json:"suggestionArtifact,omitempty"`
+	SuggestionError    string                      `json:"suggestionError,omitempty"`
+	Specifications     *model.SpecificationCatalog `json:"specifications,omitempty"`
 }
 
 type RepositoryInventory struct {
@@ -128,10 +131,11 @@ type TargetResult struct {
 	// is still in the target's own routes.json, one click away). Set only
 	// for a StatusOK target; zero value for every other status, same as an
 	// empty repository would report.
-	Routes  int `json:"routes,omitempty"`
-	Proven  int `json:"proven,omitempty"`
-	Public  int `json:"public,omitempty"`
-	Unknown int `json:"unknown,omitempty"`
+	Routes         int                          `json:"routes,omitempty"`
+	Proven         int                          `json:"proven,omitempty"`
+	Public         int                          `json:"public,omitempty"`
+	Unknown        int                          `json:"unknown,omitempty"`
+	Specifications []ModuleSpecificationSummary `json:"specifications,omitempty"`
 
 	// TargetConfig is true when --use-target-config found and used this
 	// target's own targetConfigFilename instead of the fleet-wide --config
@@ -148,6 +152,12 @@ type TargetResult struct {
 	// operator-owned directory outside every scanned repository is
 	// stronger evidence than a file the repository itself supplied.
 	TargetConfigDir bool `json:"targetConfigDir,omitempty"`
+}
+
+type ModuleSpecificationSummary struct {
+	ModuleID   string                      `json:"moduleId"`
+	ModulePath string                      `json:"modulePath"`
+	Catalog    *model.SpecificationCatalog `json:"catalog"`
 }
 
 // Scope is the --org configuration a fleet run used, recorded on the
@@ -191,8 +201,12 @@ type Aggregate struct {
 	Tool          string         `json:"tool"`
 	ToolVersion   string         `json:"toolVersion"`
 	Targets       []TargetResult `json:"targets"`
-	Scope         *Scope         `json:"scope,omitempty"`
-	Coverage      struct {
+	// RepositoryGroups is a deterministic presentation index over Targets.
+	// Targets remains the complete evidence record and the sole input to scan,
+	// coverage, resume, update, and comparison behavior.
+	RepositoryGroups *RepositoryGroups `json:"repositoryGroups,omitempty"`
+	Scope            *Scope            `json:"scope,omitempty"`
+	Coverage         struct {
 		Complete bool `json:"complete"`
 	} `json:"coverage"`
 	Resume struct {
@@ -678,6 +692,7 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 		agg.Totals.Unknown += r.Unknown
 	}
 	agg.Resume.Requested = opts.Resume
+	agg.RepositoryGroups = GroupRepositories(agg.Targets)
 	agg.Resume.Reused = reused
 	agg.Resume.Checkpoint = !agg.Coverage.Complete
 	agg.Update.Requested = opts.Preseed != nil
@@ -913,6 +928,9 @@ func runOneTargetAttempt(ctx context.Context, opts RunOptions, manifestDir strin
 		res.Proven += mr.Proven
 		res.Public += mr.Public
 		res.Unknown += mr.Unknown
+		if mr.Specifications != nil {
+			res.Specifications = append(res.Specifications, ModuleSpecificationSummary{ModuleID: mr.ID, ModulePath: mr.ModulePath, Catalog: mr.Specifications})
+		}
 		if mr.Status != StatusOK {
 			res.Complete = false
 			if module.UsesGin {
@@ -1128,6 +1146,7 @@ func runModule(ctx context.Context, opts RunOptions, target Target, module modul
 			Public                     int `json:"public"`
 			Unknown                    int `json:"unknown"`
 		} `json:"summary"`
+		Specifications *model.SpecificationCatalog `json:"specifications"`
 	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		res.Status = StatusFailed
@@ -1137,6 +1156,7 @@ func runModule(ctx context.Context, opts RunOptions, target Target, module modul
 
 	res.Status = StatusOK
 	res.Complete = decoded.ScanCoverage.Complete
+	res.Specifications = decoded.Specifications
 	if nestedOutput {
 		res.Report = filepath.Join("targets", target.Name, "modules", module.ID, "routes.json")
 	} else {
