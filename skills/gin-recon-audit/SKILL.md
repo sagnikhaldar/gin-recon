@@ -93,11 +93,38 @@ it directly.
 
 ## 2. Write a config
 
-Create a temp config file (JSON or YAML; strict — no comments, no unknown
-fields) mapping each chosen canonical symbol to an entry. Keys are canonical
-Go identities independent of import aliases: `pkg/path.FuncName`,
+Running `fleet` with `--suggest-auth` (see "Auditing many repos at once"
+below) auto-generates a starting point for this —
+`<outDir>/target-configs-draft/<name>.json` per target, pre-filled with that
+target's own name-hinted candidates and an explicit `_warning` that nothing
+in it is confirmed. That file is never read by
+`--config`/`--target-config-dir`/`--use-target-config` — it exists purely so
+you aren't starting from a blank page; copy the entries you actually confirm
+below into a real config, don't point anything at the draft itself.
+
+Whether starting from a draft or from `suggest-auth`'s own candidate list
+directly, create the real config file (JSON or YAML; strict — no comments,
+no unknown fields) mapping each chosen canonical symbol to an entry. Keys are
+canonical Go identities independent of import aliases: `pkg/path.FuncName`,
 `pkg/path.(*Type).MethodName`, or a function-typed value's canonical name —
 copy them verbatim from `suggest-auth`'s `canonicalSymbol` field.
+
+**Read the actual function body before including anything — a name match is
+never sufficient by itself.** Auditing a real organization's repositories
+this way turned up four candidates that matched `nameHint: true,
+knownNonAuth: false` and were still wrong: a WAF-deception endpoint that
+fakes success without ever checking identity (name contained `Honeypot`), a
+header-format validator that never checks identity at all (`ValidateHeaders`),
+an audit logger that runs after the response and never blocks anything
+(`AuditMiddleware`), and a function that manages the service's own *outbound*
+session to a vendor rather than authenticating the *inbound* request
+(`CheckVendorSession`). All four would have produced a config entry from name
+alone. The concrete check before adding a symbol: does it read a real
+credential (header/token/session)? Does it compare that credential against
+something real (a stored secret, a JWT signature, a partner key)? Does it
+call `Abort`/`AbortWithStatus*` and `return` on failure? If any of those is
+missing, it's something else — logging, a wrapper, a deception endpoint, an
+outbound call — leave it out.
 
 ```json
 {
@@ -249,14 +276,16 @@ For a known, fixed set of local checkouts, write a targets manifest:
 ```
 
 ```bash
-gin-recon fleet --targets targets.json --config <cfg.json> --out <outDir> \
+gin-recon fleet --targets targets.json --config <cfg.json> \
+  --target-config-dir <perTargetConfigDir> --suggest-auth --out <outDir> \
   --concurrency 4 --fail-on incomplete
 ```
 
 For a whole GitHub organization, skip hand-writing the manifest:
 
 ```bash
-gin-recon fleet --org <name> --config <cfg.json> --out <outDir> \
+gin-recon fleet --org <name> --config <cfg.json> \
+  --target-config-dir <perTargetConfigDir> --suggest-auth --out <outDir> \
   --allow-remote-targets --fail-on incomplete
 ```
 
@@ -303,6 +332,24 @@ gin-recon's conservative-by-design behavior, not a bug, but it means a fleet
 result showing one target at 100% public deserves a second look at whether
 that target actually has its own auth middleware missing from the shared
 config, before reporting it as a real finding.
+
+For a real multi-repo organization, prefer `--target-config-dir <dir>` over
+(or alongside) a single shared `--config`: a directory holding one reviewed
+file per target — `<dir>/<target-name>.json` — that wins over the shared
+config for any target it has an entry for, so each repo's own real
+middleware symbols apply to that repo only. `fleet.json`/`fleet.html` record
+`targetConfigDir: true` per target that used one. Populate it using step 2's
+process, once per target, from that target's own
+`target-configs-draft/<name>.json`.
+
+This directory's contents are also durable and reused automatically: every
+fleet run copies whatever `--target-config-dir` held into
+`<outDir>/target-configs-snapshot/`, and a **later** run at the same
+`<outDir>` with `--target-config-dir` omitted entirely still picks that
+snapshot back up on its own — reviewing a target's config is a one-time cost,
+not something to re-supply on every run. Passing `--target-config-dir`
+explicitly always wins and replaces the persisted snapshot going forward, so
+only do it again when you're actually adding or changing reviewed entries.
 
 If a target scans an un-vendored module that needs network access to
 resolve, pass `--allow-downloads` on the `fleet` invocation itself — it's
