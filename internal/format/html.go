@@ -85,39 +85,37 @@ const htmlPageTemplate = `<!doctype html>
 <div class="gr-page gr-site-header__inner"><span class="gr-brand">%s<span>gin-recon</span></span>
 <div class="gr-header-meta">Offline API evidence<br>gin-recon %s</div></div>
 </header>
-<div id="app">Loading…</div>
+<div id="app" class="gr-page gr-main">Loading…</div>
 <script id="gin-recon-spec" type="application/json">%s</script>
 <script>%s</script>
 </body>
 </html>
 `
 
+// htmlViewerCSS supplies only the styling api.html has no shared
+// equivalent for (operation rows, method-color chips, schema trees,
+// examples) — page chrome, hero, filter bar, panel framing, and status
+// badges are deliberately left to theme.go's own .gr-page/.gr-hero/
+// .gr-filters/.gr-panel/.gr-badge classes instead of a second, divergent
+// copy, so this page reads as the same design system as fleet.html
+// (docs/adr/0029-fleet-html-evidence-dashboard.md's dashboard and this
+// page are meant to look like one tool's output, not two).
 const htmlViewerCSS = `
 :root {
   --bg: var(--gr-bg); --fg: var(--gr-ink); --muted: var(--gr-muted); --border: var(--gr-border);
   --card: var(--gr-panel); --code-bg: var(--gr-panel-muted);
   --get: #2563eb; --post: #16a34a; --put: #d97706; --patch: #7c3aed;
   --delete: #dc2626; --other: #6b7280;
-  --public: var(--gr-warn); --proven: var(--gr-good); --unknown: var(--gr-warn);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); }
-#app { width:min(1180px, calc(100% - 32px)); margin:0 auto; padding:28px 0 64px; }
-#app header { margin-bottom: 14px; }
-#app header h1 { margin: 0 0 4px; font-size:clamp(26px, 4vw, 40px); line-height:1.15; letter-spacing:-.025em; }
-#app header .meta { color: var(--muted); font-size: 13px; }
-.route-filters { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:16px 0; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--code-bg); }
-.route-filter-field { display:grid; gap:4px; min-width:150px; }
-.route-filter-field.search { min-width:min(360px, 100%); flex:1; }
-.route-filter-field label { color:var(--muted); font-size:11px; font-weight:650; text-transform:uppercase; letter-spacing:.035em; }
-.route-filters input, .route-filters select { min-height:36px; border:1px solid var(--border); border-radius:7px; padding:7px 10px; background:var(--card); color:var(--fg); font:inherit; }
-.filter-count { margin-left:auto; padding-bottom:8px; color:var(--muted); font-size:12px; }
-details.tag-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
-details.tag-group > summary { cursor: pointer; padding: 10px 14px; background: var(--card); font-weight: 600; list-style: none; display: flex; justify-content: space-between; }
+.gr-ops-list details.tag-group { border-top: 1px solid var(--border); }
+.gr-ops-list details.tag-group:first-child { border-top: none; }
+details.tag-group > summary { cursor: pointer; padding: 12px 16px; background: var(--gr-panel-muted); font-weight: 700; list-style: none; display: flex; justify-content: space-between; }
 details.tag-group > summary::-webkit-details-marker { display: none; }
 details.tag-group > summary .count { color: var(--muted); font-weight: 400; }
 .op-row { border-top: 1px solid var(--border); }
-.op-row > summary { cursor: pointer; padding: 8px 14px; list-style: none; display: flex; align-items: center; gap: 10px; }
+.op-row > summary { cursor: pointer; padding: 10px 16px; list-style: none; display: flex; align-items: center; gap: 10px; }
 .op-row > summary::-webkit-details-marker { display: none; }
 .op-row:hover > summary { background: var(--code-bg); }
 .method { display: inline-block; min-width: 58px; text-align: center; padding: 2px 6px; border-radius: 4px; color: #fff; font-weight: 700; font-size: 11px; }
@@ -125,20 +123,14 @@ details.tag-group > summary .count { color: var(--muted); font-weight: 400; }
 .method.put { background: var(--put); } .method.patch { background: var(--patch); }
 .method.delete { background: var(--delete); } .method.other { background: var(--other); }
 .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; border: 1px solid var(--border); color: var(--muted); }
-.badge.public { color: var(--public); border-color: var(--public); background:var(--gr-warn-soft); }
-.badge.proven { color: var(--proven); border-color: var(--proven); background:var(--gr-good-soft); }
-.badge.unknown { color: var(--unknown); border-color: var(--unknown); background:var(--gr-warn-soft); }
-.badge.evidence { color: var(--muted); border-color: var(--border); font-weight: 400; margin-left: 6px; }
-.op-body { padding: 4px 14px 14px 82px; color: var(--muted); }
+.op-body { padding: 4px 16px 16px 86px; color: var(--muted); }
 .op-body dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 8px 0; }
 .op-body dt { font-weight: 600; color: var(--fg); }
 .op-body dd { margin: 0; min-width:0; overflow-wrap:anywhere; }
 .op-body code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap:anywhere; }
 table.params { border-collapse: collapse; margin: 6px 0; width: 100%; }
 table.params th, table.params td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 13px; }
-.empty { color: var(--muted); padding: 24px; text-align: center; }
-footer { margin-top: 32px; color: var(--muted); font-size: 12px; }
+.gr-empty { margin:0; padding:22px 16px; color:var(--gr-muted); text-align:center; }
 .op-summary { color: var(--fg); font-weight: 600; font-size: 14px; margin: 6px 0 2px; }
 .op-description { color: var(--muted); margin: 0 0 10px; white-space: pre-line; }
 .schema-section { margin: 14px 0 4px; }
@@ -149,21 +141,18 @@ ul.schema-tree.schema-tree-root { padding-left: 0; border-left: none; }
 li.schema-field { margin: 5px 0; }
 .schema-field-head { display: flex; align-items: baseline; gap: 8px; }
 .schema-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); font-weight: 600; }
-.schema-type { color: var(--proven); font-size: 12px; }
+.schema-type { color: var(--gr-good); font-size: 12px; }
 .schema-required { color: var(--delete); font-size: 10px; text-transform: uppercase; }
 .schema-desc { color: var(--muted); font-size: 12px; margin: 1px 0 0; }
 pre.example { background: var(--code-bg); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 6px 0 0; }
 pre.example code { background: none; padding: 0; font-size: 12px; }
 @media (max-width:720px) {
-  #app { width:calc(100% - 20px); padding-top:20px; }
-  .route-filter-field, .route-filter-field.search { min-width:100%; }
-  .filter-count { margin-left:0; }
   .op-row > summary { align-items:flex-start; flex-wrap:wrap; }
-  .op-body { padding-left:14px; }
+  .op-body { padding-left:16px; }
   .op-body dl { grid-template-columns:1fr; gap:2px; }
   .op-body dd + dt { margin-top:8px; }
 }
-@media print { .route-filters { display:none; } #app { width:100%; } details.tag-group { break-inside:avoid; } }
+@media print { .gr-filters { display:none; } details.tag-group { break-inside:avoid; } }
 `
 
 // htmlViewerJS is intentionally framework-free vanilla JS. Every value that
@@ -217,9 +206,17 @@ const htmlViewerJS = `
     return id;
   }
 
+  // authStatusBadgeClass mirrors fleet_html.go's own gr-badge convention
+  // for the same three statuses (proven good, public/unknown warn) so a
+  // route's auth evidence reads the same color whether seen in fleet.html's
+  // table or here.
+  function authStatusBadgeClass(authStatus) {
+    return "gr-badge " + (authStatus === "proven" ? "gr-badge--good" : "gr-badge--warn");
+  }
+
   function authBadge(ext) {
     if (!ext || !ext.authStatus) return null;
-    return el("span", { class: "badge " + ext.authStatus }, ext.authStatus);
+    return el("span", { class: authStatusBadgeClass(ext.authStatus) }, ext.authStatus);
   }
 
   // evidenceBadge renders a small provenance marker next to Summary/
@@ -234,7 +231,7 @@ const htmlViewerJS = `
   function evidenceBadge(ext) {
     if (!ext || !ext.evidenceSource) return null;
     var label = ext.evidenceSource === "swag" ? "from code comment" : "from existing OpenAPI document";
-    return el("span", { class: "badge evidence" }, label);
+    return el("span", { class: "gr-badge gr-badge--neutral" }, label);
   }
 
   function paramsTable(params) {
@@ -447,7 +444,7 @@ const htmlViewerJS = `
     if (op.summary) {
       var summaryEl = el("div", { class: "op-summary" });
       summaryEl.appendChild(document.createTextNode(op.summary));
-      if (evidence) summaryEl.appendChild(evidence);
+      if (evidence) { summaryEl.appendChild(document.createTextNode(" ")); summaryEl.appendChild(evidence); }
       body.appendChild(summaryEl);
     }
     if (op.description) body.appendChild(el("div", { class: "op-description" }, op.description));
@@ -505,8 +502,8 @@ const htmlViewerJS = `
     return details;
   }
 
-  function filterField(label, control, extraClass) {
-    var field = el("div", { class: "route-filter-field" + (extraClass ? " " + extraClass : "") });
+  function filterField(label, control) {
+    var field = el("div");
     var id = control.getAttribute("id");
     field.appendChild(el("label", id ? { for: id } : null, label));
     field.appendChild(control);
@@ -521,21 +518,25 @@ const htmlViewerJS = `
 
   function render() {
     app.textContent = "";
-    var header = el("header");
-    header.appendChild(el("h1", null, (spec.info && spec.info.title) || "API"));
+    var hero = el("div", { class: "gr-hero" });
+    hero.appendChild(el("p", { class: "gr-eyebrow" }, "API documentation"));
+    hero.appendChild(el("h1", null, (spec.info && spec.info.title) || "API"));
     var pathCount = Object.keys(spec.paths || {}).length;
-    header.appendChild(el("div", { class: "meta" },
+    hero.appendChild(el("p", { class: "gr-lede" },
       "OpenAPI " + spec.openapi + " · version " + ((spec.info && spec.info.version) || "") +
       " · " + pathCount + " path(s)"));
-    app.appendChild(header);
+    app.appendChild(hero);
+
+    var panel = el("section", { class: "gr-panel" });
+    panel.appendChild(el("h2", { class: "gr-panel__title" }, "Operations"));
 
     var filterInput = el("input", { id: "filter", type: "search", placeholder: "Path, method, or handler…" });
     var methodFilter = selectControl("method-filter", [["", "All methods"], ["get", "GET"], ["post", "POST"], ["put", "PUT"], ["patch", "PATCH"], ["delete", "DELETE"], ["options", "OPTIONS"], ["head", "HEAD"], ["trace", "TRACE"]]);
     var authFilter = selectControl("auth-filter", [["", "All auth evidence"], ["proven", "Proven"], ["public", "Public"], ["unknown", "Unknown"], ["unclassified", "No auth assertion"]]);
     var clearSearch = el("button", { type: "button", class: "gr-search-clear", "aria-label": "Clear operation search", hidden: "" }, "×");
-    var filterCount = el("span", { class: "filter-count", role: "status", "aria-live": "polite" });
-    var filters = el("div", { class: "route-filters", role: "search", "aria-label": "Filter operations" });
-    var searchField = filterField("Search", filterInput, "search");
+    var filterCount = el("span", { class: "gr-result-count", role: "status", "aria-live": "polite" });
+    var filters = el("div", { class: "gr-filters", role: "search", "aria-label": "Filter operations" });
+    var searchField = filterField("Search", filterInput);
     var searchControl = el("div", { class: "gr-search-control" });
     searchControl.appendChild(filterInput);
     searchControl.appendChild(clearSearch);
@@ -544,7 +545,7 @@ const htmlViewerJS = `
     filters.appendChild(filterField("Method", methodFilter));
     filters.appendChild(filterField("Authentication", authFilter));
     filters.appendChild(filterCount);
-    app.appendChild(filters);
+    panel.appendChild(filters);
 
     var groups = {};
     var groupOrder = [];
@@ -560,9 +561,10 @@ const htmlViewerJS = `
     });
     groupOrder.sort();
 
-    var noRoutes = el("div", { class: "empty" }, "No routes in this report.");
-    var noMatches = el("div", { class: "empty", hidden: "" }, "No operations match these filters.");
-    if (groupOrder.length === 0) app.appendChild(noRoutes);
+    var opsList = el("div", { class: "gr-ops-list" });
+    var noRoutes = el("p", { class: "gr-empty" }, "No routes in this report.");
+    var noMatches = el("p", { class: "gr-empty", hidden: "" }, "No operations match these filters.");
+    if (groupOrder.length === 0) opsList.appendChild(noRoutes);
 
     var allRows = [];
     groupOrder.forEach(function (tag) {
@@ -574,9 +576,11 @@ const htmlViewerJS = `
       summary.appendChild(el("span", { class: "count" }, rows.length + " operation(s)"));
       details.appendChild(summary);
       rows.forEach(function (row) { details.appendChild(row); allRows.push(row); });
-      app.appendChild(details);
+      opsList.appendChild(details);
     });
-    app.appendChild(noMatches);
+    opsList.appendChild(noMatches);
+    panel.appendChild(opsList);
+    app.appendChild(panel);
 
     // Read the caveat from the spec's own info.description rather than
     // keeping a second hardcoded copy here — internal/format/openapi.go's
@@ -585,7 +589,7 @@ const htmlViewerJS = `
     // same document.
     var footerText = "Generated by gin-recon.";
     if (spec.info && spec.info.description) footerText += " " + spec.info.description;
-    var footer = el("footer", null, footerText);
+    var footer = el("p", { class: "gr-footer" }, footerText);
     app.appendChild(footer);
 
     function updateFilters() {

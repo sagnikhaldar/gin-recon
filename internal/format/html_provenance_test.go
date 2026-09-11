@@ -23,7 +23,7 @@ func TestHTMLRendersEvidenceBadgeFunction(t *testing.T) {
 	for _, want := range []string{
 		"function evidenceBadge(",
 		"ext.evidenceSource",
-		`"badge evidence"`,
+		`"gr-badge gr-badge--neutral"`,
 		"evidenceBadge(ext)",
 	} {
 		if !strings.Contains(out, want) {
