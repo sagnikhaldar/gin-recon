@@ -247,6 +247,56 @@ func TestHTMLUsesConfiguredTitle(t *testing.T) {
 	}
 }
 
+// TestHTMLViewerSupportsDeepLinking documents (via the JS source itself,
+// since Go tests cannot execute it without a browser) that each operation
+// gets a stable id derived purely from its own method+path, and that the
+// viewer opens/scrolls to it from a URL fragment on load or hashchange, and
+// keeps the address bar in sync when an operation is expanded — native
+// browser mechanisms only (URL fragment + <details open>), no routing
+// library, matching Swagger UI's deepLinking option without adopting a
+// third-party viewer.
+func TestHTMLViewerSupportsDeepLinking(t *testing.T) {
+	rep := inventoryWithRoutes(routeAt("GET", "/users/:id"))
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`function opId(method, path)`,
+		`id: opId(method, path)`,
+		`function openDeepLink()`,
+		`node.open = true`,
+		`history.replaceState(null, "", "#" + row.id)`,
+		`window.addEventListener("hashchange", openDeepLink)`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("viewer missing deep-linking behavior %q\n%s", want, out)
+		}
+	}
+}
+
+// TestHTMLViewerDisambiguatesCollidingOperationIDs guards against a real
+// collision found by rendering an actual production report: opId's slug is
+// lossy (case and punctuation both collapse), so two distinct paths can
+// legitimately produce the same slug — as seen with a real pair of routes,
+// "/lender/abfl/digiSIgn" and "/lender/abfl/digiSign". Without
+// disambiguation, the second operation's id would silently collide with the
+// first's, breaking deep-linking for it.
+func TestHTMLViewerDisambiguatesCollidingOperationIDs(t *testing.T) {
+	rep := inventoryWithRoutes(routeAt("GET", "/x"))
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	if !strings.Contains(string(data), `var usedOpIds = Object.create(null);`) {
+		t.Errorf("viewer missing usedOpIds collision map\n%s", data)
+	}
+	if !strings.Contains(string(data), `while (usedOpIds[id]) { n++; id = base + "-" + n; }`) {
+		t.Errorf("viewer missing opId disambiguation loop\n%s", data)
+	}
+}
+
 // TestHTMLTitleDiffersPerRepository guards against a real regression: every
 // api.html across an org-wide fleet scan once shared the same hardcoded
 // browser-tab title regardless of which repository it described, because

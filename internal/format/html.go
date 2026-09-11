@@ -178,6 +178,7 @@ const htmlViewerJS = `
   "use strict";
   var spec = JSON.parse(document.getElementById("gin-recon-spec").textContent);
   var app = document.getElementById("app");
+  var usedOpIds = Object.create(null);
 
   function el(tag, attrs, text) {
     var e = document.createElement(tag);
@@ -195,6 +196,25 @@ const htmlViewerJS = `
       if (parts[i].charAt(0) !== "{") return parts[i];
     }
     return "default";
+  }
+
+  // opId derives a stable per-operation element id from method+path, so an
+  // operation can be linked and reopened directly via a URL fragment (see
+  // render()'s deep-link handling below). The sanitized slug is lossy
+  // (case and punctuation both collapse), so two distinct paths can
+  // legitimately produce the same slug — e.g. a real pair of routes seen
+  // in practice, "/lender/abfl/digiSIgn" and "/lender/abfl/digiSign",
+  // differing only in case. usedOpIds disambiguates any such collision
+  // with a numeric suffix, the same pattern openapi.go's own usedIDs
+  // already uses for operationId collisions server-side, so every
+  // operation still gets a unique, stable id to link to.
+  function opId(method, path) {
+    var base = "op-" + method + "-" + path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+    var id = base;
+    var n = 1;
+    while (usedOpIds[id]) { n++; id = base + "-" + n; }
+    usedOpIds[id] = true;
+    return id;
   }
 
   function authBadge(ext) {
@@ -470,7 +490,7 @@ const htmlViewerJS = `
   }
 
   function opRow(method, path, op) {
-    var details = el("details", { class: "op-row" });
+    var details = el("details", { class: "op-row", id: opId(method, path) });
     var summary = el("summary");
     summary.appendChild(el("span", { class: "method " + (["get","post","put","patch","delete"].indexOf(method) >= 0 ? method : "other") }, method.toUpperCase()));
     summary.appendChild(el("span", { class: "path" }, path));
@@ -599,6 +619,32 @@ const htmlViewerJS = `
       filterInput.focus();
     });
     updateFilters();
+
+    // Deep linking: an operation's own URL fragment (set from its stable
+    // opId) opens that operation — and every ancestor <details> it lives
+    // in — directly, so a link to one specific route survives a page
+    // reload or gets shared/bookmarked, the same expectation Swagger UI's
+    // deepLinking option sets for its own users. Kept native (URL fragment
+    // + <details open>) rather than a routing library, matching this
+    // viewer's own no-framework, no-third-party-JS posture.
+    function openDeepLink() {
+      var id = location.hash.slice(1);
+      if (!id) return;
+      var target = document.getElementById(id);
+      if (!target) return;
+      for (var node = target; node; node = node.parentElement) {
+        if (node.tagName === "DETAILS") node.open = true;
+      }
+      updateFilters();
+      target.scrollIntoView({ block: "center" });
+    }
+    allRows.forEach(function (row) {
+      row.addEventListener("toggle", function () {
+        if (row.open) history.replaceState(null, "", "#" + row.id);
+      });
+    });
+    window.addEventListener("hashchange", openDeepLink);
+    openDeepLink();
   }
 
   render();
