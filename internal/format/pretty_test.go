@@ -106,6 +106,44 @@ func TestPrettyAuditIncludesSummaryAndFindings(t *testing.T) {
 	}
 }
 
+// TestPrettyReportsDocumentationCoverage mirrors markdown_test.go's
+// TestMarkdownReportsDocumentationCoverage in this format's own plain-text
+// style — see its doc comment for the gap this guards.
+func TestPrettyReportsDocumentationCoverage(t *testing.T) {
+	rep := report.NewInventoryReport(model.ProfileTyped, testTarget())
+	rep.Routes = []model.Route{sampleRoute()}
+	rep.ScanCoverage = model.ScanCoverage{AnalyzedPackages: 1, AnalyzedFiles: 1, Complete: true}
+	rep.Specifications = &model.SpecificationCatalog{
+		Status: "complete",
+		Specifications: []model.SpecificationRecord{
+			{ID: "one", Path: "api/openapi.yaml", Dialect: "openapi3", Version: "3.1.0", Title: "Payments", APIVersion: "v2"},
+		},
+		Metrics: model.DocumentationMetrics{
+			SourceFiles:        model.DocumentationMetric{Numerator: 10, Denominator: 10, Status: "complete"},
+			ObservedOperations: model.DocumentationMetric{Numerator: 3, Denominator: 12, Status: "complete"},
+			IncompleteScope:    true,
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Pretty(&buf, rep); err != nil {
+		t.Fatalf("Pretty: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"DOCUMENTATION",
+		"1 specification document(s) found",
+		"Payments v2 · openapi3 3.1.0 · api/openapi.yaml",
+		"source-file coverage: 100.0% (10/10)",
+		"observed-operation coverage: 25.0% (3/12)",
+		"scope is incomplete",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
 func TestPrettyHandlesEmptyRoutesAndFindings(t *testing.T) {
 	rep := report.NewInventoryReport(model.ProfileTyped, testTarget())
 	var buf bytes.Buffer

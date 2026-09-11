@@ -26,6 +26,7 @@ func Pretty(w io.Writer, rep *report.Report) error {
 		p.summary(rep)
 	}
 	p.routes(rep)
+	p.documentation(rep)
 	p.globalMiddleware(rep)
 	p.fallbackSurfaces(rep)
 	if rep.Command == report.CommandAudit {
@@ -106,6 +107,34 @@ func (p *prettyPrinter) routes(rep *report.Report) {
 	}
 	if err := tw.Flush(); err != nil && p.err == nil {
 		p.err = err
+	}
+	p.printf("\n")
+}
+
+// documentation mirrors markdown.go's documentation section — see its doc
+// comment — in this format's own plain-text style.
+func (p *prettyPrinter) documentation(rep *report.Report) {
+	cat := rep.Specifications
+	if cat == nil {
+		return
+	}
+	p.printf("DOCUMENTATION\n")
+	if len(cat.Specifications) == 0 {
+		p.printf("  No committed OpenAPI/Swagger specification discovered.\n")
+	} else {
+		p.printf("  %d specification document(s) found:\n", len(cat.Specifications))
+		for _, spec := range cat.Specifications {
+			title := spec.Title
+			if title == "" {
+				title = "(untitled)"
+			}
+			p.printf("    %s %s · %s %s · %s\n", title, spec.APIVersion, spec.Dialect, spec.Version, spec.Path)
+		}
+	}
+	p.printf("  source-file coverage: %s. observed-operation coverage: %s.\n",
+		metricText(cat.Metrics.SourceFiles), metricText(cat.Metrics.ObservedOperations))
+	if cat.Metrics.IncompleteScope {
+		p.printf("  scope is incomplete; these percentages may undercount.\n")
 	}
 	p.printf("\n")
 }

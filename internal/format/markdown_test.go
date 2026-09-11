@@ -79,6 +79,62 @@ func TestMarkdownAuditIncludesSummaryAndFindings(t *testing.T) {
 	}
 }
 
+// TestMarkdownReportsDocumentationCoverage guards a real gap: a
+// single-repository report never surfaced internal/spec's own
+// specification-count and coverage-percentage data at all, even though
+// fleet.html already showed the equivalent per-target. Covers both the
+// found-specifications case and the none-discovered case, since the latter
+// must still say so explicitly rather than silently omitting the section.
+func TestMarkdownReportsDocumentationCoverage(t *testing.T) {
+	rep := report.NewInventoryReport(model.ProfileTyped, testTarget())
+	rep.Routes = []model.Route{sampleRoute()}
+	rep.ScanCoverage = model.ScanCoverage{AnalyzedPackages: 1, AnalyzedFiles: 1, Complete: true}
+	rep.Specifications = &model.SpecificationCatalog{
+		Status: "complete",
+		Specifications: []model.SpecificationRecord{
+			{ID: "one", Path: "api/openapi.yaml", Dialect: "openapi3", Version: "3.1.0", Title: "Payments", APIVersion: "v2"},
+		},
+		Metrics: model.DocumentationMetrics{
+			SourceFiles:        model.DocumentationMetric{Numerator: 10, Denominator: 10, Status: "complete"},
+			ObservedOperations: model.DocumentationMetric{Numerator: 3, Denominator: 12, Status: "complete"},
+			IncompleteScope:    true,
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := Markdown(&buf, rep); err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"## Documentation",
+		"1 specification document(s) found",
+		"Payments v2 · openapi3 3.1.0 · `api/openapi.yaml`",
+		"Source-file coverage: 100.0% (10/10)",
+		"Observed-operation coverage: 25.0% (3/12)",
+		"Scope is incomplete",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestMarkdownReportsNoDocumentationDiscovered(t *testing.T) {
+	rep := report.NewInventoryReport(model.ProfileTyped, testTarget())
+	rep.ScanCoverage = model.ScanCoverage{AnalyzedPackages: 1, AnalyzedFiles: 1, Complete: true}
+	rep.Specifications = &model.SpecificationCatalog{Status: "complete"}
+
+	var buf bytes.Buffer
+	if err := Markdown(&buf, rep); err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "No committed OpenAPI/Swagger specification discovered.") {
+		t.Errorf("output missing explicit no-specification statement; got:\n%s", out)
+	}
+}
+
 func TestMarkdownHandlesEmptyRoutesAndFindings(t *testing.T) {
 	rep := report.NewInventoryReport(model.ProfileTyped, testTarget())
 	var buf bytes.Buffer

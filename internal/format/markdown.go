@@ -33,6 +33,7 @@ func Markdown(w io.Writer, rep *report.Report) error {
 		m.summary(rep)
 	}
 	m.routes(rep)
+	m.documentation(rep)
 	m.globalMiddleware(rep)
 	m.fallbackSurfaces(rep)
 	if rep.Command == report.CommandAudit {
@@ -115,6 +116,39 @@ func (m *markdownPrinter) summary(rep *report.Report) {
 			parts = append(parts, fmt.Sprintf("%s: **%d**", sev, s.FindingsBySeverity[sev]))
 		}
 		m.printf("Findings by severity: %s\n\n", strings.Join(parts, ", "))
+	}
+}
+
+// documentation reports internal/spec's own discovery of already-committed
+// OpenAPI/Swagger specification files as a number and a percentage — the
+// same metricText formatting fleet.html already uses for this data at the
+// fleet level (internal/format/fleet_html.go), so a single-repository
+// report and a fleet-wide rollup never describe coverage in two different
+// vocabularies. Runs for every command internal/spec is wired into
+// (inventory and audit both), not gated to audit-only sections.
+func (m *markdownPrinter) documentation(rep *report.Report) {
+	cat := rep.Specifications
+	if cat == nil {
+		return
+	}
+	m.printf("## Documentation\n\n")
+	if len(cat.Specifications) == 0 {
+		m.printf("No committed OpenAPI/Swagger specification discovered.\n\n")
+	} else {
+		m.printf("%d specification document(s) found:\n\n", len(cat.Specifications))
+		for _, spec := range cat.Specifications {
+			title := spec.Title
+			if title == "" {
+				title = "(untitled)"
+			}
+			m.printf("- %s %s · %s %s · %s\n", mdEscape(title), mdEscape(spec.APIVersion), mdEscape(spec.Dialect), mdEscape(spec.Version), mdCode(spec.Path))
+		}
+		m.printf("\n")
+	}
+	m.printf("Source-file coverage: %s. Observed-operation coverage: %s.\n\n",
+		metricText(cat.Metrics.SourceFiles), metricText(cat.Metrics.ObservedOperations))
+	if cat.Metrics.IncompleteScope {
+		m.printf("_Scope is incomplete; these percentages may undercount._\n\n")
 	}
 }
 
