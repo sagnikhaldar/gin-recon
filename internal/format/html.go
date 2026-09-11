@@ -12,6 +12,7 @@ package format
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"html"
 
@@ -32,7 +33,22 @@ func HTML(rep *report.Report, cfg *config.Config) ([]byte, []model.Diagnostic, e
 		return nil, nil, err
 	}
 
+	// The browser tab must not show the same generic string for every
+	// target in a fleet: default to the spec's own info.title, which
+	// OpenAPI already resolved from the repository name or a @title
+	// annotation (openapi.go) — falling back to the generic constant only
+	// if that somehow came back empty. cfg.OpenAPI.Title, when set, still
+	// wins over both — the same precedence OpenAPI itself applies to
+	// info.Title.
 	title := "Gin Recon API"
+	var specInfo struct {
+		Info struct {
+			Title string `json:"title"`
+		} `json:"info"`
+	}
+	if err := json.Unmarshal(specJSON, &specInfo); err == nil && specInfo.Info.Title != "" {
+		title = specInfo.Info.Title
+	}
 	if cfg != nil && cfg.OpenAPI != nil && cfg.OpenAPI.Title != "" {
 		title = cfg.OpenAPI.Title
 	}

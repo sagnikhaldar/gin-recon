@@ -6,6 +6,7 @@ import (
 
 	"github.com/sagnikhaldar/gin-recon/internal/config"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
+	"github.com/sagnikhaldar/gin-recon/internal/report"
 )
 
 func TestHTMLProducesWellFormedSelfContainedPage(t *testing.T) {
@@ -21,7 +22,7 @@ func TestHTMLProducesWellFormedSelfContainedPage(t *testing.T) {
 
 	for _, want := range []string{
 		"<!doctype html>",
-		`<title>Gin Recon API</title>`,
+		`<title>demo API</title>`,
 		`id="gin-recon-spec" type="application/json"`,
 		`"openapi": "3.1.0"`,
 		"/users/{id}",
@@ -243,6 +244,27 @@ func TestHTMLUsesConfiguredTitle(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "<title>My Service API</title>") {
 		t.Errorf("expected configured title in <title>; got:\n%s", data)
+	}
+}
+
+// TestHTMLTitleDiffersPerRepository guards against a real regression: every
+// api.html across an org-wide fleet scan once shared the same hardcoded
+// browser-tab title regardless of which repository it described, because
+// HTML defaulted to a generic constant instead of the per-repository title
+// OpenAPI had already resolved into the spec's own info.title.
+func TestHTMLTitleDiffersPerRepository(t *testing.T) {
+	target := testTarget()
+	target.Module = "github.com/smallcase/las-be-flow"
+	rep := report.NewInventoryReport(model.ProfileTyped, target)
+	rep.Routes = []model.Route{routeAt("GET", "/health")}
+	rep.ScanCoverage = model.ScanCoverage{AnalyzedPackages: 1, AnalyzedFiles: 1, Complete: true}
+
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	if !strings.Contains(string(data), "<title>las-be-flow API</title>") {
+		t.Errorf("expected a title derived from the repository (las-be-flow API), not the generic default; got:\n%s", data)
 	}
 }
 
