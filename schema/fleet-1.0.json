@@ -4,7 +4,7 @@
   "title": "Gin Recon Fleet Aggregate 1.0",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "kind", "tool", "toolVersion", "targets", "coverage", "resume", "update", "configHash", "formats", "scopeFingerprint", "scanFingerprint", "allowDownloads", "useTargetConfig", "renderHtml", "repoAttempts", "repoTimeout", "totals", "authConfig"],
+  "required": ["schemaVersion", "kind", "tool", "toolVersion", "targets", "coverage", "resume", "update", "configHash", "formats", "scopeFingerprint", "scanFingerprint", "allowDownloads", "useTargetConfig", "renderHtml", "repoAttempts", "repoTimeout", "totals", "repositoryStatus", "specifications", "authConfig"],
   "properties": {
     "schemaVersion": {"const": "1.0"},
     "kind": {"const": "fleet"},
@@ -28,6 +28,8 @@
     "repoTimeout": {"type": "string", "minLength": 1},
     "suggestAuth": {"type": "boolean"},
     "totals": {"$ref": "#/$defs/counts"},
+    "repositoryStatus": {"type": "object", "additionalProperties": false, "required": ["ok", "failed", "inconclusive", "notGoModule"], "properties": {"ok": {"type": "integer", "minimum": 0}, "failed": {"type": "integer", "minimum": 0}, "inconclusive": {"type": "integer", "minimum": 0}, "notGoModule": {"type": "integer", "minimum": 0}}},
+    "specifications": {"type": "object", "additionalProperties": false, "required": ["repositoriesWithSpecifications", "specifications"], "properties": {"repositoriesWithSpecifications": {"type": "integer", "minimum": 0}, "specifications": {"type": "integer", "minimum": 0}}},
     "authConfig": {"type": "object", "additionalProperties": false, "required": ["middlewareCount", "wrappersCount"], "properties": {"middlewareCount": {"type": "integer", "minimum": 0}, "wrappersCount": {"type": "integer", "minimum": 0}}},
     "followModulesCount": {"type": "integer", "minimum": 0}
   },

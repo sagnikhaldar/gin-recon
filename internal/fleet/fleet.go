@@ -257,6 +257,28 @@ type Aggregate struct {
 		Public  int `json:"public"`
 		Unknown int `json:"unknown"`
 	} `json:"totals"`
+	// RepositoryStatus tallies every target's own Status once, the same
+	// counts a reader would otherwise have to compute themselves by
+	// iterating Targets — this run's own repository-level outcome summary,
+	// distinct from Totals above (which is route-classification-level, not
+	// repository-level) and from RepositoryGroups below (which lists names
+	// per finer-grained category rather than raw counts by Status).
+	RepositoryStatus struct {
+		OK           int `json:"ok"`
+		Failed       int `json:"failed"`
+		Inconclusive int `json:"inconclusive"`
+		NotGoModule  int `json:"notGoModule"`
+	} `json:"repositoryStatus"`
+	// Specifications rolls up internal/spec's per-repository catalog
+	// results org-wide: how many repositories carried at least one
+	// already-committed OpenAPI/Swagger specification document, and how
+	// many such documents were found across every repository and module —
+	// without a reader needing to iterate every target's own
+	// Specifications field (itself per-module) to compute it themselves.
+	Specifications struct {
+		RepositoriesWithSpecifications int `json:"repositoriesWithSpecifications"`
+		Specifications                 int `json:"specifications"`
+	} `json:"specifications"`
 	// AuthConfig records how many authMiddleware/authWrappers entries this
 	// run's --config actually configured — not read back by anything, only
 	// so fleet.html can explain a fleet-wide Totals.Proven of zero as "no
@@ -690,6 +712,29 @@ func Run(ctx context.Context, opts RunOptions) (*Aggregate, error) {
 		agg.Totals.Proven += r.Proven
 		agg.Totals.Public += r.Public
 		agg.Totals.Unknown += r.Unknown
+		switch r.Status {
+		case StatusOK:
+			agg.RepositoryStatus.OK++
+		case StatusFailed:
+			agg.RepositoryStatus.Failed++
+		case StatusInconclusive:
+			agg.RepositoryStatus.Inconclusive++
+		case StatusNotGoModule:
+			agg.RepositoryStatus.NotGoModule++
+		}
+		hasSpecifications := false
+		for _, module := range r.Specifications {
+			if module.Catalog == nil {
+				continue
+			}
+			if n := len(module.Catalog.Specifications); n > 0 {
+				agg.Specifications.Specifications += n
+				hasSpecifications = true
+			}
+		}
+		if hasSpecifications {
+			agg.Specifications.RepositoriesWithSpecifications++
+		}
 	}
 	agg.Resume.Requested = opts.Resume
 	agg.RepositoryGroups = GroupRepositories(agg.Targets)

@@ -78,6 +78,9 @@ func main() {
 	case "with-routes":
 		complete = "true"
 		summary = ` + "`" + `,"summary":{"totalRoutes":5,"provenByConfirmedShape":2,"provenByAttestedUnresolved":1,"public":1,"unknown":1}` + "`" + `
+	case "with-specs":
+		complete = "true"
+		summary = ` + "`" + `,"summary":{"totalRoutes":1,"provenByConfirmedShape":0,"provenByAttestedUnresolved":0,"public":1,"unknown":0},"specifications":{"status":"complete","specifications":[{"id":"a","path":"openapi.yaml","dialect":"openapi","version":"3.0","authorship":"unknown","provenance":{"source":"spec","status":"declared"},"sha256":"0000000000000000000000000000000000000000000000000000000000000000000000000000","bytes":1},{"id":"b","path":"swagger.json","dialect":"swagger","version":"2.0","authorship":"unknown","provenance":{"source":"spec","status":"declared"},"sha256":"0000000000000000000000000000000000000000000000000000000000000000000000000000","bytes":1}],"issues":[],"metrics":{"sourceFiles":{"numerator":0,"denominator":0,"status":"unknown"},"observedOperations":{"numerator":0,"denominator":0,"status":"unknown"},"incompleteScope":false}}` + "`" + `
 	default:
 		fmt.Fprintln(os.Stderr, "fake-audit: unknown behavior")
 		os.Exit(1)
@@ -258,10 +261,52 @@ func TestRunClassifiesEveryStatus(t *testing.T) {
 	if agg.Coverage.Complete {
 		t.Error("Coverage.Complete = true, want false: one target failed and one reported incomplete coverage")
 	}
+	wantStatus := struct{ OK, Failed, Inconclusive, NotGoModule int }{OK: 2, Failed: 1, Inconclusive: 0, NotGoModule: 1}
+	gotStatus := struct{ OK, Failed, Inconclusive, NotGoModule int }{
+		OK: agg.RepositoryStatus.OK, Failed: agg.RepositoryStatus.Failed,
+		Inconclusive: agg.RepositoryStatus.Inconclusive, NotGoModule: agg.RepositoryStatus.NotGoModule,
+	}
+	if gotStatus != wantStatus {
+		t.Errorf("RepositoryStatus = %+v, want %+v", gotStatus, wantStatus)
+	}
 
 	failed := agg.Targets[2]
 	if failed.Error == "" {
 		t.Error("failed target has no captured stderr")
+	}
+}
+
+// TestRunSpecificationsRollsUpAcrossTargets confirms Aggregate.Specifications
+// sums internal/spec's per-module catalog results org-wide: a repository
+// carrying specification documents counts once toward
+// RepositoriesWithSpecifications regardless of how many documents it has, and
+// Specifications itself is the total document count across every target.
+func TestRunSpecificationsRollsUpAcrossTargets(t *testing.T) {
+	bin := buildFakeAudit(t)
+	manifest := &Manifest{Version: 1, Targets: []Target{
+		{Name: "has-specs", Src: targetDir(t, "with-specs")},
+		{Name: "no-specs", Src: targetDir(t, "complete")},
+	}}
+	outDir := t.TempDir()
+
+	agg, err := Run(context.Background(), RunOptions{
+		ManifestPath: filepath.Join(t.TempDir(), "targets.json"),
+		Manifest:     manifest,
+		ManifestData: []byte("fixture"),
+		Formats:      []string{"json"},
+		OutDir:       outDir,
+		Concurrency:  1,
+		BinaryPath:   bin,
+		ToolVersion:  "test",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if agg.Specifications.RepositoriesWithSpecifications != 1 {
+		t.Errorf("RepositoriesWithSpecifications = %d, want 1", agg.Specifications.RepositoriesWithSpecifications)
+	}
+	if agg.Specifications.Specifications != 2 {
+		t.Errorf("Specifications = %d, want 2 (both documents from the one repository that has any)", agg.Specifications.Specifications)
 	}
 }
 
