@@ -530,6 +530,31 @@ func TestFleetHTMLRendersAggregateSpecificationCoverage(t *testing.T) {
 	}
 }
 
+// TestFleetHTMLPerRepositoryRowShowsSpecificationCount guards a real gap in
+// the per-repository row itself (not the fleet-wide rollup tested above):
+// the "API documentation" column already showed source-file/observed-
+// operation coverage percentages per repository, but never an explicit
+// document count — a reader had to count <option> entries in the
+// specification chooser by hand. Only shown when that repository actually
+// has at least one specification; TestFleetHTMLMissingDenominatorsAreNA
+// below covers the none-discovered case remaining unaffected.
+func TestFleetHTMLPerRepositoryRowShowsSpecificationCount(t *testing.T) {
+	catalog := &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{
+		{ID: "one", Path: "openapi.yaml", Dialect: "openapi3", Version: "3.1.0"},
+		{ID: "two", Path: "swagger.json", Dialect: "swagger2", Version: "2.0"},
+	}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc", Status: fleet.StatusOK, Complete: true, Routes: 3, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/svc", Catalog: catalog}}},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "2 specifications found") {
+		t.Errorf("missing explicit per-repository specification count\n%s", out)
+	}
+}
+
 func TestFleetHTMLMissingDenominatorsAreNA(t *testing.T) {
 	catalog := &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{}, Metrics: model.DocumentationMetrics{SourceFiles: model.DocumentationMetric{Status: "unknown"}, ObservedOperations: model.DocumentationMetric{Status: "unknown"}}}
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "empty", Status: fleet.StatusOK, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/empty", Catalog: catalog}}}}}
