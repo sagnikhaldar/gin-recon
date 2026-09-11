@@ -2410,6 +2410,9 @@ func TestRunFleetRenderRefreshesRouteEvidenceCounts(t *testing.T) {
 	agg.Targets[0].Routes, agg.Targets[0].Proven, agg.Targets[0].Public, agg.Targets[0].Unknown = 0, 0, 0, 0
 	agg.Totals.Routes, agg.Totals.Proven, agg.Totals.Public, agg.Totals.Unknown = 0, 0, 0, 0
 	agg.RepositoryGroups = nil
+	agg.RepositoryStatus.OK, agg.RepositoryStatus.Failed = 9, 9
+	agg.RepositoryStatus.Inconclusive, agg.RepositoryStatus.NotGoModule = 9, 9
+	agg.Specifications.RepositoriesWithSpecifications, agg.Specifications.Specifications = 9, 9
 	staleData, err := json.MarshalIndent(&agg, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -2442,6 +2445,17 @@ func TestRunFleetRenderRefreshesRouteEvidenceCounts(t *testing.T) {
 	wantGroups := fleet.GroupRepositories(refreshed.Targets)
 	if !reflect.DeepEqual(refreshed.RepositoryGroups, wantGroups) {
 		t.Errorf("RepositoryGroups = %#v, want recomputed %#v", refreshed.RepositoryGroups, wantGroups)
+	}
+	wantStatus := struct{ OK, Failed, Inconclusive, NotGoModule int }{OK: 1}
+	gotStatus := struct{ OK, Failed, Inconclusive, NotGoModule int }{
+		OK: refreshed.RepositoryStatus.OK, Failed: refreshed.RepositoryStatus.Failed,
+		Inconclusive: refreshed.RepositoryStatus.Inconclusive, NotGoModule: refreshed.RepositoryStatus.NotGoModule,
+	}
+	if gotStatus != wantStatus {
+		t.Errorf("RepositoryStatus = %+v, want %+v (stale placeholder values must not survive a render)", gotStatus, wantStatus)
+	}
+	if refreshed.Specifications.RepositoriesWithSpecifications != 0 || refreshed.Specifications.Specifications != 0 {
+		t.Errorf("Specifications = %+v, want zero (fixture carries no spec documents; stale placeholder values must not survive a render)", refreshed.Specifications)
 	}
 }
 

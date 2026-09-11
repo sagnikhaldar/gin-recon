@@ -1352,11 +1352,37 @@ func runFleetRender(opts *cli.Options, data []byte, stdout, stderr io.Writer) in
 	}
 
 	agg.Totals.Routes, agg.Totals.Proven, agg.Totals.Public, agg.Totals.Unknown = 0, 0, 0, 0
+	agg.RepositoryStatus.OK, agg.RepositoryStatus.Failed = 0, 0
+	agg.RepositoryStatus.Inconclusive, agg.RepositoryStatus.NotGoModule = 0, 0
+	agg.Specifications.RepositoriesWithSpecifications, agg.Specifications.Specifications = 0, 0
 	for _, t := range agg.Targets {
 		agg.Totals.Routes += t.Routes
 		agg.Totals.Proven += t.Proven
 		agg.Totals.Public += t.Public
 		agg.Totals.Unknown += t.Unknown
+		switch t.Status {
+		case fleet.StatusOK:
+			agg.RepositoryStatus.OK++
+		case fleet.StatusFailed:
+			agg.RepositoryStatus.Failed++
+		case fleet.StatusInconclusive:
+			agg.RepositoryStatus.Inconclusive++
+		case fleet.StatusNotGoModule:
+			agg.RepositoryStatus.NotGoModule++
+		}
+		hasSpecifications := false
+		for _, module := range t.Specifications {
+			if module.Catalog == nil {
+				continue
+			}
+			if n := len(module.Catalog.Specifications); n > 0 {
+				agg.Specifications.Specifications += n
+				hasSpecifications = true
+			}
+		}
+		if hasSpecifications {
+			agg.Specifications.RepositoriesWithSpecifications++
+		}
 	}
 	agg.Formats = make([]string, len(opts.Formats))
 	for i, f := range opts.Formats {
