@@ -99,8 +99,10 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <div class="gr-metric"><span class="gr-metric__value">{{.IncompleteTargetCount}}</span><span class="gr-metric__label">Incomplete targets</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.WithRoutesCount}}</span><span class="gr-metric__label">With observed routes</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.Agg.Totals.Routes}}</span><span class="gr-metric__label">Routes</span></div>
+<div class="gr-metric"><span class="gr-metric__value">{{.SpecificationDocumentCount}}</span><span class="gr-metric__label">OpenAPI/Swagger docs found</span></div>
 </div>
 <div class="gr-overview"><span class="gr-overview__label">Route authentication evidence across observed routes</span><div class="gr-evidence-rollup"><span class="gr-badge gr-badge--good">{{.Agg.Totals.Proven}} proven</span><span class="gr-badge gr-badge--warn">{{.Agg.Totals.Public}} public</span><span class="gr-badge gr-badge--warn">{{.Agg.Totals.Unknown}} unknown</span></div></div>
+<div class="gr-overview"><span class="gr-overview__label">OpenAPI/Swagger documentation coverage</span><div class="gr-evidence-rollup"><span class="gr-badge {{if .SpecificationRepositoriesCount}}gr-badge--good{{else}}gr-badge--warn{{end}}">{{.SpecificationCoverageText}} of successfully-scanned repositories carry at least one specification</span></div></div>
 {{if and (not .Agg.AuthConfig.MiddlewareCount) (not .TargetConfigCount) (not .TargetConfigDirCount) (not .Agg.Totals.Proven)}}<div class="gr-notice"><strong>No <code>authMiddleware</code> configured.</strong> Every route below defaults to <strong>public</strong> or <strong>unknown</strong>; Proven can only ever be non-zero once <code>--config</code> names the actual auth-middleware symbols these targets call.</div>{{end}}
 <section class="gr-panel gr-section-spacer" id="repositories">
 <h2 class="gr-panel__title">Repositories with observed routes <span class="gr-count">({{.WithRoutesCount}})</span></h2>
@@ -322,28 +324,31 @@ const fleetFilterJS = `
 // pre-computed status counts for the metrics row (html/template has no
 // convenient count-by-predicate of its own).
 type fleetHTMLData struct {
-	Agg                    *fleet.Aggregate
-	Delta                  *fleet.FleetDelta
-	Scope                  *fleet.Scope
-	RawDirLink             string // relative path from this page back to --out (docs/adr/0023-fleet-raw-rendered-split.md); plain string, auto-escaped like any other URL-context value
-	ThemeCSS               template.CSS
-	BrandMark              template.HTML
-	GitMark                template.HTML
-	FilterJS               template.JS
-	OKCount                int
-	FailedCount            int
-	InconclusiveCount      int
-	NotGoModuleCount       int
-	TargetConfigCount      int
-	TargetConfigDirCount   int
-	CompleteTargetCount    int
-	IncompleteTargetCount  int
-	RouteCompleteTargets   []fleetHTMLTarget
-	RouteIncompleteTargets []fleetHTMLTarget
-	ReferenceTargets       []fleetHTMLTarget
-	WithRoutesCount        int
-	ReferenceCount         int
-	DiscoveryOmitted       []fleet.RepositoryDisposition
+	Agg                            *fleet.Aggregate
+	Delta                          *fleet.FleetDelta
+	Scope                          *fleet.Scope
+	RawDirLink                     string // relative path from this page back to --out (docs/adr/0023-fleet-raw-rendered-split.md); plain string, auto-escaped like any other URL-context value
+	ThemeCSS                       template.CSS
+	BrandMark                      template.HTML
+	GitMark                        template.HTML
+	FilterJS                       template.JS
+	OKCount                        int
+	FailedCount                    int
+	InconclusiveCount              int
+	NotGoModuleCount               int
+	TargetConfigCount              int
+	TargetConfigDirCount           int
+	CompleteTargetCount            int
+	IncompleteTargetCount          int
+	RouteCompleteTargets           []fleetHTMLTarget
+	RouteIncompleteTargets         []fleetHTMLTarget
+	ReferenceTargets               []fleetHTMLTarget
+	WithRoutesCount                int
+	ReferenceCount                 int
+	DiscoveryOmitted               []fleet.RepositoryDisposition
+	SpecificationRepositoriesCount int
+	SpecificationDocumentCount     int
+	SpecificationCoverageText      string
 }
 
 type fleetHTMLTarget struct {
@@ -411,6 +416,25 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 		} else {
 			data.IncompleteTargetCount++
 		}
+		// Recomputed from each target's own already-decoded Specifications
+		// (never from agg.Specifications itself) so this stays correct even
+		// for an aggregate whose own rollup predates that field or was
+		// never refreshed — the same "derive from Targets, don't trust a
+		// possibly-stale aggregate-level field" posture every other count
+		// in this loop already follows.
+		hasSpecifications := false
+		for _, module := range t.Specifications {
+			if module.Catalog == nil {
+				continue
+			}
+			if n := len(module.Catalog.Specifications); n > 0 {
+				data.SpecificationDocumentCount += n
+				hasSpecifications = true
+			}
+		}
+		if hasSpecifications {
+			data.SpecificationRepositoriesCount++
+		}
 	}
 	groups := agg.RepositoryGroups
 	if groups == nil {
@@ -452,6 +476,11 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 	}
 	data.WithRoutesCount = len(data.RouteCompleteTargets) + len(data.RouteIncompleteTargets)
 	data.ReferenceCount = len(data.ReferenceTargets)
+	data.SpecificationCoverageText = metricText(model.DocumentationMetric{
+		Numerator:   data.SpecificationRepositoriesCount,
+		Denominator: data.OKCount,
+		Status:      "complete",
+	})
 	if scope != nil && scope.Discovery != nil {
 		for _, disposition := range scope.Discovery.Repositories {
 			if disposition.Status != "selected" {

@@ -498,6 +498,38 @@ func TestFleetHTMLRendersSavedSpecificationChooserAndSeparateMetrics(t *testing.
 	}
 }
 
+// TestFleetHTMLRendersAggregateSpecificationCoverage guards the fleet-wide
+// documentation-coverage enhancement: a reader must not have to iterate
+// every target's own per-module Specifications field by hand to learn how
+// many repositories in the fleet carry OpenAPI/Swagger documentation at
+// all. The count and percentage are recomputed from Targets directly (not
+// read from agg.Specifications) so this stays correct even for an aggregate
+// whose own rollup predates that field.
+func TestFleetHTMLRendersAggregateSpecificationCoverage(t *testing.T) {
+	withSpecs := &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{
+		{ID: "one", Path: "openapi.yaml", Dialect: "openapi3", Version: "3.1.0"},
+		{ID: "two", Path: "swagger.json", Dialect: "swagger2", Version: "2.0"},
+	}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "documented", Status: fleet.StatusOK, Complete: true, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/documented", Catalog: withSpecs}}},
+		{Name: "undocumented", Status: fleet.StatusOK, Complete: true},
+		{Name: "broken", Status: fleet.StatusFailed},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	for _, want := range []string{
+		`<span class="gr-metric__value">2</span><span class="gr-metric__label">OpenAPI/Swagger docs found</span>`,
+		"50.0% (1/2) of successfully-scanned repositories carry at least one specification",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q\n%s", want, html)
+		}
+	}
+}
+
 func TestFleetHTMLMissingDenominatorsAreNA(t *testing.T) {
 	catalog := &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{}, Metrics: model.DocumentationMetrics{SourceFiles: model.DocumentationMetric{Status: "unknown"}, ObservedOperations: model.DocumentationMetric{Status: "unknown"}}}
 	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "empty", Status: fleet.StatusOK, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/empty", Catalog: catalog}}}}}
