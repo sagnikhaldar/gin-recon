@@ -390,30 +390,26 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// toolVersion is 0.8.0: swaggo/swag annotation parsing goes well beyond
-// @Summary/@Description/@Tags/@Router/@Deprecated — @Param, @Success/
-// @Failure/@Response (real per-status response schemas), @Header, and
-// @Security are now recognized per-operation, alongside a second,
-// file-level parser for @title/@version/@host/@basePath/@schemes/
-// @tag.name and every @securityDefinitions.* variant (basic/apiKey/
-// oauth2 flows) — real security-scheme declarations, not just per-route
-// hints. A new internal/spec package adds a third, independent OpenAPI
-// evidence source: a bounded, read-only, offline walk of the repository
-// for already-committed OpenAPI 3.x/Swagger 2 JSON or YAML files,
-// cataloged and cross-referenced against the routes the analyzer itself
-// discovered — it never follows a remote reference, executes a
-// generator, or modifies a source spec. fleet.json also gains a
-// repositoryGroups index separating repositories with observed routes
-// from zero-route reference outcomes (complete Gin zero-route, unverified
-// zero-route, non-Gin Go, non-Go, failed, inconclusive), without changing
-// scan, resume, or coverage semantics; fleet.html presents the split as a
-// primary table plus a collapsible reference table with independent
-// filters. All of this is additive — schema major versions for both
-// report and fleet stay at 1.0. It is bumped from v0.7.0, whose release
-// fixed fleet's multi-module aggregation, suggest-auth's nameHint
-// false-positive, and added target-configs-draft/target-configs-snapshot.
+// toolVersion is 0.8.8, a batch of small, independently-coherent additions
+// and fixes on top of v0.8.0: fleet.json gains a repositoryStatus/
+// specifications rollup (target-status tallies and an org-wide spec-catalog
+// summary, both recomputed correctly by a stale render rather than left
+// zeroed); every api.html no longer shares one generic browser-tab title
+// across an entire fleet, instead showing that repository's own resolved
+// title, linked to its actual repository when the module path resolves to
+// a known public host (github.com/gitlab.com/bitbucket.org); the OpenAPI
+// HTML viewer gained deep linking (a stable per-operation URL fragment,
+// collision-disambiguated); fleet.html and routes.md/pretty output both
+// surface OpenAPI/Swagger documentation coverage — a document count and a
+// coverage percentage, fleet-wide and per-repository, where previously
+// none of this was visible outside a fleet context at all; and api.html
+// was restyled to share fleet.html's own design system (theme.go's
+// existing .gr-page/.gr-hero/.gr-filters/.gr-panel/.gr-badge classes)
+// instead of a separate, divergent set of ad-hoc ones, with fleet.html's
+// own output left provably byte-for-byte unaffected. All of this is
+// additive — schema major versions for both report and fleet stay at 1.0.
 const (
-	toolVersion              = "0.8.0"
+	toolVersion              = "0.8.8"
 	classifierRulesetVersion = "0.1.0"
 )
 
