@@ -38,6 +38,28 @@ func decodeDoc(t *testing.T, data []byte) document {
 	return doc
 }
 
+// TestRepoURLFrom guards api.html's repository link (html.go's HTML()): the
+// URL must resolve to a real, browsable repository root for a known public
+// host, truncate a monorepo module's subdirectory suffix rather than
+// linking a bare path segment no VCS host serves directly, and stay empty
+// for anything not confidently resolvable rather than guess.
+func TestRepoURLFrom(t *testing.T) {
+	cases := []struct{ module, want string }{
+		{"github.com/smallcase/las-be-flow", "https://github.com/smallcase/las-be-flow"},
+		{"github.com/smallcase/las-be-flow/internal/sub", "https://github.com/smallcase/las-be-flow"},
+		{"gitlab.com/group/project", "https://gitlab.com/group/project"},
+		{"bitbucket.org/team/repo", "https://bitbucket.org/team/repo"},
+		{"example.com/demo", ""},
+		{"github.com/only-org", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := repoURLFrom(c.module); got != c.want {
+			t.Errorf("repoURLFrom(%q) = %q, want %q", c.module, got, c.want)
+		}
+	}
+}
+
 func TestConvertGinPath(t *testing.T) {
 	cases := []struct {
 		in, wantPath string

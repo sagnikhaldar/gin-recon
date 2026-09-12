@@ -53,7 +53,14 @@ func HTML(rep *report.Report, cfg *config.Config) ([]byte, []model.Diagnostic, e
 		title = cfg.OpenAPI.Title
 	}
 
-	page := fmt.Sprintf(htmlPageTemplate, html.EscapeString(title), themeCSS, htmlViewerCSS, brandMarkHTML, html.EscapeString(rep.ToolVersion), escapeScriptClose(specJSON), htmlViewerJS)
+	// The page title is independent of the repository link: even a
+	// --config-overridden title still points at the real repository this
+	// report is actually about, derived straight from the module path
+	// (openapi.go's repoURLFrom), never from the (possibly unrelated)
+	// display title.
+	repoURL := repoURLFrom(rep.Target.Module)
+
+	page := fmt.Sprintf(htmlPageTemplate, html.EscapeString(title), themeCSS, htmlViewerCSS, brandMarkHTML, html.EscapeString(rep.ToolVersion), html.EscapeString(repoURL), escapeScriptClose(specJSON), htmlViewerJS)
 	return []byte(page), diags, nil
 }
 
@@ -85,7 +92,7 @@ const htmlPageTemplate = `<!doctype html>
 <div class="gr-page gr-site-header__inner"><span class="gr-brand">%s<span>gin-recon</span></span>
 <div class="gr-header-meta">Offline API evidence<br>gin-recon %s</div></div>
 </header>
-<div id="app" class="gr-page gr-main">Loading…</div>
+<div id="app" class="gr-page gr-main" data-repo-url="%s">Loading…</div>
 <script id="gin-recon-spec" type="application/json">%s</script>
 <script>%s</script>
 </body>
@@ -109,6 +116,8 @@ const htmlViewerCSS = `
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); }
+.gr-hero h1 a { color: inherit; text-decoration: none; }
+.gr-hero h1 a:hover { text-decoration: underline; }
 .gr-ops-list details.tag-group { border-top: 1px solid var(--border); }
 .gr-ops-list details.tag-group:first-child { border-top: none; }
 details.tag-group > summary { cursor: pointer; padding: 12px 16px; background: var(--gr-panel-muted); font-weight: 700; list-style: none; display: flex; justify-content: space-between; }
@@ -520,7 +529,14 @@ const htmlViewerJS = `
     app.textContent = "";
     var hero = el("div", { class: "gr-hero" });
     hero.appendChild(el("p", { class: "gr-eyebrow" }, "API documentation"));
-    hero.appendChild(el("h1", null, (spec.info && spec.info.title) || "API"));
+    var titleText = (spec.info && spec.info.title) || "API";
+    var h1 = el("h1");
+    if (app.dataset.repoUrl) {
+      h1.appendChild(el("a", { href: app.dataset.repoUrl, target: "_blank", rel: "noopener noreferrer" }, titleText));
+    } else {
+      h1.textContent = titleText;
+    }
+    hero.appendChild(h1);
     var pathCount = Object.keys(spec.paths || {}).length;
     hero.appendChild(el("p", { class: "gr-lede" },
       "OpenAPI " + spec.openapi + " · version " + ((spec.info && spec.info.version) || "") +

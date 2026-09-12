@@ -297,6 +297,50 @@ func TestHTMLViewerDisambiguatesCollidingOperationIDs(t *testing.T) {
 	}
 }
 
+// TestHTMLLinksTitleToRepository guards a real usability gap: the page
+// title was plain text even when the module path resolves to a real,
+// browsable repository — a reader had no one-click way to get from the
+// report to the actual source. The link target is independent of a
+// --config override of the display title (TestHTMLUsesConfiguredTitle);
+// both must be able to differ from each other correctly at once.
+func TestHTMLLinksTitleToRepository(t *testing.T) {
+	target := testTarget()
+	target.Module = "github.com/smallcase/las-be-flow"
+	rep := report.NewInventoryReport(model.ProfileTyped, target)
+	rep.Routes = []model.Route{routeAt("GET", "/health")}
+	rep.ScanCoverage = model.ScanCoverage{AnalyzedPackages: 1, AnalyzedFiles: 1, Complete: true}
+
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	out := string(data)
+	if !strings.Contains(out, `data-repo-url="https://github.com/smallcase/las-be-flow"`) {
+		t.Errorf("missing repo-url data attribute\n%s", out)
+	}
+	if !strings.Contains(out, `h1.appendChild(el("a", { href: app.dataset.repoUrl`) {
+		t.Errorf("viewer missing title-to-repository link wiring\n%s", out)
+	}
+}
+
+// TestHTMLOmitsRepositoryLinkForUnrecognizedHost confirms an unresolvable
+// module path (a private host, or fewer than host/owner/repo segments)
+// leaves the repo-url attribute empty rather than guessing a link.
+func TestHTMLOmitsRepositoryLinkForUnrecognizedHost(t *testing.T) {
+	target := testTarget()
+	target.Module = "example.com/demo"
+	rep := report.NewInventoryReport(model.ProfileTyped, target)
+	rep.ScanCoverage = model.ScanCoverage{AnalyzedPackages: 1, AnalyzedFiles: 1, Complete: true}
+
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	if !strings.Contains(string(data), `data-repo-url=""`) {
+		t.Errorf("expected an empty repo-url attribute for an unrecognized host; got:\n%s", data)
+	}
+}
+
 // TestHTMLTitleDiffersPerRepository guards against a real regression: every
 // api.html across an org-wide fleet scan once shared the same hardcoded
 // browser-tab title regardless of which repository it described, because

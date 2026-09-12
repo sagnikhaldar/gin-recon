@@ -463,6 +463,28 @@ func repoNameFrom(module string) string {
 	return module
 }
 
+// knownRepoHosts are the public VCS hosts repoURLFrom recognizes — deliberately
+// a short, explicit allowlist rather than "anything with enough slashes," so
+// an unrecognized or private host never produces a guessed, possibly-wrong link.
+var knownRepoHosts = map[string]bool{"github.com": true, "gitlab.com": true, "bitbucket.org": true}
+
+// repoURLFrom returns a module path's own repository URL — the first three
+// path segments (host/owner/repo) — when it's rooted at one of
+// knownRepoHosts, or "" otherwise. Same reasoning as repoNameFrom: gin-recon
+// has no git integration, so this is only ever a derivation from the module
+// path itself, never a claim verified against an actual remote. Truncated to
+// exactly host/owner/repo rather than the full module path so a module living
+// inside a monorepo subdirectory (module path "host/owner/repo/subdir")
+// still links to a real, browsable page — the repository root — instead of a
+// bare path segment no VCS host serves directly.
+func repoURLFrom(module string) string {
+	parts := strings.SplitN(module, "/", 4)
+	if len(parts) < 3 || !knownRepoHosts[parts[0]] {
+		return ""
+	}
+	return "https://" + parts[0] + "/" + parts[1] + "/" + parts[2]
+}
+
 // buildOperation converts one route into an OpenAPI operation and inserts
 // it into doc.Paths, or — when another route already registered the exact
 // same method+path — merges its evidence into that operation's
