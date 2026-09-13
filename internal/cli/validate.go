@@ -52,6 +52,19 @@ func Validate(opts *Options) error {
 		return nil
 	}
 
+	// import-review has no --src/--profile/--format/etc. of its own (see
+	// parseImportReview) — it runs no analysis and always emits exactly one
+	// JSON document.
+	if opts.Command == CommandImportReview {
+		if opts.BundlePath == "" {
+			return fmt.Errorf("--bundle is required")
+		}
+		if opts.AssessmentPath == "" {
+			return fmt.Errorf("--assessment is required")
+		}
+		return nil
+	}
+
 	// fleet has no --src/--profile/etc. of its own (see parseFleet) — each
 	// target supplies its own --src via the manifest, resolved later by
 	// internal/fleet, not here. Its --format/--out rules mirror audit's own;

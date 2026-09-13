@@ -11,6 +11,7 @@ tool yet.
   - [Common options](#common-options)
   - [Output and audit options](#output-and-audit-options)
   - [Render options](#render-options)
+  - [Import-review](#import-review)
   - [Precedence and validation](#precedence-and-validation)
 - [Configuration](#configuration)
   - [Format and validation](#format-and-validation)
@@ -41,6 +42,7 @@ The executable is `gin-recon <command> [options]`.
 - `schema`: emit the report, configuration, fleet, or fleet-delta JSON Schema.
 - `render`: re-run formatting only, over an already-produced report; never scans a source tree.
 - `fleet`: run `audit` once per target in a manifest, aggregating results with checkpointed resume.
+- `import-review`: turn a reviewer's own decisions about `suggest-auth`'s candidates into ready-to-copy `authMiddleware`/`authWrappers` config entries. Never scans a source tree — see [Import-review](#import-review) below.
 
 Exit `0` means successful with no requested gate, `1` means argument/configuration/operational failure, and `2` means an audit gate matched. Help and version requests exit `0`.
 
@@ -148,6 +150,16 @@ Without both, a `fleet` run's network reach is exactly what it always was: whate
 - When `--config` is given, its exact bytes are also copied to `<outDir>/config-snapshot.json` (or `.yaml`/`.yml`, matching the source file's own extension), refreshed every run alongside `discovered-targets.json` — not gated by `--force`. This is `--org`-only: a hand-written `--targets` manifest is expected to already sit next to its own version-controlled config, but an `--org` run's `--config` path is often external to the repo entirely, so revisiting that run's `fleet.json` later — after the original file has moved, changed, or been deleted — would otherwise leave no record of what config actually produced its classifications.
 - A discovered repository name that doesn't fit a target name (`^[A-Za-z0-9._-]+$`) is skipped with a warning, not a fatal error for the whole discovery.
 - The GitHub API call itself never follows a redirect — a redirected response is a hard failure, not silently retried against whatever host it names, since that would bypass `fleet.allowedRemoteHosts` entirely.
+
+### Import-review
+
+`import-review --bundle <suggestions.json> --assessment <assessment.json>` turns a reviewer's own decisions about `suggest-auth`'s candidates into ready-to-copy `authMiddleware`/`authWrappers` config entries — it never writes to a real `--config` file itself, and it never runs analysis (no `--src`, no source tree). Writes JSON to stdout unless `--out` is given, in which case it writes `<out>/review-suggestions.json` (`--force` required to overwrite).
+
+- `--bundle` is `suggest-auth`'s own JSON output, unmodified. Every candidate there already carries `id` (a stable identifier derived from its own canonical symbol), `fingerprint` (a SHA-256 of every field actually shown to a reviewer — routeCount, nameHint, enforcementShape, a bounded source excerpt, and more), and the document's own top-level `bundleFingerprint` (a SHA-256 over every candidate's own fingerprint).
+- `--assessment` is a JSON document a human or an AI reviewer writes: `{"schemaVersion": "1.0", "bundleFingerprint": "<copied from the bundle>", "decisions": [...]}`. Each decision names a `candidateId`/`candidateFingerprint` (copied from the exact candidate it assessed), `isAuthGuard` (the reviewer's own judgment — never derived from `nameHint` or `enforcementShape`), and — only when `isAuthGuard` is true — an `assurance` (`analyze` or `attested`, the same two config modes [Canonical symbols and assurance](#canonical-symbols-and-assurance) documents) plus optional `tags`/`roles`/`scopes`/`openapiScheme`/`transparentWrapper`. `rationale` is required on every decision, so a decision is never a bare yes/no a later reader has no way to check.
+- `import-review` rejects the whole assessment outright if `bundleFingerprint` does not match the bundle's own, and rejects an individual decision if its `candidateFingerprint` no longer matches that candidate's current one, or if it references a `candidateId` the bundle does not have — a decision made against different or since-changed evidence is refused, not silently applied.
+- Output is always `advisory: true` with an explicit notice that nothing was applied to any real configuration. `reviewedConfigSuggestions.authMiddleware`/`.authWrappers` is exactly the shape a reviewer copies into their own `--config`'s top-level fields — `import-review` validates that fragment against gin-recon's own config schema before ever returning it, so what it emits is always something `audit`/`fleet` would actually accept.
+- This still fully respects [ADR 0005](#canonical-symbols-and-assurance)'s separation of reviewer judgment from control-flow evidence: `isAuthGuard`/`assurance` are the reviewer's own claims, never derived from `nameHint` or `enforcementShape` by this command — those two remain `suggest-auth`'s own ranking signals only.
 
 ### Precedence and validation
 

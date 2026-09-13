@@ -273,6 +273,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runRender(opts, stdout, stderr)
 	case cli.CommandFleet:
 		return runFleet(opts, stdout, stderr)
+	case cli.CommandImportReview:
+		return runImportReview(opts, stdout, stderr)
 	default:
 		// Unreachable: cli.Parse rejects any other command before returning.
 		fmt.Fprintf(stderr, "gin-recon: internal error: unhandled command %q\n", opts.Command)
@@ -1015,5 +1017,6 @@ Usage:
   gin-recon schema [--kind report|config|fleet|fleet-delta]
   gin-recon render --report <routes.json> [options]
   gin-recon fleet (--targets <targets.json>|--org <name>|--repo <owner/name>) [options]
+  gin-recon import-review --bundle <suggestions.json> --assessment <assessment.json> [options]
 
 See docs/reference.md for the full option reference.`

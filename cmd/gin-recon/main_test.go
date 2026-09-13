@@ -18,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagnikhaldar/gin-recon/internal/analyzer"
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
+	"github.com/sagnikhaldar/gin-recon/internal/config"
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
 	"github.com/sagnikhaldar/gin-recon/internal/report"
@@ -141,6 +143,92 @@ func TestRunSuggestAuthWritesToOutDir(t *testing.T) {
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatalf("suggestions.json is not valid JSON: %v", err)
+	}
+}
+
+// TestRunImportReviewEndToEndAgainstRealSuggestAuthOutput exercises the full
+// pipeline: a real `suggest-auth` run's own JSON output (real IDs/
+// fingerprints, not invented ones) fed into `import-review` with an
+// approve-one/reject-one assessment, confirming the emitted advisory
+// suggestions document is correct and — the real point of the whole
+// feature — that its reviewedConfigSuggestions.authMiddleware fragment is
+// something a reviewer could paste directly into a real --config.
+func TestRunImportReviewEndToEndAgainstRealSuggestAuthOutput(t *testing.T) {
+	dir := fixtureDir(t, "mw-shape-signal")
+	suggestOut := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"suggest-auth", "--src", dir, "--out", suggestOut, "--allow-downloads"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("suggest-auth exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	bundlePath := filepath.Join(suggestOut, "suggestions.json")
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("reading suggestions.json: %v", err)
+	}
+	var bundle analyzer.SuggestAuthResult
+	if err := json.Unmarshal(bundleData, &bundle); err != nil {
+		t.Fatalf("decoding suggestions.json: %v", err)
+	}
+	var header, logger *analyzer.AuthCandidate
+	for i := range bundle.Candidates {
+		c := &bundle.Candidates[i]
+		switch {
+		case strings.HasSuffix(c.CanonicalSymbol, ".CheckHeaderPresence"):
+			header = c
+		case strings.HasSuffix(c.CanonicalSymbol, ".AuthLogger"):
+			logger = c
+		}
+	}
+	if header == nil || logger == nil {
+		t.Fatalf("expected both candidates in real suggest-auth output; got: %+v", bundle.Candidates)
+	}
+
+	assessment := analyzer.ReviewAssessment{
+		SchemaVersion:     "1.0",
+		BundleFingerprint: bundle.BundleFingerprint,
+		Decisions: []analyzer.CandidateDecision{
+			{CandidateID: header.ID, CandidateFingerprint: header.Fingerprint, IsAuthGuard: true, Assurance: config.AssuranceAnalyze, Rationale: "Aborts 403 without X-Internal header."},
+			{CandidateID: logger.ID, CandidateFingerprint: logger.Fingerprint, IsAuthGuard: false, Rationale: "Only sets a context value and calls Next."},
+		},
+	}
+	assessmentData, err := json.Marshal(assessment)
+	if err != nil {
+		t.Fatalf("marshaling assessment: %v", err)
+	}
+	assessmentPath := filepath.Join(t.TempDir(), "assessment.json")
+	if err := os.WriteFile(assessmentPath, assessmentData, 0o644); err != nil {
+		t.Fatalf("writing assessment.json: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"import-review", "--bundle", bundlePath, "--assessment", assessmentPath}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("import-review exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	var result analyzer.ReviewSuggestions
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("import-review output is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if !result.Advisory {
+		t.Error("Advisory = false, want true")
+	}
+	if result.Summary.ConfigSuggestions != 1 {
+		t.Errorf("Summary.ConfigSuggestions = %d, want 1", result.Summary.ConfigSuggestions)
+	}
+	entry, ok := result.ReviewedConfigSuggestions.AuthMiddleware[header.CanonicalSymbol]
+	if !ok {
+		t.Fatalf("authMiddleware missing %q", header.CanonicalSymbol)
+	}
+
+	// The real point: this fragment must be a config a real audit run
+	// would accept and act on unchanged.
+	realConfig := &config.Config{Version: 1, AuthMiddleware: map[string]config.AuthMiddlewareEntry{header.CanonicalSymbol: entry}}
+	if err := config.Validate(realConfig); err != nil {
+		t.Errorf("emitted config suggestion failed real config.Validate: %v", err)
 	}
 }
 

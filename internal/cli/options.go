@@ -15,12 +15,13 @@ import (
 type Command string
 
 const (
-	CommandInventory   Command = "inventory"
-	CommandAudit       Command = "audit"
-	CommandSuggestAuth Command = "suggest-auth"
-	CommandSchema      Command = "schema"
-	CommandRender      Command = "render"
-	CommandFleet       Command = "fleet"
+	CommandInventory    Command = "inventory"
+	CommandAudit        Command = "audit"
+	CommandSuggestAuth  Command = "suggest-auth"
+	CommandSchema       Command = "schema"
+	CommandRender       Command = "render"
+	CommandFleet        Command = "fleet"
+	CommandImportReview Command = "import-review"
 )
 
 // OutputFormat is one --format value. This is deliberately a separate type
@@ -92,6 +93,14 @@ type Options struct {
 	// runs analysis — it only ever reads the one file named by --report (and,
 	// if given, --config).
 	ReportPath string
+
+	// import-review only: --bundle names a suggest-auth JSON document (the
+	// evidence a reviewer assessed), --assessment names the reviewer's own
+	// decisions file. Like render, import-review runs no analysis of its
+	// own and has no --src/--profile/etc.; it reuses OutDir/Force above for
+	// where its own advisory suggestions document is written.
+	BundlePath     string
+	AssessmentPath string
 
 	// fleet only (docs/adr/0018-fleet-scanning.md): orchestrates one `audit`
 	// subprocess per target named in TargetsPath's manifest. Reuses

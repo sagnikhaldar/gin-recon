@@ -103,6 +103,18 @@ func TestValidateRenderDoesNotRequireSrcToExist(t *testing.T) {
 	mustParseAndValidate(t, "render", "--report=/tmp/routes.json")
 }
 
+func TestValidateImportReviewRequiresBundleAndAssessment(t *testing.T) {
+	expectValidateError(t, "--bundle is required", "import-review", "--assessment=/tmp/a.json")
+	expectValidateError(t, "--assessment is required", "import-review", "--bundle=/tmp/s.json")
+}
+
+// TestValidateImportReviewDoesNotRequireSrcToExist mirrors
+// TestValidateRenderDoesNotRequireSrcToExist: import-review has no --src of
+// its own, so a nonexistent path anywhere on the system is irrelevant to it.
+func TestValidateImportReviewDoesNotRequireSrcToExist(t *testing.T) {
+	mustParseAndValidate(t, "import-review", "--bundle=/tmp/s.json", "--assessment=/tmp/a.json")
+}
+
 func TestValidateRejectsNewOrRegressionWithoutBaseline(t *testing.T) {
 	dir := t.TempDir()
 	expectValidateError(t, "requires --baseline", "audit", "--src="+dir, "--fail-on=new")

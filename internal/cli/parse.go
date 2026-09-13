@@ -19,7 +19,7 @@ import (
 // checks, which are a separate concern from syntax.
 func Parse(args []string) (*Options, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("missing command: expected one of inventory, audit, suggest-auth, schema, render, fleet")
+		return nil, fmt.Errorf("missing command: expected one of inventory, audit, suggest-auth, schema, render, fleet, import-review")
 	}
 
 	cmd := Command(args[0])
@@ -34,10 +34,12 @@ func Parse(args []string) (*Options, error) {
 		return parseSchema(rest)
 	case CommandFleet:
 		return parseFleet(rest)
+	case CommandImportReview:
+		return parseImportReview(rest)
 	case "-h", "--help", "-help":
 		return nil, flag.ErrHelp
 	default:
-		return nil, fmt.Errorf("unknown command %q: expected one of inventory, audit, suggest-auth, schema, render, fleet", cmd)
+		return nil, fmt.Errorf("unknown command %q: expected one of inventory, audit, suggest-auth, schema, render, fleet, import-review", cmd)
 	}
 }
 
@@ -174,6 +176,37 @@ func parseRender(args []string) (*Options, error) {
 	if len(opts.Formats) == 0 {
 		opts.Formats = []OutputFormat{FormatPretty}
 	}
+
+	return opts, nil
+}
+
+// parseImportReview handles import-review: its only inputs are --bundle (a
+// suggest-auth JSON document) and --assessment (a reviewer's own decisions
+// file), plus --out/--force for where its own advisory suggestions document
+// is written (JSON to stdout when --out is omitted, the same convention
+// schema and suggest-auth already use). It registers no --src/--profile/
+// --format/etc. of its own — it runs no analysis and always emits exactly
+// one JSON document, never a choice of formats.
+func parseImportReview(args []string) (*Options, error) {
+	fs := flag.NewFlagSet(string(CommandImportReview), flag.ContinueOnError)
+	fs.SetOutput(discardWriter{})
+
+	opts := &Options{Command: CommandImportReview}
+
+	registerOnceString(fs, "bundle", &opts.BundlePath)
+	registerOnceString(fs, "assessment", &opts.AssessmentPath)
+	registerOnceString(fs, "out", &opts.OutDir)
+	registerOnceBool(fs, "force", &opts.Force)
+
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
+	if fs.NArg() > 0 {
+		return nil, fmt.Errorf("%s: unexpected positional argument %q", CommandImportReview, fs.Arg(0))
+	}
+
+	opts.ExplicitFlags = map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { opts.ExplicitFlags[f.Name] = true })
 
 	return opts, nil
 }

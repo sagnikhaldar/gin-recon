@@ -198,6 +198,33 @@ func TestParseRenderRejectsScanOnlyOption(t *testing.T) {
 	expectParseError(t, "flag provided but not defined", "render", "--report=/tmp/routes.json", "--src=/tmp")
 }
 
+func TestParseImportReviewAcceptsBundleAssessmentOutForce(t *testing.T) {
+	opts := mustParse(t, "import-review", "--bundle=/tmp/suggestions.json", "--assessment=/tmp/assessment.json", "--out=/tmp/out", "--force")
+	if opts.Command != CommandImportReview {
+		t.Errorf("Command = %v, want import-review", opts.Command)
+	}
+	if opts.BundlePath != "/tmp/suggestions.json" {
+		t.Errorf("BundlePath = %q, want /tmp/suggestions.json", opts.BundlePath)
+	}
+	if opts.AssessmentPath != "/tmp/assessment.json" {
+		t.Errorf("AssessmentPath = %q, want /tmp/assessment.json", opts.AssessmentPath)
+	}
+	if opts.OutDir != "/tmp/out" {
+		t.Errorf("OutDir = %q, want /tmp/out", opts.OutDir)
+	}
+	if !opts.Force {
+		t.Error("Force = false, want true")
+	}
+}
+
+// TestParseImportReviewRejectsScanOnlyOption confirms import-review has no
+// --src/--format/etc. of its own — it runs no analysis and always emits
+// exactly one JSON document.
+func TestParseImportReviewRejectsScanOnlyOption(t *testing.T) {
+	expectParseError(t, "flag provided but not defined", "import-review", "--bundle=/tmp/s.json", "--assessment=/tmp/a.json", "--src=/tmp")
+	expectParseError(t, "flag provided but not defined", "import-review", "--bundle=/tmp/s.json", "--assessment=/tmp/a.json", "--format=json")
+}
+
 func TestParseTagsSplitsOnComma(t *testing.T) {
 	opts := mustParse(t, "inventory", "--tags=integration,slow")
 	want := []string{"integration", "slow"}
