@@ -3,6 +3,7 @@ package analyzer
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/sagnikhaldar/gin-recon/internal/model"
@@ -149,6 +150,31 @@ func TestSuggestAuthKnownNonAuthDenylistDoesNotOverclaim(t *testing.T) {
 		if c.KnownNonAuth {
 			t.Errorf("candidate %s marked knownNonAuth, but this fixture defines no framework plumbing symbols", c.CanonicalSymbol)
 		}
+	}
+}
+
+// TestSuggestAuthExcerptIncludesDelegatedAbortBody guards a real evidence
+// gap in suggest-auth's own output (not just gin.EnforcementExcerpt in
+// isolation): a reviewer reading RequireAuthFactory's own candidate must see
+// the actual abort statement gin.AnalyzeEnforcement's confirmed-shape
+// verdict is based on, not just the delegating factory call — this fixture's
+// own doc comment says it "mirrors the real-world JWTMiddleware/
+// jwtMiddleware pattern exactly", the real production case that first
+// surfaced this gap.
+func TestSuggestAuthExcerptIncludesDelegatedAbortBody(t *testing.T) {
+	result := loadAndSuggestAuth(t, "enforcement-shapes")
+	candidate := candidateFor(result, ".RequireAuthFactory")
+	if candidate == nil {
+		t.Fatalf("RequireAuthFactory not found; candidates: %+v", result.Candidates)
+	}
+	if !strings.Contains(candidate.Excerpt, "func RequireAuthFactory(") {
+		t.Errorf("excerpt missing RequireAuthFactory's own declaration:\n%s", candidate.Excerpt)
+	}
+	if !strings.Contains(candidate.Excerpt, "func requireAuthImpl(") {
+		t.Errorf("excerpt missing the delegated requireAuthImpl declaration whose body actually aborts:\n%s", candidate.Excerpt)
+	}
+	if !strings.Contains(candidate.Excerpt, "AbortWithStatus") {
+		t.Errorf("excerpt missing the actual abort statement confirmed-shape is based on:\n%s", candidate.Excerpt)
 	}
 }
 

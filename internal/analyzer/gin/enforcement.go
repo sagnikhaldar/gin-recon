@@ -74,6 +74,92 @@ func AnalyzeEnforcement(funcIndex map[*types.Func]FuncInfo, api *API, fn *types.
 	return model.EnforcementUnresolved
 }
 
+// EnforcementExcerpt returns every function declaration AnalyzeEnforcement
+// itself actually visits to reach and evaluate fn's real per-request
+// analysis body, in visited order (fn's own declaration first). It exists
+// so a reviewer's own evidence (suggest-auth's excerpt) never shows less
+// than what the shape check itself verified. Two independent delegation
+// mechanisms AnalyzeEnforcement itself uses are both covered: resolveBody's
+// own factory-return delegation (an exported factory that returns another
+// named function's own literal — fn's declaration alone would show only
+// the delegating call, not the body whose control flow was actually
+// analyzed), and hasOneLevelDelegatedAbortShape's mid-body helper
+// delegation (a resolved body's own "if !helper(c) { return }" deny check —
+// fn's declaration alone would show the helper call, not the helper's own
+// abort). Mirrors resolveBody's/hasOneLevelDelegatedAbortShape's exact
+// branching rather than sharing their implementation, since their own
+// returns (an analysisBody, a bool) serve classification, not review
+// evidence.
+func EnforcementExcerpt(funcIndex map[*types.Func]FuncInfo, api *API, fn *types.Func) ([]*ast.FuncDecl, bool) {
+	decls, ok := resolveVisitedDecls(funcIndex, api, fn, 0)
+	if !ok {
+		return nil, false
+	}
+	body, ok := resolveBody(funcIndex, api, fn, 0)
+	if !ok {
+		return decls, true
+	}
+	for _, stmt := range body.stmts.List {
+		ifStmt, ok := stmt.(*ast.IfStmt)
+		if !ok || !isBareReturn(ifStmt.Body) {
+			continue
+		}
+		delegate := delegatedCall(body.info, ifStmt.Cond, body.ctxParam)
+		if delegate == nil || delegate.Pkg() == nil || body.pkg == nil || delegate.Pkg() != body.pkg {
+			continue
+		}
+		if delegateInfo, ok := funcIndex[delegate]; ok && delegateInfo.Decl != nil {
+			decls = append(decls, delegateInfo.Decl)
+		}
+	}
+	return decls, true
+}
+
+func resolveVisitedDecls(funcIndex map[*types.Func]FuncInfo, api *API, fn *types.Func, hops int) ([]*ast.FuncDecl, bool) {
+	fi, ok := funcIndex[fn]
+	if !ok || fi.Decl == nil || fi.Decl.Body == nil {
+		return nil, false
+	}
+	decls := []*ast.FuncDecl{fi.Decl}
+
+	if ctxParam := contextParamOf(fi.Decl.Type.Params, fi.Info, api); ctxParam != nil {
+		return decls, true
+	}
+
+	if hops >= maxFactoryHops+1 {
+		return nil, false
+	}
+	if !returnsHandlerFuncType(fi.Decl.Type, fi.Info, api) {
+		return nil, false
+	}
+	ret, ok := singleOwnReturn(fi.Decl.Body)
+	if !ok || len(ret.Results) != 1 {
+		return nil, false
+	}
+
+	switch result := ret.Results[0].(type) {
+	case *ast.FuncLit:
+		if contextParamOf(result.Type.Params, fi.Info, api) == nil {
+			return nil, false
+		}
+		// The literal is already printed inline within fi.Decl's own
+		// source — nothing further to collect.
+		return decls, true
+	case *ast.CallExpr:
+		delegate := resolveCalleeFuncFromExpr(fi.Info, result.Fun)
+		if delegate == nil || delegate.Pkg() == nil || delegate.Pkg() != fn.Pkg() {
+			return nil, false // cross-package factory delegation: unresolved by design
+		}
+		rest, ok := resolveVisitedDecls(funcIndex, api, delegate, hops+1)
+		if !ok {
+			return nil, false
+		}
+		return append(decls, rest...), true
+	default:
+		return nil, false
+	}
+}
+
 // resolveBody finds the actual per-request analysisBody for fn: either fn's
 // own body directly (if it takes *gin.Context itself), or — if fn instead
 // returns a gin.HandlerFunc-compatible value — the literal closure its

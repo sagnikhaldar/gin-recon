@@ -35,6 +35,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"go/ast"
 	"go/format"
 	"go/types"
 	"regexp"
@@ -58,13 +59,32 @@ const maxExcerptBytes = 4000
 // file — bounded to maxExcerptBytes. Returns "", false if fi carries no
 // declaration or formatting it fails for any reason (never fatal to
 // suggest-auth as a whole; a candidate simply carries no excerpt).
-func excerptFor(fi gin.FuncInfo) (string, bool) {
-	if fi.Decl == nil || fi.Fset == nil {
+func excerptFor(funcIndex map[*types.Func]gin.FuncInfo, api *gin.API, fn *types.Func) (string, bool) {
+	fi, ok := funcIndex[fn]
+	if !ok || fi.Decl == nil || fi.Fset == nil {
 		return "", false
 	}
+	// Prefer gin.EnforcementExcerpt's own delegation-aware decl list: for a
+	// factory that delegates to another named function (the common
+	// two-layer idiom — an exported factory returning an unexported
+	// implementation's own literal), fn's declaration alone would show only
+	// the delegating call, not the body whose control flow
+	// AnalyzeEnforcement actually examined. Falling back to fn's own single
+	// declaration keeps every candidate carrying at least some evidence
+	// even when delegation resolution itself fails (cross-package, too
+	// deep, or simply not a factory at all).
+	decls, ok := gin.EnforcementExcerpt(funcIndex, api, fn)
+	if !ok || len(decls) == 0 {
+		decls = []*ast.FuncDecl{fi.Decl}
+	}
 	var buf bytes.Buffer
-	if err := format.Node(&buf, fi.Fset, fi.Decl); err != nil {
-		return "", false
+	for i, decl := range decls {
+		if i > 0 {
+			buf.WriteString("\n\n")
+		}
+		if err := format.Node(&buf, fi.Fset, decl); err != nil {
+			return "", false
+		}
 	}
 	text := buf.String()
 	if len(text) > maxExcerptBytes {
@@ -286,7 +306,7 @@ func SuggestAuth(loaded *Loaded) *SuggestAuthResult {
 		var truncated bool
 		if fn, ok := symbolIndex[symbol]; ok {
 			shape = gin.AnalyzeEnforcement(funcIndex, api, fn)
-			excerpt, truncated = excerptFor(funcIndex[fn])
+			excerpt, truncated = excerptFor(funcIndex, api, fn)
 		}
 		routeCount := len(a.routes)
 		appliesToAll := totalRoutes > 0 && routeCount == totalRoutes
