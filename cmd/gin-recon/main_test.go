@@ -230,6 +230,68 @@ func TestRunImportReviewEndToEndAgainstRealSuggestAuthOutput(t *testing.T) {
 	if err := config.Validate(realConfig); err != nil {
 		t.Errorf("emitted config suggestion failed real config.Validate: %v", err)
 	}
+
+	// --out must also produce a second, standalone, directly --config-usable
+	// file — the point raised after the first version of this feature only
+	// ever nested the suggestion inside review-suggestions.json, still
+	// leaving a human to hand-assemble a real config document.
+	importOut := t.TempDir()
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"import-review", "--bundle", bundlePath, "--assessment", assessmentPath, "--out", importOut}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("import-review --out exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	reviewedConfigPath := filepath.Join(importOut, "reviewed-config.json")
+	reviewedConfigData, err := os.ReadFile(reviewedConfigPath)
+	if err != nil {
+		t.Fatalf("reviewed-config.json was not written: %v", err)
+	}
+	var reviewedConfig config.Config
+	if err := json.Unmarshal(reviewedConfigData, &reviewedConfig); err != nil {
+		t.Fatalf("reviewed-config.json is not valid JSON: %v", err)
+	}
+	if err := config.Validate(&reviewedConfig); err != nil {
+		t.Errorf("reviewed-config.json failed real config.Validate: %v", err)
+	}
+
+	// Full loop, fully automated this time: feed reviewed-config.json
+	// straight into a real audit run and confirm the approved candidate's
+	// own route is actually classified proven.
+	auditOut := t.TempDir()
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"audit", "--src", dir, "--config", reviewedConfigPath, "--format", "json", "--out", auditOut, "--allow-downloads"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("audit exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	auditData, err := os.ReadFile(filepath.Join(auditOut, "routes.json"))
+	if err != nil {
+		t.Fatalf("reading audit routes.json: %v", err)
+	}
+	var auditRep struct {
+		Routes []struct {
+			NormalizedPath string `json:"normalizedPath"`
+			Auth           *struct {
+				AuthStatus string `json:"authStatus"`
+			} `json:"auth"`
+		} `json:"routes"`
+	}
+	if err := json.Unmarshal(auditData, &auditRep); err != nil {
+		t.Fatalf("decoding audit routes.json: %v", err)
+	}
+	found := false
+	for _, r := range auditRep.Routes {
+		if r.NormalizedPath == "/admin/ping" {
+			found = true
+			if r.Auth == nil || r.Auth.AuthStatus != "proven" {
+				t.Errorf("/admin/ping authStatus = %+v, want proven", r.Auth)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("/admin/ping not found in audit output")
+	}
 }
 
 // fixtureDir resolves a testdata/fixtures/<name> directory regardless of the

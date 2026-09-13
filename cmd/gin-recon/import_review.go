@@ -1,9 +1,12 @@
 // import_review.go implements `import-review`: reads a suggest-auth JSON
 // bundle and a reviewer's own assessment file, validates the assessment
 // against the bundle's exact fingerprints, and writes analyzer.ImportReview's
-// advisory suggestions document. It never runs analysis of its own and never
-// writes to a real --config file — see analyzer.ImportReview's own doc
-// comment for the full ADR-0005 reasoning.
+// advisory suggestions document. When --out is given, it also writes a
+// second, standalone, directly --config-usable file (reviewed-config.json)
+// — the purely mechanical "make this a real config file" step, never merged
+// into any existing --config this command has no evidence about. It never
+// runs analysis of its own — see analyzer.ImportReview's own doc comment
+// for the full ADR-0005 reasoning behind what stays a human decision.
 package main
 
 import (
@@ -15,9 +18,14 @@ import (
 
 	"github.com/sagnikhaldar/gin-recon/internal/analyzer"
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
+	"github.com/sagnikhaldar/gin-recon/internal/config"
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
 	"github.com/sagnikhaldar/gin-recon/internal/report"
 )
+
+// reviewedConfigFilename is the standalone, directly --config-usable file
+// import-review writes alongside its own advisory suggestions document.
+const reviewedConfigFilename = "reviewed-config.json"
 
 func runImportReview(opts *cli.Options, stdout, stderr io.Writer) int {
 	bundleData, err := fleet.ReadBoundedFile(opts.BundlePath)
@@ -65,18 +73,43 @@ func runImportReview(opts *cli.Options, stdout, stderr io.Writer) int {
 		return cli.ExitSuccess
 	}
 
-	outPath := filepath.Join(opts.OutDir, "review-suggestions.json")
+	// A standalone, directly --config-usable file alongside the advisory
+	// suggestions document — the same authMiddleware/authWrappers entries,
+	// just wrapped as a real, valid gin-recon config on its own (version 1,
+	// nothing else). Never merged into any existing --config: a fresh file
+	// under this exact, fixed name, gated by --force like anything else
+	// import-review writes.
+	reviewedConfig := &config.Config{
+		Version:        1,
+		AuthMiddleware: result.ReviewedConfigSuggestions.AuthMiddleware,
+		AuthWrappers:   result.ReviewedConfigSuggestions.AuthWrappers,
+	}
+	configData, err := json.MarshalIndent(reviewedConfig, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	configData = append(configData, '\n')
+
+	suggestionsPath := filepath.Join(opts.OutDir, "review-suggestions.json")
+	configPath := filepath.Join(opts.OutDir, reviewedConfigFilename)
 	if !opts.Force {
-		if _, err := os.Stat(outPath); err == nil {
-			fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite\n", outPath)
-			return cli.ExitOperationalError
+		for _, p := range []string{suggestionsPath, configPath} {
+			if _, err := os.Stat(p); err == nil {
+				fmt.Fprintf(stderr, "gin-recon: %s already exists; pass --force to overwrite\n", p)
+				return cli.ExitOperationalError
+			}
 		}
 	}
 	if err := os.MkdirAll(opts.OutDir, 0o755); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}
-	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+	if err := os.WriteFile(suggestionsPath, data, 0o644); err != nil {
+		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
+		return cli.ExitOperationalError
+	}
+	if err := os.WriteFile(configPath, configData, 0o644); err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError
 	}

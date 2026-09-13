@@ -67,7 +67,13 @@ type ReviewSummary struct {
 
 // ReviewedConfigSuggestions is exactly the shape a reviewer copies into a
 // real --config file's own top-level authMiddleware/authWrappers fields —
-// never written there automatically.
+// never merged into an existing --config automatically, since that file may
+// already hold other entries or hand edits this package has no evidence
+// about. cmd/gin-recon's own import-review command does write it out as a
+// second, standalone, directly --config-usable file when --out is given
+// (never merged into anything existing) — the purely mechanical part of
+// "make this a real config file," as opposed to deciding what belongs in
+// one, which stays a human's decision entirely.
 type ReviewedConfigSuggestions struct {
 	AuthMiddleware map[string]config.AuthMiddlewareEntry `json:"authMiddleware,omitempty"`
 	AuthWrappers   []string                              `json:"authWrappers,omitempty"`
