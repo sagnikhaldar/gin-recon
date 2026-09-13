@@ -152,6 +152,49 @@ func TestSuggestAuthKnownNonAuthDenylistDoesNotOverclaim(t *testing.T) {
 	}
 }
 
+// TestSuggestAuthEnforcementShapeOutranksNameHintAlone guards the real new
+// capability EnforcementShape adds: a middleware whose own code has a
+// genuine, independently-verified direct-abort shape must rank ahead of a
+// name-hinted middleware whose code is provably a no-op — code-shape
+// evidence outranking a name pattern alone is exactly the point (see
+// suggest.go's package doc comment on why this stays a ranking signal, never
+// a classification one).
+func TestSuggestAuthEnforcementShapeOutranksNameHintAlone(t *testing.T) {
+	result := loadAndSuggestAuth(t, "mw-shape-signal")
+
+	header := candidateFor(result, ".CheckHeaderPresence")
+	logger := candidateFor(result, ".AuthLogger")
+	if header == nil || logger == nil {
+		t.Fatalf("expected both candidates; got: %+v", result.Candidates)
+	}
+
+	if header.NameHint {
+		t.Errorf("CheckHeaderPresence.NameHint = true, want false (its name matches no auth pattern)")
+	}
+	if header.EnforcementShape != model.EnforcementConfirmedShape {
+		t.Errorf("CheckHeaderPresence.EnforcementShape = %q, want %q", header.EnforcementShape, model.EnforcementConfirmedShape)
+	}
+	if !logger.NameHint {
+		t.Errorf("AuthLogger.NameHint = false, want true (its name matches \"auth\")")
+	}
+	if logger.EnforcementShape != model.EnforcementContradicted {
+		t.Errorf("AuthLogger.EnforcementShape = %q, want %q", logger.EnforcementShape, model.EnforcementContradicted)
+	}
+
+	headerIdx, loggerIdx := -1, -1
+	for i, c := range result.Candidates {
+		switch {
+		case hasSuffix(c.CanonicalSymbol, ".CheckHeaderPresence"):
+			headerIdx = i
+		case hasSuffix(c.CanonicalSymbol, ".AuthLogger"):
+			loggerIdx = i
+		}
+	}
+	if headerIdx >= loggerIdx {
+		t.Errorf("CheckHeaderPresence (confirmed-shape, no name hint, idx %d) must rank ahead of AuthLogger (name hint, contradicted, idx %d)", headerIdx, loggerIdx)
+	}
+}
+
 func hasSuffix(s, suffix string) bool {
 	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
 }

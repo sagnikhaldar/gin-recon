@@ -37,7 +37,7 @@ The executable is `gin-recon <command> [options]`.
 
 - `inventory`: emit route, middleware, source, coverage, and optional I/O evidence without security judgment.
 - `audit`: classify inventory, evaluate policies, compare an optional baseline, and emit findings.
-- `suggest-auth`: emit ranked canonical middleware candidates as JSON; suggestions never change classification.
+- `suggest-auth`: emit ranked canonical middleware candidates as JSON; suggestions never change classification. Ranking combines a name-pattern hint, route coverage, and — in the typed profile — the same independent control-flow shape check (`confirmed-shape`/`unresolved`/`contradicted`) audit's own classifier applies to a *configured* guard, run here against every candidate instead. A confirmed-shape result (the candidate's own code provably aborts under some condition) outranks a name hint alone, surfacing real guards a name-only heuristic would miss — but it is still only ever a ranking signal, never proof of authentication specifically: a rate limiter or input-validation middleware aborts under the exact same shape, so a human must still review and add a candidate to `--config` before it can affect classification at all.
 - `schema`: emit the report, configuration, fleet, or fleet-delta JSON Schema.
 - `render`: re-run formatting only, over an already-produced report; never scans a source tree.
 - `fleet`: run `audit` once per target in a manifest, aggregating results with checkpointed resume.

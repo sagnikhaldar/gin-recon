@@ -9,6 +9,7 @@ import (
 
 	"github.com/sagnikhaldar/gin-recon/internal/cli"
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
+	"github.com/sagnikhaldar/gin-recon/internal/model"
 )
 
 func writeFakeSuggestions(t *testing.T, path string, candidatesJSON string) {
@@ -118,6 +119,46 @@ func TestAggregateFleetAuthSuggestionsRanksNameHintBeforeRepoCount(t *testing.T)
 	}
 	if got.Candidates[1].CanonicalSymbol != "github.com/gin-contrib/cors.Default" {
 		t.Errorf("Candidates[1] = %q, want cors.Default ranked second", got.Candidates[1].CanonicalSymbol)
+	}
+}
+
+// TestAggregateFleetAuthSuggestionsRanksConfirmedShapeBeforeNameHintAlone
+// mirrors internal/analyzer's TestSuggestAuthEnforcementShapeOutranksNameHintAlone
+// at the fleet-aggregation level: a canonical symbol with a genuine,
+// independently-verified enforcementShape must outrank one that merely has
+// a name hint but was proven a no-op, and mergeEnforcementShape must keep
+// the strongest evidence found for the same symbol across repositories.
+func TestAggregateFleetAuthSuggestionsRanksConfirmedShapeBeforeNameHintAlone(t *testing.T) {
+	outDir := t.TempDir()
+	// CheckHeader has no name hint anywhere, but repo-b's typed profile
+	// resolved a genuine confirmed-shape while repo-a's did not (unresolved)
+	// — the merge must keep the stronger confirmed-shape evidence.
+	writeFakeSuggestions(t, filepath.Join(outDir, "targets", "repo-a", "suggestions.json"),
+		`{"canonicalSymbol":"github.com/acme/svc/internal/mw.CheckHeader","routeCount":1,"totalRoutes":5,"appliesToAllRoutes":false,"nameHint":false,"knownNonAuth":false,"sampleRoutes":["GET /x"]}`)
+	writeFakeSuggestions(t, filepath.Join(outDir, "targets", "repo-b", "suggestions.json"),
+		`{"canonicalSymbol":"github.com/acme/svc/internal/mw.CheckHeader","routeCount":1,"totalRoutes":5,"appliesToAllRoutes":false,"nameHint":false,"knownNonAuth":false,"enforcementShape":"confirmed-shape","sampleRoutes":["GET /y"]},`+
+			`{"canonicalSymbol":"github.com/acme/svc/internal/mw.AuthLogger","routeCount":5,"totalRoutes":5,"appliesToAllRoutes":true,"nameHint":true,"knownNonAuth":false,"enforcementShape":"contradicted","sampleRoutes":[]}`)
+
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "repo-a", Status: fleet.StatusOK, Complete: true, Report: filepath.Join("targets", "repo-a", "routes.json")},
+		{Name: "repo-b", Status: fleet.StatusOK, Complete: true, Report: filepath.Join("targets", "repo-b", "routes.json")},
+	}}
+
+	got, err := aggregateFleetAuthSuggestions(agg, outDir)
+	if err != nil {
+		t.Fatalf("aggregateFleetAuthSuggestions: %v", err)
+	}
+	if len(got.Candidates) != 2 {
+		t.Fatalf("Candidates = %+v, want exactly 2", got.Candidates)
+	}
+	if got.Candidates[0].CanonicalSymbol != "github.com/acme/svc/internal/mw.CheckHeader" {
+		t.Errorf("Candidates[0] = %q, want CheckHeader ranked first (confirmed-shape beats a name hint alone)", got.Candidates[0].CanonicalSymbol)
+	}
+	if got.Candidates[0].EnforcementShape != model.EnforcementConfirmedShape {
+		t.Errorf("CheckHeader.EnforcementShape = %q, want confirmed-shape (merged across repo-a's unresolved and repo-b's confirmed-shape)", got.Candidates[0].EnforcementShape)
+	}
+	if got.Candidates[1].CanonicalSymbol != "github.com/acme/svc/internal/mw.AuthLogger" {
+		t.Errorf("Candidates[1] = %q, want AuthLogger ranked second", got.Candidates[1].CanonicalSymbol)
 	}
 }
 

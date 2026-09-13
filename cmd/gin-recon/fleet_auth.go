@@ -18,6 +18,7 @@ import (
 
 	"github.com/sagnikhaldar/gin-recon/internal/analyzer"
 	"github.com/sagnikhaldar/gin-recon/internal/fleet"
+	"github.com/sagnikhaldar/gin-recon/internal/model"
 	"github.com/sagnikhaldar/gin-recon/internal/report"
 )
 
@@ -48,7 +49,41 @@ type FleetAuthCandidate struct {
 	RepoCountTotal  int      `json:"repoCountTotal,omitempty"` // set only when Repos was capped
 	NameHint        bool     `json:"nameHint"`
 	KnownNonAuth    bool     `json:"knownNonAuth"`
-	SampleRoutes    []string `json:"sampleRoutes"`
+	// EnforcementShape is the strongest gin.AnalyzeEnforcement result found
+	// for this canonical symbol across every contributing repository — see
+	// analyzer.AuthCandidate's own field for what this can and cannot mean.
+	// A truly shared canonical symbol (the same fully-qualified function
+	// from a shared internal package) should resolve identically everywhere
+	// it appears; mergeEnforcementShape only breaks a tie in favor of
+	// whichever repository's typed profile actually managed to resolve it.
+	EnforcementShape model.EnforcementAnalysis `json:"enforcementShape,omitempty"`
+	SampleRoutes     []string                  `json:"sampleRoutes"`
+}
+
+// mergeEnforcementShape keeps the strongest evidence found for the same
+// canonical symbol across repositories, using the same priority order
+// analyzer.confirmedShapeFirst already ranks by: a confirmed-shape result
+// found anywhere wins outright; failing that, a definitive contradicted
+// result is still more informative than an empty/unresolved one from a
+// repository whose typed profile simply never resolved the symbol.
+func mergeEnforcementShape(current, next model.EnforcementAnalysis) model.EnforcementAnalysis {
+	if enforcementShapeRank(next) < enforcementShapeRank(current) {
+		return next
+	}
+	return current
+}
+
+// enforcementShapeRank mirrors analyzer.confirmedShapeFirst's own priority
+// order — see mergeEnforcementShape and this file's own candidate sort.
+func enforcementShapeRank(s model.EnforcementAnalysis) int {
+	switch s {
+	case model.EnforcementConfirmedShape:
+		return 0
+	case model.EnforcementContradicted:
+		return 1
+	default:
+		return 2
+	}
 }
 
 // FleetAuthSuggestions is fleet-auth-candidates.json's shape.
@@ -71,13 +106,14 @@ type FleetAuthSuggestions struct {
 // that was never asked for, never an error for the aggregate as a whole.
 func aggregateFleetAuthSuggestions(agg *fleet.Aggregate, outDir string) (*FleetAuthSuggestions, error) {
 	type accumulator struct {
-		routeCount   int
-		repos        map[string]bool
-		repoOrder    []string
-		nameHint     bool
-		knownNonAuth bool
-		samples      map[string]bool
-		sampleOrder  []string
+		routeCount       int
+		repos            map[string]bool
+		repoOrder        []string
+		nameHint         bool
+		knownNonAuth     bool
+		enforcementShape model.EnforcementAnalysis
+		samples          map[string]bool
+		sampleOrder      []string
 	}
 	bySymbol := map[string]*accumulator{}
 	targetsScanned := 0
@@ -116,6 +152,7 @@ func aggregateFleetAuthSuggestions(agg *fleet.Aggregate, outDir string) (*FleetA
 				acc.routeCount += c.RouteCount
 				acc.nameHint = acc.nameHint || c.NameHint
 				acc.knownNonAuth = acc.knownNonAuth || c.KnownNonAuth
+				acc.enforcementShape = mergeEnforcementShape(acc.enforcementShape, c.EnforcementShape)
 				if !acc.repos[t.Name] {
 					acc.repos[t.Name] = true
 					acc.repoOrder = append(acc.repoOrder, t.Name)
@@ -149,14 +186,15 @@ func aggregateFleetAuthSuggestions(agg *fleet.Aggregate, outDir string) (*FleetA
 			samples = samples[:fleetAuthSampleCap]
 		}
 		candidates = append(candidates, FleetAuthCandidate{
-			CanonicalSymbol: symbol,
-			RouteCount:      acc.routeCount,
-			RepoCount:       len(acc.repoOrder),
-			Repos:           repos,
-			RepoCountTotal:  repoCountTotal,
-			NameHint:        acc.nameHint,
-			KnownNonAuth:    acc.knownNonAuth,
-			SampleRoutes:    samples,
+			CanonicalSymbol:  symbol,
+			RouteCount:       acc.routeCount,
+			RepoCount:        len(acc.repoOrder),
+			Repos:            repos,
+			RepoCountTotal:   repoCountTotal,
+			NameHint:         acc.nameHint,
+			KnownNonAuth:     acc.knownNonAuth,
+			EnforcementShape: acc.enforcementShape,
+			SampleRoutes:     samples,
 		})
 	}
 	// Mirrors analyzer.rankLess's own tier order (suggest.go) — NameHint and
@@ -170,6 +208,9 @@ func aggregateFleetAuthSuggestions(agg *fleet.Aggregate, outDir string) (*FleetA
 	// what to check first.
 	sort.Slice(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
+		if ra, rb := enforcementShapeRank(a.EnforcementShape), enforcementShapeRank(b.EnforcementShape); ra != rb {
+			return ra < rb
+		}
 		if a.NameHint != b.NameHint {
 			return a.NameHint
 		}

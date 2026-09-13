@@ -1,30 +1,43 @@
 // Package analyzer's SuggestAuth implements the `suggest-auth` command
 // (docs/reference.md: "emit ranked canonical middleware candidates as
-// JSON; suggestions never change classification"). It runs Inventory (never
+// JSON; suggestions never change classification"). It runs discovery (never
 // Audit — suggest-auth has no notion of a configured authMiddleware list to
 // classify against) and ranks every distinct, canonically-resolved
-// middleware symbol by two purely structural, self-contained signals: a
-// name-pattern hint, and whether it is applied to every route or only a
-// subset. Neither signal is a security judgment. Per docs/threat-model.md
-// ("never use the curated auth-middleware reference list to auto-promote a
-// route — it only ranks suggest-auth output") and docs/auth-catalog.md, a
-// governed, security-reviewed catalog of known Gin auth-adjacent middleware
-// is a separate, not-yet-built enhancement requiring its own two-person
-// review process with primary-source evidence per entry — this v1 ranking
-// deliberately does not fabricate one. knownNonAuthSymbols below is not that
-// catalog: it only ever suppresses the hint for a small set of well-known
-// framework/ecosystem plumbing with no auth semantics at all (Gin's own
-// Recovery/Logger, gin-contrib/cors, gin-contrib/gzip), which needs far less
-// evidentiary weight than affirmatively asserting something IS an auth
-// guard — getting that wrong only makes an obviously-non-auth symbol rank
-// slightly lower, never higher, and never creates or removes evidence.
+// middleware symbol by three purely structural, self-contained signals: a
+// name-pattern hint, whether it is applied to every route or only a subset,
+// and — when the typed profile resolved it to a real function — the same
+// independent control-flow shape check gin.AnalyzeEnforcement already
+// applies to a *configured* guard during classification (internal/classify),
+// run here against every candidate instead. None of the three is a security
+// judgment on its own: ADR-0005 ("Rejected Alternatives") is explicit that
+// "abort/control-flow heuristics cannot identify auth without a configured
+// symbol match" — a function that provably aborts under some condition may
+// be a rate limiter, a feature flag, or a maintenance-mode check just as
+// easily as an auth guard; EnforcementShape only ever ranks/informs a
+// suggestion a human still has to add to --config before ClassifyRoute can
+// ever call anything proven, it never classifies by itself. Per
+// docs/threat-model.md ("never use the curated auth-middleware reference
+// list to auto-promote a route — it only ranks suggest-auth output") and
+// docs/auth-catalog.md, a governed, security-reviewed catalog of known Gin
+// auth-adjacent middleware is a separate, not-yet-built enhancement
+// requiring its own two-person review process with primary-source evidence
+// per entry — this ranking deliberately does not fabricate one.
+// knownNonAuthSymbols below is not that catalog: it only ever suppresses the
+// hint for a small set of well-known framework/ecosystem plumbing with no
+// auth semantics at all (Gin's own Recovery/Logger, gin-contrib/cors,
+// gin-contrib/gzip), which needs far less evidentiary weight than
+// affirmatively asserting something IS an auth guard — getting that wrong
+// only makes an obviously-non-auth symbol rank slightly lower, never higher,
+// and never creates or removes evidence.
 package analyzer
 
 import (
+	"go/types"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/sagnikhaldar/gin-recon/internal/analyzer/gin"
 	"github.com/sagnikhaldar/gin-recon/internal/model"
 )
 
@@ -32,13 +45,20 @@ import (
 // across the inventory, ranked for a human/AI reviewer building an
 // authMiddleware allowlist — never itself authentication evidence.
 type AuthCandidate struct {
-	CanonicalSymbol    string   `json:"canonicalSymbol"`
-	RouteCount         int      `json:"routeCount"`
-	TotalRoutes        int      `json:"totalRoutes"`
-	AppliesToAllRoutes bool     `json:"appliesToAllRoutes"`
-	NameHint           bool     `json:"nameHint"`
-	KnownNonAuth       bool     `json:"knownNonAuth"`
-	SampleRoutes       []string `json:"sampleRoutes"`
+	CanonicalSymbol    string `json:"canonicalSymbol"`
+	RouteCount         int    `json:"routeCount"`
+	TotalRoutes        int    `json:"totalRoutes"`
+	AppliesToAllRoutes bool   `json:"appliesToAllRoutes"`
+	NameHint           bool   `json:"nameHint"`
+	KnownNonAuth       bool   `json:"knownNonAuth"`
+	// EnforcementShape is gin.AnalyzeEnforcement's own independent
+	// control-flow judgment of this candidate's resolved function body —
+	// empty when the typed profile could not resolve it to a real
+	// function (syntax-only profile, or a symbol the loader never saw a
+	// declaration for). See the package doc comment for why this can only
+	// ever inform ranking, never classification.
+	EnforcementShape model.EnforcementAnalysis `json:"enforcementShape,omitempty"`
+	SampleRoutes     []string                  `json:"sampleRoutes"`
 }
 
 // SuggestAuthResult is the whole `suggest-auth` JSON output.
@@ -100,7 +120,11 @@ var knownNonAuthSymbols = map[string]bool{
 // separately as OpaqueMiddleware rather than listed as a candidate a user
 // could not actually paste into configuration.
 func SuggestAuth(loaded *Loaded) *SuggestAuthResult {
-	result := Inventory(loaded)
+	result, api, funcIndex := discover(loaded)
+	var symbolIndex map[string]*types.Func
+	if api != nil {
+		symbolIndex = BuildSymbolIndex(funcIndex)
+	}
 
 	type acc struct {
 		routes map[string]bool
@@ -144,6 +168,10 @@ func SuggestAuth(loaded *Loaded) *SuggestAuthResult {
 		if len(samples) > 5 {
 			samples = samples[:5]
 		}
+		var shape model.EnforcementAnalysis
+		if fn, ok := symbolIndex[symbol]; ok {
+			shape = gin.AnalyzeEnforcement(funcIndex, api, fn)
+		}
 		candidates = append(candidates, AuthCandidate{
 			CanonicalSymbol:    symbol,
 			RouteCount:         len(a.routes),
@@ -151,6 +179,7 @@ func SuggestAuth(loaded *Loaded) *SuggestAuthResult {
 			AppliesToAllRoutes: totalRoutes > 0 && len(a.routes) == totalRoutes,
 			NameHint:           !knownNonAuthSymbols[symbol] && authNameHint.MatchString(authNameHintTarget(symbol)),
 			KnownNonAuth:       knownNonAuthSymbols[symbol],
+			EnforcementShape:   shape,
 			SampleRoutes:       samples,
 		})
 	}
@@ -170,7 +199,28 @@ func SuggestAuth(loaded *Loaded) *SuggestAuthResult {
 // routes is more often the interesting case than one applied everywhere,
 // which is more often session/logging/tracing plumbing), then by symbol for
 // full determinism.
+// confirmedShapeFirst orders EnforcementConfirmedShape ahead of everything
+// else (a real, independently-verified abort-under-some-condition shape is
+// stronger evidence than a name pattern alone), EnforcementContradicted
+// last (a provably abort-free function is positive evidence against being a
+// real guard, not neutral), and EnforcementUnresolved — by far the most
+// common case, everything the typed profile could not resolve at all —
+// exactly where it already ranked before this signal existed.
+func confirmedShapeFirst(shape model.EnforcementAnalysis) int {
+	switch shape {
+	case model.EnforcementConfirmedShape:
+		return 0
+	case model.EnforcementContradicted:
+		return 2
+	default:
+		return 1
+	}
+}
+
 func rankLess(a, b AuthCandidate) bool {
+	if ra, rb := confirmedShapeFirst(a.EnforcementShape), confirmedShapeFirst(b.EnforcementShape); ra != rb {
+		return ra < rb
+	}
 	if a.NameHint != b.NameHint {
 		return a.NameHint
 	}

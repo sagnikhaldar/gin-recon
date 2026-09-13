@@ -61,7 +61,7 @@ Exit code `2` means the requested gate matched: an expected policy result, not a
 | --- | --- |
 | `inventory` | Raw route, middleware, and source evidence. No security judgment. |
 | `audit` | Authentication classification, policy evaluation, findings, and baseline comparison (`--baseline`, `--fail-on new,regression`). |
-| `suggest-auth` | Ranked canonical middleware candidates to help write configuration. Never affects classification. |
+| `suggest-auth` | Ranked canonical middleware candidates to help write configuration. Ranking includes a code-shape check (does the candidate's own body provably abort under some condition?) alongside name hints and route coverage — still only ever a ranking signal, never affects classification. |
 | `render` | Regenerates any output format from an already-saved `routes.json`, with no re-analysis: no source tree, no network, and typically well under a second even on a large repository. |
 | `fleet` | Runs `audit` once per target listed in a manifest, one remote repository (`--repo`), or a whole GitHub organization (`--org`), aggregating results with bounded concurrency, checkpointed resume, and `--update` to skip unchanged repositories. Organization scans automatically populate an unreviewed per-repository queue under `target-configs-draft/` as each repository finishes; `--suggest-auth` opts manifest/repository scans into the same workflow. Drafts never affect classification. Reviewed `--target-config-dir` files remain separate and are snapshotted durably into `--out`. See [docs/reference.md](docs/reference.md#fleet-options) and the [scheduled org scan example](examples/github-actions/scheduled-org-scan.yml). |
 | `schema` | Emits the versioned report, configuration, fleet, or fleet-delta JSON Schema. |
