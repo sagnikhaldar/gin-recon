@@ -1,12 +1,15 @@
 // import_review.go implements `import-review`: reads a suggest-auth JSON
-// bundle and a reviewer's own assessment file, validates the assessment
-// against the bundle's exact fingerprints, and writes analyzer.ImportReview's
-// advisory suggestions document. When --out is given, it also writes a
-// second, standalone, directly --config-usable file (reviewed-config.json)
-// — the purely mechanical "make this a real config file" step, never merged
-// into any existing --config this command has no evidence about. It never
-// runs analysis of its own — see analyzer.ImportReview's own doc comment
-// for the full ADR-0005 reasoning behind what stays a human decision.
+// bundle and either a reviewer's own assessment file or, when --assessment
+// is omitted, gin-recon's own analyzer.DraftAssessment
+// (docs/adr/0042-static-analysis-drafts-assessments.md) — then validates
+// the assessment against the bundle's exact fingerprints and writes
+// analyzer.ImportReview's advisory suggestions document. When --out is
+// given, it also writes a second, standalone, directly --config-usable
+// file (reviewed-config.json) — the purely mechanical "make this a real
+// config file" step, never merged into any existing --config this command
+// has no evidence about. It never runs analysis of its own — see
+// analyzer.ImportReview's own doc comment for the full ADR-0005 reasoning
+// behind what stays a human/AI decision even when a draft covers the rest.
 package main
 
 import (
@@ -39,18 +42,27 @@ func runImportReview(opts *cli.Options, stdout, stderr io.Writer) int {
 		return cli.ExitOperationalError
 	}
 
-	assessmentData, err := fleet.ReadBoundedFile(opts.AssessmentPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "gin-recon: --assessment: %v\n", err)
-		return cli.ExitOperationalError
-	}
-	var assessment analyzer.ReviewAssessment
-	if err := json.Unmarshal(assessmentData, &assessment); err != nil {
-		fmt.Fprintf(stderr, "gin-recon: --assessment: decoding: %v\n", err)
-		return cli.ExitOperationalError
+	var assessment *analyzer.ReviewAssessment
+	if opts.AssessmentPath == "" {
+		// docs/adr/0042-static-analysis-drafts-assessments.md: no human/AI
+		// assessment was given, so gin-recon drafts one itself from the
+		// bundle's own combined static-analysis signals — a human or AI can
+		// still review, extend, or override this by passing --assessment.
+		assessment = analyzer.DraftAssessment(&bundle)
+	} else {
+		assessmentData, err := fleet.ReadBoundedFile(opts.AssessmentPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "gin-recon: --assessment: %v\n", err)
+			return cli.ExitOperationalError
+		}
+		assessment = &analyzer.ReviewAssessment{}
+		if err := json.Unmarshal(assessmentData, assessment); err != nil {
+			fmt.Fprintf(stderr, "gin-recon: --assessment: decoding: %v\n", err)
+			return cli.ExitOperationalError
+		}
 	}
 
-	result, err := analyzer.ImportReview(&bundle, &assessment)
+	result, err := analyzer.ImportReview(&bundle, assessment)
 	if err != nil {
 		fmt.Fprintf(stderr, "gin-recon: %v\n", err)
 		return cli.ExitOperationalError

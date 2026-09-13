@@ -294,6 +294,59 @@ func TestRunImportReviewEndToEndAgainstRealSuggestAuthOutput(t *testing.T) {
 	}
 }
 
+// TestRunImportReviewDraftsAssessmentWhenOmitted is
+// docs/adr/0042-static-analysis-drafts-assessments.md's own end-to-end
+// proof: with --assessment omitted entirely — no human or AI input at all
+// — import-review still produces a real, usable config suggestion for the
+// empirically-validated nameHint-and-confirmed-shape intersection, and its
+// rationale plainly says the decision was machine-drafted, never silently
+// presented as human-reviewed.
+func TestRunImportReviewDraftsAssessmentWhenOmitted(t *testing.T) {
+	dir := fixtureDir(t, "enforcement-shapes")
+	suggestOut := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"suggest-auth", "--src", dir, "--out", suggestOut, "--allow-downloads"}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("suggest-auth exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+	bundlePath := filepath.Join(suggestOut, "suggestions.json")
+
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{"import-review", "--bundle", bundlePath}, &stdout, &stderr)
+	if code != cli.ExitSuccess {
+		t.Fatalf("import-review (no --assessment) exit code = %d, want %d; stderr: %s", code, cli.ExitSuccess, stderr.String())
+	}
+
+	var result analyzer.ReviewSuggestions
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("import-review output is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if result.Summary.ConfigSuggestions == 0 {
+		t.Fatalf("Summary.ConfigSuggestions = 0, want at least one drafted from RequireAuthDirect/RequireAuthFactory")
+	}
+	wantSymbol := "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthDirect"
+	entry, ok := result.ReviewedConfigSuggestions.AuthMiddleware[wantSymbol]
+	if !ok {
+		t.Fatalf("authMiddleware missing %q (drafted with no human/AI assessment at all); got %+v", wantSymbol, result.ReviewedConfigSuggestions.AuthMiddleware)
+	}
+	if entry.Assurance != config.AssuranceAnalyze {
+		t.Errorf("Assurance = %q, want analyze", entry.Assurance)
+	}
+	for _, d := range result.Decisions {
+		if d.CanonicalSymbol == wantSymbol && !strings.Contains(d.Rationale, "Auto-drafted") {
+			t.Errorf("rationale for a drafted decision must say so plainly; got %q", d.Rationale)
+		}
+	}
+
+	// The emitted fragment must itself be a config a real audit run accepts.
+	realConfig := &config.Config{Version: 1, AuthMiddleware: result.ReviewedConfigSuggestions.AuthMiddleware}
+	if err := config.Validate(realConfig); err != nil {
+		t.Errorf("drafted config suggestions failed real config.Validate: %v", err)
+	}
+}
+
 // fixtureDir resolves a testdata/fixtures/<name> directory regardless of the
 // test binary's working directory, mirroring internal/analyzer's own
 // fixtureDir helper (unexported to that package, so duplicated here rather

@@ -22,6 +22,72 @@ func candidateBy(t *testing.T, bundle *SuggestAuthResult, suffix string) AuthCan
 	return AuthCandidate{}
 }
 
+// TestDraftAssessmentIncludesOnlyNameHintAndConfirmedShapeIntersection
+// guards docs/adr/0042-static-analysis-drafts-assessments.md's own boundary,
+// empirically validated across 39 real repositories: only the intersection
+// of NameHint and confirmed-shape is auto-drafted. RequireAuthDirect/
+// RequireAuthFactory (both name-hinted and confirmed-shape) must be
+// included; a confirmed-shape candidate with no name hint, and a
+// name-hinted candidate that is not confirmed-shape, must both be excluded
+// — the exact false-positive shapes (a validator, a provably-inert guard)
+// this boundary exists to keep out of an auto-generated assessment.
+func TestDraftAssessmentIncludesOnlyNameHintAndConfirmedShapeIntersection(t *testing.T) {
+	bundle := loadAndSuggestAuth(t, "enforcement-shapes")
+	assessment := DraftAssessment(bundle)
+
+	if assessment.BundleFingerprint != bundle.BundleFingerprint {
+		t.Errorf("BundleFingerprint = %q, want %q", assessment.BundleFingerprint, bundle.BundleFingerprint)
+	}
+
+	byID := make(map[string]AuthCandidate, len(bundle.Candidates))
+	for _, c := range bundle.Candidates {
+		byID[c.ID] = c
+	}
+	drafted := make(map[string]bool, len(assessment.Decisions))
+	for _, d := range assessment.Decisions {
+		if !d.IsAuthGuard || d.Assurance != config.AssuranceAnalyze || strings.TrimSpace(d.Rationale) == "" {
+			t.Errorf("decision for %q = %+v, want isAuthGuard:true assurance:analyze non-empty rationale", d.CandidateID, d)
+		}
+		drafted[byID[d.CandidateID].CanonicalSymbol] = true
+	}
+
+	for _, want := range []string{".RequireAuthDirect", ".RequireAuthFactory"} {
+		c := candidateFor(bundle, want)
+		if c == nil {
+			t.Fatalf("candidate %s not found", want)
+		}
+		if !drafted[c.CanonicalSymbol] {
+			t.Errorf("%s (nameHint=%v, shape=%q) should be drafted", want, c.NameHint, c.EnforcementShape)
+		}
+	}
+	// RequireAuthAlwaysPasses is name-hinted but contradicted (provably
+	// never aborts) — must never be drafted despite the name.
+	for _, avoid := range []string{".RequireAuthAlwaysPasses", ".RequireAuthCrossPackage"} {
+		c := candidateFor(bundle, avoid)
+		if c == nil {
+			t.Fatalf("candidate %s not found", avoid)
+		}
+		if drafted[c.CanonicalSymbol] {
+			t.Errorf("%s (nameHint=%v, shape=%q) must not be drafted", avoid, c.NameHint, c.EnforcementShape)
+		}
+	}
+}
+
+// TestDraftAssessmentExcludesConfirmedShapeWithoutNameHint guards the other
+// half of the same boundary using the real-world-mirroring mw-shape-signal
+// fixture: CheckHeaderPresence is a genuine confirmed-shape guard but has no
+// name hint at all (the exact shape BindAndValidate/ValidateUserFileUpload
+// took in the real use-be-api false positives) — it must never be
+// auto-drafted, only ever surfaced via suggest-auth's own ranking or ADR
+// 0041's unconfigured-guard finding for a human/AI to actually look at.
+func TestDraftAssessmentExcludesConfirmedShapeWithoutNameHint(t *testing.T) {
+	bundle := loadAndSuggestAuth(t, "mw-shape-signal")
+	assessment := DraftAssessment(bundle)
+	if len(assessment.Decisions) != 0 {
+		t.Errorf("Decisions = %+v, want none (neither candidate in this fixture is in the nameHint-and-confirmed-shape intersection)", assessment.Decisions)
+	}
+}
+
 func TestImportReviewEmitsConfigSuggestionForApprovedGuardOnly(t *testing.T) {
 	bundle := loadAndSuggestAuth(t, "mw-shape-signal")
 	header := candidateBy(t, bundle, ".CheckHeaderPresence")

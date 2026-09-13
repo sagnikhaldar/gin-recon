@@ -54,13 +54,13 @@ func Validate(opts *Options) error {
 
 	// import-review has no --src/--profile/--format/etc. of its own (see
 	// parseImportReview) — it runs no analysis and always emits exactly one
-	// JSON document.
+	// JSON document. --assessment is optional (docs/adr/0042-static-analysis-drafts-assessments.md):
+	// when omitted, gin-recon drafts one itself from the bundle's own
+	// combined static-analysis signals rather than requiring a human/AI
+	// to author one from a blank page first.
 	if opts.Command == CommandImportReview {
 		if opts.BundlePath == "" {
 			return fmt.Errorf("--bundle is required")
-		}
-		if opts.AssessmentPath == "" {
-			return fmt.Errorf("--assessment is required")
 		}
 		return nil
 	}

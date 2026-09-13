@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/sagnikhaldar/gin-recon/internal/config"
+	"github.com/sagnikhaldar/gin-recon/internal/model"
 )
 
 // ReviewAssessment is import-review's own input, alongside a
@@ -98,6 +99,46 @@ type ReviewSuggestions struct {
 }
 
 const reviewSuggestionsNotice = "These are untrusted advisory suggestions. gin-recon did not alter audit results or configuration; review each rationale and copy approved entries into --config explicitly."
+
+// draftRationale is copied verbatim into every DraftAssessment decision so
+// review-suggestions.json always makes plain, to any later reader, that
+// this particular entry was machine-generated, not human-attested — see
+// docs/adr/0042-static-analysis-drafts-assessments.md.
+const draftRationale = "Auto-drafted by gin-recon (docs/adr/0042-static-analysis-drafts-assessments.md): this candidate's own name matches a known auth-related pattern AND its control flow independently confirms an abort-under-some-condition shape — the intersection of two signals empirically validated across 39 real repositories with zero false positives, never either signal alone. Not human- or AI-verified; review before relying on this in production."
+
+// DraftAssessment generates a ReviewAssessment from bundle's own combined
+// static-analysis signals alone, with no human or AI input: for every
+// candidate where NameHint and EnforcementShape == confirmed-shape both
+// hold (which already implies !KnownNonAuth, since NameHint's own
+// computation excludes it), it drafts isAuthGuard: true, assurance:
+// analyze. Every other candidate — including the common case of
+// confirmed-shape with no name hint, where real production code was found
+// to be a validator or rate limiter just as often as a real guard — is
+// left out of the draft entirely, never defaulted either way; it remains
+// exactly what it already was: an unconfigured-guard finding awaiting real
+// review, or ordinary suggest-auth output. AI/human review stays fully
+// possible and is not replaced: import-review's own --assessment, when
+// given, is used exactly as before and can extend, override, or replace
+// anything DraftAssessment would have produced.
+func DraftAssessment(bundle *SuggestAuthResult) *ReviewAssessment {
+	assessment := &ReviewAssessment{
+		SchemaVersion:     "1.0",
+		BundleFingerprint: bundle.BundleFingerprint,
+	}
+	for _, c := range bundle.Candidates {
+		if !c.NameHint || c.EnforcementShape != model.EnforcementConfirmedShape {
+			continue
+		}
+		assessment.Decisions = append(assessment.Decisions, CandidateDecision{
+			CandidateID:          c.ID,
+			CandidateFingerprint: c.Fingerprint,
+			IsAuthGuard:          true,
+			Assurance:            config.AssuranceAnalyze,
+			Rationale:            draftRationale,
+		})
+	}
+	return assessment
+}
 
 // ImportReview validates assessment against bundle's own exact evidence —
 // every candidateId must exist in bundle, and every candidateFingerprint

@@ -103,9 +103,16 @@ func TestValidateRenderDoesNotRequireSrcToExist(t *testing.T) {
 	mustParseAndValidate(t, "render", "--report=/tmp/routes.json")
 }
 
-func TestValidateImportReviewRequiresBundleAndAssessment(t *testing.T) {
+func TestValidateImportReviewRequiresBundle(t *testing.T) {
 	expectValidateError(t, "--bundle is required", "import-review", "--assessment=/tmp/a.json")
-	expectValidateError(t, "--assessment is required", "import-review", "--bundle=/tmp/s.json")
+}
+
+// TestValidateImportReviewAssessmentIsOptional confirms
+// docs/adr/0042-static-analysis-drafts-assessments.md's own relaxation:
+// --assessment is no longer required — gin-recon drafts one itself from the
+// bundle's own static-analysis signals when it is omitted.
+func TestValidateImportReviewAssessmentIsOptional(t *testing.T) {
+	mustParseAndValidate(t, "import-review", "--bundle=/tmp/s.json")
 }
 
 // TestValidateImportReviewDoesNotRequireSrcToExist mirrors
