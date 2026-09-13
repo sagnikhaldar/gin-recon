@@ -295,10 +295,12 @@ Middleware entries contain a display name, canonical package symbol when resolve
 Audit routes use:
 
 - `proven`: at least one canonical configured guard matched and satisfied its configured assurance mode without contradictory enforcement evidence.
-- `public`: no configured guard matched and all relevant middleware evidence is resolved and non-opaque.
-- `unknown`: middleware, control flow, route propagation, or analysis evidence is opaque or incomplete.
+- `public`: no configured guard matched, all relevant middleware evidence is resolved and non-opaque, and no unconfigured middleware in the chain independently confirms an abort-under-some-condition shape (see ADR 0041 below).
+- `unknown`: middleware, control flow, route propagation, or analysis evidence is opaque or incomplete — or a real, resolved guard exists but has not yet been reviewed.
 
-Each classification includes `classificationBasis`, `assurance`, `enforcementAnalysis` (`confirmed-shape`, `unresolved`, or `contradicted`), matched evidence, confidence, tags, roles, and scopes. Under `analyze`, confirmed shape is required. Under `attested`, unresolved shape is allowed. Contradicted evidence always yields `unknown`. `proven` remains a reviewer-backed assertion, not formal verification.
+Each classification includes `classificationBasis`, `assurance`, `enforcementAnalysis` (`confirmed-shape`, `unresolved`, or `contradicted`), matched evidence, confidence, tags, roles, and scopes. Under `analyze`, confirmed shape is required. Under `attested`, unresolved shape is allowed. Contradicted evidence always yields `unknown`. `proven` remains a reviewer-backed assertion, not formal verification — it always requires a `--config`-named symbol; static analysis alone never manufactures it (ADR 0005), because the same abort-under-some-condition shape a real auth guard has is equally common in a rate limiter or an input validator, not just authentication.
+
+`docs/adr/0041-static-analysis-elevates-unknown.md` closes a real gap `proven`'s own requirement otherwise leaves open: a named, resolved, non-opaque middleware that is *not* configured used to be silently indistinguishable from no guard at all — a route with a real, unreviewed gate reported `public`, identical to a route with nothing at all. When such a middleware's own control flow independently confirms a genuine abort-under-some-condition shape (`gin.AnalyzeEnforcement`, the same check a configured guard already gets), the route is classified `unknown` (`classificationBasis: "unconfigured-guard-confirmed-shape"`, with `enforcementAnalysis`/`matchedEvidence` populated the same way a matched guard's are) instead of `public`, with a new `unconfigured-guard` finding naming the specific symbol. This is never a claim that the symbol is authentication — `suggest-auth`'s own `EnforcementShape` ranking signal is genuinely ambiguous evidence (a validator and an auth guard share the identical shape) — only that it deserves review before being trusted as absent. `suggest-auth` → `import-review` is the concrete next step for exactly this finding.
 
 Because `attested` plus `unresolved` proves a route on configuration alone, without confirmed control-flow evidence, `summary` reports `provenByConfirmedShape` and `provenByAttestedUnresolved` as separate counts rather than a single `proven` total. This keeps analyzer-confirmed enforcement distinguishable from reviewer-trusted enforcement at a glance, without requiring a consumer to scan per-route evidence.
 
@@ -306,7 +308,7 @@ An accepted-public entry keeps the route `public`, sets `accepted: true`, suppre
 
 ### Findings and policies
 
-Built-in findings include `public-route`, `opaque-middleware`, `matched-but-unenforced`, `stale-auth-config`, `per-verb-gap`, `stale-baseline`, `incomplete-analysis`, `gin-explicit-trust-all-proxies`, and `gin-explicit-debug-mode`. Configured policies emit `policy-violation` findings. Engine findings never alter route authentication.
+Built-in findings include `public-route`, `opaque-middleware`, `unconfigured-guard`, `matched-but-unenforced`, `stale-auth-config`, `per-verb-gap`, `stale-baseline`, `incomplete-analysis`, `gin-explicit-trust-all-proxies`, and `gin-explicit-debug-mode`. Configured policies emit `policy-violation` findings. Engine findings never alter route authentication.
 
 `stale-auth-config` fires once per configured `authMiddleware`/`authWrappers` canonical symbol that is never matched against any resolved call site in the scanned code, so a rename or removal in the target repository is visible as a distinct finding rather than surfacing only as routes silently becoming `unknown`. It is suppressed only when the profile is `syntax-only` and canonical resolution itself is unavailable, in which case the corresponding coverage diagnostic applies instead.
 

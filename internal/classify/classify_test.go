@@ -301,15 +301,19 @@ func TestStaleAuthConfigFindingSuppressedForSyntaxOnly(t *testing.T) {
 
 func TestPublicRouteFindingSuppressedByAcceptedPublic(t *testing.T) {
 	routes, api, funcIndex, symbolIndex := loadEnforcementShapesFixture(t)
-	cfg := &config.Config{Version: 1, AcceptedPublic: []string{"GET /confirmed/direct"}}
-	// Strip the config so /confirmed/direct has no matched guard at all,
-	// making it genuinely public (its middleware, RequireAuthDirect, is
-	// still named/resolved, so it is public, not unknown-via-opacity).
+	cfg := &config.Config{Version: 1, AcceptedPublic: []string{"GET /unresolved/cross-package"}}
+	// Strip the config so /unresolved/cross-package has no matched guard at
+	// all. Its own middleware, RequireAuthCrossPackage, is still named and
+	// resolved, but ADR 0008's bounded shape analysis does not follow
+	// cross-package delegation, so AnalyzeEnforcement returns Unresolved for
+	// it (not ConfirmedShape) — genuinely public, not unknown via ADR 0041's
+	// new unconfigured-guard-confirmed-shape signal, and not unknown via
+	// opacity either (it is named/resolved, just unresolved in shape).
 	in := Inputs{Config: cfg, API: api, FuncIndex: funcIndex, SymbolIndex: symbolIndex}
 
 	var route model.Route
 	for _, r := range routes {
-		if r.NormalizedPath == "/confirmed/direct" {
+		if r.NormalizedPath == "/unresolved/cross-package" {
 			route = r
 		}
 	}
@@ -322,6 +326,66 @@ func TestPublicRouteFindingSuppressedByAcceptedPublic(t *testing.T) {
 	}
 	if len(result.Findings) != 0 {
 		t.Errorf("expected no findings (accepted-public suppresses public-route), got: %+v", result.Findings)
+	}
+}
+
+// TestClassifyRouteElevatesUnconfiguredConfirmedShapeGuardToUnknown is
+// ADR 0041's own regression guard: RequireAuthDirect is a real, named,
+// resolved middleware whose own control flow AnalyzeEnforcement
+// independently confirms — but it is never named in authMiddleware here.
+// Before ADR 0041 this classified public, indistinguishable from a route
+// with no guard at all; it must now classify unknown with a distinct basis,
+// never proven (that still requires the configured symbol ADR 0005
+// establishes).
+func TestClassifyRouteElevatesUnconfiguredConfirmedShapeGuardToUnknown(t *testing.T) {
+	routes, api, funcIndex, symbolIndex := loadEnforcementShapesFixture(t)
+	in := Inputs{Config: &config.Config{Version: 1}, API: api, FuncIndex: funcIndex, SymbolIndex: symbolIndex}
+
+	var route model.Route
+	for _, r := range routes {
+		if r.NormalizedPath == "/confirmed/direct" {
+			route = r
+		}
+	}
+	result := ClassifyRoute(route, in)
+	if result.Auth.AuthStatus != model.AuthUnknown {
+		t.Fatalf("AuthStatus = %q, want unknown", result.Auth.AuthStatus)
+	}
+	if result.Auth.ClassificationBasis != "unconfigured-guard-confirmed-shape" {
+		t.Errorf("ClassificationBasis = %q, want unconfigured-guard-confirmed-shape", result.Auth.ClassificationBasis)
+	}
+	if result.Auth.EnforcementAnalysis == nil || *result.Auth.EnforcementAnalysis != model.EnforcementConfirmedShape {
+		t.Errorf("EnforcementAnalysis = %v, want confirmed-shape", result.Auth.EnforcementAnalysis)
+	}
+	wantSymbol := "gin-recon-fixtures/enforcement-shapes/shapes.RequireAuthDirect"
+	if result.Auth.MatchedEvidence == nil || *result.Auth.MatchedEvidence != wantSymbol {
+		t.Errorf("MatchedEvidence = %v, want %q", result.Auth.MatchedEvidence, wantSymbol)
+	}
+	if len(result.Findings) != 1 || result.Findings[0].RuleID != report.RuleUnconfiguredGuard {
+		t.Fatalf("Findings = %+v, want exactly one unconfigured-guard finding", result.Findings)
+	}
+}
+
+// TestClassifyRouteWithNoConfirmedShapeStaysPublic confirms ADR 0041 did not
+// widen "public" itself: a named, resolved middleware whose own shape is
+// Unresolved (not ConfirmedShape) — the overwhelmingly common real-world
+// case — still classifies exactly as before.
+func TestClassifyRouteWithNoConfirmedShapeStaysPublic(t *testing.T) {
+	routes, api, funcIndex, symbolIndex := loadEnforcementShapesFixture(t)
+	in := Inputs{Config: &config.Config{Version: 1}, API: api, FuncIndex: funcIndex, SymbolIndex: symbolIndex}
+
+	var route model.Route
+	for _, r := range routes {
+		if r.NormalizedPath == "/unresolved/cross-package" {
+			route = r
+		}
+	}
+	result := ClassifyRoute(route, in)
+	if result.Auth.AuthStatus != model.AuthPublic {
+		t.Fatalf("AuthStatus = %q, want public", result.Auth.AuthStatus)
+	}
+	if result.Auth.ClassificationBasis != "no-configured-guard-matched" {
+		t.Errorf("ClassificationBasis = %q, want no-configured-guard-matched", result.Auth.ClassificationBasis)
 	}
 }
 

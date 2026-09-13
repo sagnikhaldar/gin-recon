@@ -202,6 +202,13 @@ Findings to surface, in priority order:
   resolved middleware chain.
 - `opaque-middleware` (**medium**) — an anonymous or otherwise unresolved
   middleware could be hiding a real guard; read the source to judge.
+- `unconfigured-guard` (**medium**) — a named, resolved middleware in the
+  chain independently confirms an abort-under-some-condition shape (ADR
+  0041), but is not a configured `authMiddleware`/`authWrappers` entry —
+  never itself proof of authentication (a rate limiter or input validator
+  has the identical shape), but worth a real look: run `suggest-auth`,
+  review the named symbol, and `import-review` it into config if it is a
+  real guard.
 - `stale-auth-config` (**medium**) — a configured `authMiddleware` symbol was
   never matched anywhere in the scanned code (rename, move, or removal in
   the target repo).

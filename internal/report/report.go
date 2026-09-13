@@ -46,6 +46,7 @@ type RuleID string
 const (
 	RulePublicRoute          RuleID = "public-route"
 	RuleOpaqueMiddleware     RuleID = "opaque-middleware"
+	RuleUnconfiguredGuard    RuleID = "unconfigured-guard"
 	RuleMatchedButUnenforced RuleID = "matched-but-unenforced"
 	RuleStaleAuthConfig      RuleID = "stale-auth-config"
 	RulePerVerbGap           RuleID = "per-verb-gap"

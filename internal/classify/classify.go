@@ -78,6 +78,16 @@ type matchedGuard struct {
 func ClassifyRoute(route model.Route, in Inputs) Result {
 	var guards []matchedGuard
 	sawOpaque := false
+	// unconfirmedGuard is ADR 0041's own new signal: the first named,
+	// resolved, non-opaque middleware in the chain whose own control flow
+	// independently confirms an abort-under-some-condition shape, but that
+	// is not itself a configured authMiddleware/authWrappers entry. Only
+	// ever consulted when the route would otherwise fall all the way
+	// through to classifyUnmatched's "public" case — a route with any
+	// configured, matched guard already gets its verdict from that guard
+	// alone, per ADR 0005's own precedent that a route's classification
+	// basis is exactly one thing, not several signals blended together.
+	var unconfiguredGuard *string
 
 	for _, mw := range route.Middleware {
 		if isOpaque(mw) {
@@ -100,6 +110,14 @@ func ClassifyRoute(route model.Route, in Inputs) Result {
 		// only when the wrapper itself is on the list, so an arbitrary,
 		// unconfigured call's arguments never become evidence.
 		if !contains(in.Config.AuthWrappers, *mw.CanonicalSymbol) {
+			if unconfiguredGuard == nil && !isOpaque(mw) {
+				if fn, ok := in.SymbolIndex[*mw.CanonicalSymbol]; ok {
+					if gin.AnalyzeEnforcement(in.FuncIndex, in.API, fn) == model.EnforcementConfirmedShape {
+						symbol := *mw.CanonicalSymbol
+						unconfiguredGuard = &symbol
+					}
+				}
+			}
 			continue
 		}
 		for _, wrapped := range mw.WrappedSymbols {
@@ -111,7 +129,7 @@ func ClassifyRoute(route model.Route, in Inputs) Result {
 	}
 
 	if len(guards) == 0 {
-		return classifyUnmatched(route, sawOpaque, in)
+		return classifyUnmatched(route, sawOpaque, unconfiguredGuard, in)
 	}
 	return classifyMatched(route, guards, in)
 }
@@ -145,7 +163,7 @@ func contains(values []string, want string) bool {
 	return false
 }
 
-func classifyUnmatched(route model.Route, sawOpaque bool, in Inputs) Result {
+func classifyUnmatched(route model.Route, sawOpaque bool, unconfiguredGuard *string, in Inputs) Result {
 	if sawOpaque {
 		auth := model.AuthClassification{
 			AuthStatus:          model.AuthUnknown,
@@ -156,6 +174,31 @@ func classifyUnmatched(route model.Route, sawOpaque bool, in Inputs) Result {
 			newFinding(report.RuleOpaqueMiddleware, route, report.SeverityMedium,
 				"the route's middleware chain contains an unresolved or anonymous entry that could be hiding an authentication check",
 				"Name the middleware as a package-level function or method so it can be resolved, or configure it explicitly if it is a known guard."),
+		}}
+	}
+
+	// ADR 0041: a named, resolved middleware whose own control flow
+	// independently confirms an abort-under-some-condition shape is real
+	// evidence of a gate this analyzer can see — just not one a reviewer
+	// has confirmed is actually authentication (a rate limiter or input
+	// validator has the identical shape). Never proven from this alone,
+	// but also not silently folded into "public" as if no gate existed at
+	// all — acceptedPublic does not apply here, since a route in this
+	// state does not have "no guard," it has an unreviewed one.
+	if unconfiguredGuard != nil {
+		symbol := *unconfiguredGuard
+		enforcement := model.EnforcementConfirmedShape
+		auth := model.AuthClassification{
+			AuthStatus:          model.AuthUnknown,
+			ClassificationBasis: "unconfigured-guard-confirmed-shape",
+			EnforcementAnalysis: &enforcement,
+			MatchedEvidence:     &symbol,
+			Confidence:          model.ConfidenceMedium,
+		}
+		return Result{Auth: auth, Findings: []report.Finding{
+			newFinding(report.RuleUnconfiguredGuard, route, report.SeverityMedium,
+				"middleware \""+symbol+"\" is not a configured authMiddleware/authWrappers entry, but its own control flow independently confirms an abort-under-some-condition shape",
+				"Review \""+symbol+"\" (suggest-auth/import-review can help) and add it to authMiddleware if it is a real authentication guard."),
 		}}
 	}
 

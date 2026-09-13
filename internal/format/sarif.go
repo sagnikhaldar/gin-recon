@@ -112,6 +112,7 @@ type sarifDescriptor struct {
 var sarifRuleOrder = []report.RuleID{
 	report.RulePublicRoute,
 	report.RuleOpaqueMiddleware,
+	report.RuleUnconfiguredGuard,
 	report.RuleMatchedButUnenforced,
 	report.RuleStaleAuthConfig,
 	report.RulePerVerbGap,
@@ -147,6 +148,12 @@ var sarifRuleCatalog = map[report.RuleID]sarifRuleMeta{
 		short: "Route's middleware chain contains an unresolved entry",
 		full:  "The route's middleware chain contains an anonymous or otherwise unresolved entry that could be hiding an authentication check the analyzer cannot see.",
 		help:  "Name the middleware as a package-level function or method so it can be resolved, or configure it explicitly if it is a known guard.",
+		level: "warning",
+	},
+	report.RuleUnconfiguredGuard: {
+		short: "Route's middleware includes a confirmed-shape guard not in authMiddleware",
+		full:  "A named, resolved middleware in the route's chain independently confirms an abort-under-some-condition shape (ADR 0041), but is not a configured authMiddleware/authWrappers entry, so it cannot be proven authentication.",
+		help:  "Review this middleware (suggest-auth/import-review can help) and add it to authMiddleware if it is a real authentication guard.",
 		level: "warning",
 	},
 	report.RuleMatchedButUnenforced: {
