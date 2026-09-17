@@ -391,26 +391,50 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// toolVersion is 0.8.8, a batch of small, independently-coherent additions
-// and fixes on top of v0.8.0: fleet.json gains a repositoryStatus/
-// specifications rollup (target-status tallies and an org-wide spec-catalog
-// summary, both recomputed correctly by a stale render rather than left
-// zeroed); every api.html no longer shares one generic browser-tab title
-// across an entire fleet, instead showing that repository's own resolved
-// title, linked to its actual repository when the module path resolves to
-// a known public host (github.com/gitlab.com/bitbucket.org); the OpenAPI
-// HTML viewer gained deep linking (a stable per-operation URL fragment,
-// collision-disambiguated); fleet.html and routes.md/pretty output both
-// surface OpenAPI/Swagger documentation coverage — a document count and a
-// coverage percentage, fleet-wide and per-repository, where previously
-// none of this was visible outside a fleet context at all; and api.html
-// was restyled to share fleet.html's own design system (theme.go's
-// existing .gr-page/.gr-hero/.gr-filters/.gr-panel/.gr-badge classes)
-// instead of a separate, divergent set of ad-hoc ones, with fleet.html's
-// own output left provably byte-for-byte unaffected. All of this is
-// additive — schema major versions for both report and fleet stay at 1.0.
+// toolVersion is 0.9.0. v0.8.8 (tagged, released) covered a batch of small,
+// additive fleet/api.html fixes on top of v0.8.0. Since then, this release
+// adds real new capability, not just patches:
+//
+//   - suggest-auth ranks every candidate with the same independent
+//     control-flow shape check (gin.AnalyzeEnforcement) audit's classifier
+//     already applies to a configured guard — a confirmed-shape result
+//     outranks a name hint alone — and its own JSON output now carries a
+//     fingerprinted evidence bundle (id, fingerprint, a bounded source
+//     excerpt that follows the exact same delegation gin.AnalyzeEnforcement
+//     itself resolves, so a reviewer sees the actual abort logic, not just
+//     a one-line delegating factory).
+//   - The new import-review command turns a reviewer's (human or AI)
+//     per-candidate decisions into ready-to-copy authMiddleware/
+//     authWrappers config entries, validated against that bundle's exact
+//     fingerprints. Its own --assessment is optional: omitted, gin-recon
+//     drafts one itself for the empirically-validated (39 real
+//     repositories, zero false positives) intersection of a name hint and
+//     a confirmed-shape result (docs/adr/0042), leaving every other
+//     candidate unreviewed rather than guessed. With --out, it also writes
+//     a standalone, already-valid config file ready to pass straight to
+//     --config.
+//   - A named, resolved, non-opaque middleware with a genuinely
+//     confirmed-shape abort that is *not* a configured guard now
+//     classifies unknown instead of silently public
+//     (classificationBasis: unconfigured-guard-confirmed-shape, a new
+//     unconfigured-guard finding — docs/adr/0041). proven's own
+//     requirements are completely unchanged; this only stops an
+//     unreviewed real guard from being indistinguishable from no guard at
+//     all.
+//   - fleet.html's collapsed per-repository summary now shows a
+//     single-module repository's own observed-operation coverage
+//     percentage directly, without expanding it. Per-specification
+//     detail, catalog issues, and code-only/documentation-only/ambiguous-
+//     ownership operation lists moved out of fleet.html's own inert
+//     per-repository dropdown into a dedicated "Source specifications"
+//     section inside that module's own api.html, rendered as cards with
+//     method-colored chips, collapsible groups, and a live filter for
+//     large lists.
+//
+// All of this is additive — schema major versions for both report and
+// fleet stay at 1.0.
 const (
-	toolVersion              = "0.8.8"
+	toolVersion              = "0.9.0"
 	classifierRulesetVersion = "0.1.0"
 )
 
