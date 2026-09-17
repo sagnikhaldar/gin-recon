@@ -155,6 +155,21 @@ li.schema-field { margin: 5px 0; }
 .schema-desc { color: var(--muted); font-size: 12px; margin: 1px 0 0; }
 pre.example { background: var(--code-bg); border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 6px 0 0; }
 pre.example code { background: none; padding: 0; font-size: 12px; }
+.gr-spec-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:10px; margin:10px 0 4px; }
+.gr-spec-card { border:1px solid var(--border); border-radius:8px; padding:10px 12px; background:var(--code-bg); }
+.gr-spec-card__head { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+.gr-spec-card__title { font-weight:650; color:var(--fg); }
+.gr-spec-card .gr-src { font-size:12px; margin-top:2px; }
+.gr-mismatch { margin-top:16px; border-top:1px solid var(--border); padding-top:12px; }
+.gr-mismatch > summary { cursor:pointer; list-style:none; display:flex; align-items:center; gap:8px; font-weight:650; }
+.gr-mismatch > summary::-webkit-details-marker { display:none; }
+.gr-mismatch__body { margin-top:10px; }
+.gr-mismatch-filter { width:100%; max-width:320px; margin-bottom:8px; padding:5px 8px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--fg); font-size:13px; }
+.gr-mismatch-list { max-height:280px; overflow-y:auto; border:1px solid var(--border); border-radius:6px; }
+.gr-mismatch-row { display:flex; align-items:center; gap:10px; padding:6px 10px; border-bottom:1px solid var(--border); font-size:13px; }
+.gr-mismatch-row:last-child { border-bottom:none; }
+.gr-mismatch-row[hidden] { display:none; }
+.gr-mismatch-empty { padding:10px; color:var(--muted); font-size:13px; text-align:center; }
 @media (max-width:720px) {
   .op-row > summary { align-items:flex-start; flex-wrap:wrap; }
   .op-body { padding-left:16px; }
@@ -525,6 +540,153 @@ const htmlViewerJS = `
     return select;
   }
 
+  // metricText mirrors internal/format/fleet_html.go's own metricText
+  // exactly (same "N/A" / "X.X% (n/d)" / " · <status>" suffix rules), so a
+  // reader sees the same coverage number here as fleet.html's row already
+  // showed them — this is the same evidence, just with room to also show
+  // per-specification and per-operation detail fleet.html's own row has no
+  // space for.
+  function metricText(metric) {
+    if (!metric || !metric.denominator) return "N/A";
+    var value = (100 * metric.numerator / metric.denominator).toFixed(1) + "% (" + metric.numerator + "/" + metric.denominator + ")";
+    if (metric.status !== "complete") value += " · " + metric.status;
+    return value;
+  }
+
+  // methodChip mirrors opRow's own method badge (same "method <color>"
+  // class, same uppercase text) so a mismatch list reads with the exact
+  // same visual language as the Operations panel above it, rather than
+  // introducing a second, plainer convention for what is still "a method
+  // and a path".
+  function methodChip(method) {
+    var lower = (method || "").toLowerCase();
+    return el("span", { class: "method " + (["get", "post", "put", "patch", "delete"].indexOf(lower) >= 0 ? lower : "other") }, (method || "").toUpperCase());
+  }
+
+  // mismatchGroup renders one of the three code/documentation reconciliation
+  // buckets DocumentationMetrics carries — a real, previously
+  // entirely-unsurfaced signal (see specificationsSection's own doc
+  // comment). A flat, unstyled bullet list doesn't scale: a single real
+  // repository audited this session had 739 code-only operations, which as
+  // plain text would be an unreadable wall — so this is collapsed behind a
+  // <details> (open only when short enough to skim at a glance), with a
+  // live substring filter and a bounded, scrolling list, the same
+  // "collapse + filter" pattern the Operations panel above already uses for
+  // the same reason (many rows, one page).
+  function mismatchGroup(title, ops) {
+    if (!ops || !ops.length) return null;
+    var details = el("details", { class: "gr-mismatch" });
+    if (ops.length <= 15) details.open = true;
+    var summary = el("summary");
+    summary.appendChild(el("span", null, title));
+    summary.appendChild(el("span", { class: "gr-badge gr-badge--warn" }, String(ops.length)));
+    details.appendChild(summary);
+
+    var body = el("div", { class: "gr-mismatch__body" });
+    var filterInput = el("input", { type: "search", class: "gr-mismatch-filter", placeholder: "Filter by method or path…" });
+    var list = el("div", { class: "gr-mismatch-list" });
+    var empty = el("div", { class: "gr-mismatch-empty", hidden: "" }, "No operations match this filter.");
+    var rows = ops.map(function (op) {
+      var row = el("div", { class: "gr-mismatch-row" });
+      row.appendChild(methodChip(op.method));
+      row.appendChild(el("span", { class: "path" }, op.path));
+      row.dataset.search = (op.method + " " + op.path).toLowerCase();
+      return row;
+    });
+    rows.forEach(function (row) { list.appendChild(row); });
+    list.appendChild(empty);
+
+    if (ops.length > 8) body.appendChild(filterInput);
+    body.appendChild(list);
+    details.appendChild(body);
+
+    filterInput.addEventListener("input", function () {
+      var q = filterInput.value.trim().toLowerCase();
+      var visible = 0;
+      rows.forEach(function (row) {
+        var show = !q || row.dataset.search.indexOf(q) >= 0;
+        row.hidden = !show;
+        if (show) visible++;
+      });
+      empty.hidden = visible !== 0;
+    });
+
+    return details;
+  }
+
+  // specificationsSection renders x-gin-recon-source-specifications — the
+  // full model.SpecificationCatalog this report's audit already discovered
+  // (docs/openapi.md's swaggo/swag and pre-existing-document reconciliation
+  // sources) — as this document's own dedicated evidence section, rather
+  // than the inert per-repository dropdown fleet.html used to carry: a
+  // reviewer deciding whether a route's documentation is trustworthy needs
+  // exactly this detail (which file, whose authorship, what a specification
+  // claims that the code doesn't back up or vice versa), and api.html is
+  // where they're already looking at that route's other evidence. Returns
+  // null when the report carries no catalog at all (an inventory-only
+  // document, or a target whose --format never asked for openapi's source
+  // reconciliation), so the section is omitted rather than shown empty.
+  function specificationsSection() {
+    var catalog = spec["x-gin-recon-source-specifications"];
+    if (!catalog) return null;
+    var panel = el("section", { class: "gr-panel", id: "specifications" });
+    panel.appendChild(el("h2", { class: "gr-panel__title" }, "Source specifications"));
+    panel.appendChild(el("p", { class: "gr-lede" },
+      "Source files " + metricText(catalog.metrics && catalog.metrics.sourceFiles) +
+      " · observed API operations documented " + metricText(catalog.metrics && catalog.metrics.observedOperations) +
+      (catalog.metrics && catalog.metrics.incompleteScope ? " · incomplete scope" : "")));
+
+    var specifications = catalog.specifications || [];
+    if (specifications.length) {
+      var grid = el("div", { class: "gr-spec-grid" });
+      specifications.forEach(function (s) {
+        var card = el("div", { class: "gr-spec-card" });
+        var head = el("div", { class: "gr-spec-card__head" });
+        head.appendChild(el("span", { class: "gr-badge gr-badge--neutral" }, s.dialect + " " + s.version));
+        head.appendChild(el("span", { class: "gr-spec-card__title" }, s.title || "(untitled)"));
+        if (s.apiVersion) head.appendChild(el("span", { class: "gr-src" }, s.apiVersion));
+        card.appendChild(head);
+        card.appendChild(el("div", { class: "gr-src" }, s.path));
+        card.appendChild(el("div", { class: "gr-src" }, s.authorship + " · " + (s.operations || []).length + " operation(s)"));
+        grid.appendChild(card);
+      });
+      panel.appendChild(grid);
+    } else {
+      panel.appendChild(el("p", { class: "gr-empty" }, "No source specification discovered."));
+    }
+
+    if (catalog.issues && catalog.issues.length) {
+      var issuesDetails = el("details", { class: "gr-mismatch", open: "" });
+      var issuesSummary = el("summary");
+      issuesSummary.appendChild(el("span", null, "Catalog issues"));
+      issuesSummary.appendChild(el("span", { class: "gr-badge gr-badge--warn" }, String(catalog.issues.length)));
+      issuesDetails.appendChild(issuesSummary);
+      var issuesBody = el("div", { class: "gr-mismatch__body" });
+      var issuesList = el("div", { class: "gr-mismatch-list" });
+      catalog.issues.forEach(function (issue) {
+        var row = el("div", { class: "gr-mismatch-row" });
+        row.appendChild(el("code", null, issue.code));
+        row.appendChild(el("span", null, (issue.path ? issue.path + ": " : "") + issue.message));
+        issuesList.appendChild(row);
+      });
+      issuesBody.appendChild(issuesList);
+      issuesDetails.appendChild(issuesBody);
+      panel.appendChild(issuesDetails);
+    }
+
+    var metrics = catalog.metrics || {};
+    [
+      ["Code-only operations (observed in code, absent from the specification)", metrics.codeOnly],
+      ["Documentation-only operations (in the specification, not observed in code)", metrics.documentationOnly],
+      ["Ambiguous ownership (matched inconsistently between code and specification)", metrics.ambiguousOwnership],
+    ].forEach(function (pair) {
+      var group = mismatchGroup(pair[0], pair[1]);
+      if (group) panel.appendChild(group);
+    });
+
+    return panel;
+  }
+
   function render() {
     app.textContent = "";
     var hero = el("div", { class: "gr-hero" });
@@ -597,6 +759,9 @@ const htmlViewerJS = `
     opsList.appendChild(noMatches);
     panel.appendChild(opsList);
     app.appendChild(panel);
+
+    var specSection = specificationsSection();
+    if (specSection) app.appendChild(specSection);
 
     // Read the caveat from the spec's own info.description rather than
     // keeping a second hardcoded copy here — internal/format/openapi.go's

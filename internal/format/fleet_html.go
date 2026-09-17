@@ -147,7 +147,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <td class="gr-target"><code>{{.Name}}</code>{{if .TargetConfigDir}} <span class="gr-badge gr-badge--good" title="Used an operator-owned config from --target-config-dir, never sourced from this repository">own config (dir)</span>{{else if .TargetConfig}} <span class="gr-badge gr-badge--neutral" title="Used this target's own committed config instead of the fleet-wide --config">own config (repo)</span>{{end}}<br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}{{if .Inventory.Kind}} <span class="gr-src">&middot; {{.Inventory.Kind}}</span>{{end}}</td>
 <td><span class="gr-badge gr-badge--neutral">{{.CategoryLabel}}</span></td>
 <td>{{if eq .Status "ok"}}<span class="gr-badge gr-badge--good">{{.Status}}</span>{{else if eq .Status "failed"}}<span class="gr-badge gr-badge--bad">{{.Status}}</span>{{else}}<span class="gr-badge gr-badge--neutral">{{.Status}}</span>{{end}} {{if and .Complete (or (eq .Status "ok") (eq .Status "not-go-module"))}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}</td>
-<td>{{if .DocModules}}<details><summary>{{.DocsLabel}}</summary><div class="gr-evidence__body">{{range .DocModules}}<div><strong>{{.ModulePath}}</strong>: source files {{.SourceCoverage}}; observed API operations documented {{.OperationCoverage}}{{if .IncompleteScope}} <span class="gr-badge gr-badge--warn">incomplete scope</span>{{end}}</div>{{if .Specifications}}<div class="gr-src">{{len .Specifications}} specification{{if ne (len .Specifications) 1}}s{{end}} found</div><label>Specification <select>{{range .Specifications}}<option>{{.Title}} {{.APIVersion}} · {{.Dialect}} {{.Version}} · {{.Path}} · {{.Authorship}}</option>{{end}}</select></label>{{else}}<div class="gr-src">No source specification discovered.</div>{{end}}{{end}}</div></details>{{else}}<span class="gr-src">N/A</span>{{end}}</td>
+<td>{{if .DocModules}}<details><summary>{{.DocsLabel}}{{if eq (len .DocModules) 1}} · {{(index .DocModules 0).OperationCoverage}} documented{{end}}</summary><div class="gr-evidence__body">{{range .DocModules}}<div><strong>{{.ModulePath}}</strong>: source files {{.SourceCoverage}}; observed API operations documented {{.OperationCoverage}}{{if .IncompleteScope}} <span class="gr-badge gr-badge--warn">incomplete scope</span>{{end}}</div>{{if .Specifications}}<div class="gr-src">{{len .Specifications}} specification{{if ne (len .Specifications) 1}}s{{end}} found{{if .APIHTML}} — see <a href="{{.APIHTML}}#specifications">api.html</a> for source detail{{end}}</div>{{else}}<div class="gr-src">No source specification discovered.</div>{{end}}{{end}}</div></details>{{else}}<span class="gr-src">N/A</span>{{end}}</td>
 <td class="gr-evidence">{{if .APIHTML}}<a href="{{.APIHTML}}">Browse API</a>{{end}}<details><summary>Supporting evidence{{if .Error}} + error{{end}}</summary><div class="gr-evidence__body">{{if .Modules}}{{range .Modules}}<div><code>{{.Path}}</code>{{if .Kind}} <span class="gr-src">{{.Kind}}</span>{{end}} <span class="gr-evidence__links">{{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}}<a href="{{.APIHTML}}">api.html</a>{{end}}</span></div>{{end}}{{else}}<div class="gr-evidence__links">{{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}}<a href="{{.APIHTML}}">api.html</a>{{end}}</div>{{end}}{{if .Error}}<div class="gr-error">{{.Error}}</div>{{end}}</div></details></td>
 </tr>
 {{end}}</tbody>
@@ -160,7 +160,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <td>{{if eq .Status "ok"}}<span class="gr-badge gr-badge--good">{{.Status}}</span>{{else if eq .Status "failed"}}<span class="gr-badge gr-badge--bad">{{.Status}}</span>{{else}}<span class="gr-badge gr-badge--neutral">{{.Status}}</span>{{end}} {{if eq .AuditGroup "complete"}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}</td>
 <td class="gr-num">{{.Routes}}</td>
 <td class="gr-auth-counts"><span><span class="gr-badge gr-badge--good">{{.Proven}}</span> proven</span><span><span class="gr-badge gr-badge--warn">{{.Public}}</span> public</span><span><span class="gr-badge gr-badge--warn">{{.Unknown}}</span> unknown</span></td>
-<td>{{if .DocModules}}<details><summary>{{.DocsLabel}}</summary><div class="gr-evidence__body">{{range .DocModules}}<div><strong>{{.ModulePath}}</strong>: source files {{.SourceCoverage}}; observed API operations documented {{.OperationCoverage}}{{if .IncompleteScope}} <span class="gr-badge gr-badge--warn">incomplete scope</span>{{end}}</div>{{if .Specifications}}<div class="gr-src">{{len .Specifications}} specification{{if ne (len .Specifications) 1}}s{{end}} found</div><label>Specification <select>{{range .Specifications}}<option>{{.Title}} {{.APIVersion}} · {{.Dialect}} {{.Version}} · {{$.Name}}/{{.Path}} · {{.Authorship}}</option>{{end}}</select></label>{{else}}<div class="gr-src">No source specification discovered.</div>{{end}}{{end}}</div></details>{{else}}<span class="gr-src">N/A</span>{{end}}</td>
+<td>{{if .DocModules}}<details><summary>{{.DocsLabel}}{{if eq (len .DocModules) 1}} · {{(index .DocModules 0).OperationCoverage}} documented{{end}}</summary><div class="gr-evidence__body">{{range .DocModules}}<div><strong>{{.ModulePath}}</strong>: source files {{.SourceCoverage}}; observed API operations documented {{.OperationCoverage}}{{if .IncompleteScope}} <span class="gr-badge gr-badge--warn">incomplete scope</span>{{end}}</div>{{if .Specifications}}<div class="gr-src">{{len .Specifications}} specification{{if ne (len .Specifications) 1}}s{{end}} found{{if .APIHTML}} — see <a href="{{.APIHTML}}#specifications">api.html</a> for source detail{{end}}</div>{{else}}<div class="gr-src">No source specification discovered.</div>{{end}}{{end}}</div></details>{{else}}<span class="gr-src">N/A</span>{{end}}</td>
 <td class="gr-evidence">{{if .APIHTML}}<a href="{{.APIHTML}}">Browse API</a>{{end}}<details><summary>Supporting evidence{{if .Error}} + error{{end}}</summary><div class="gr-evidence__body">{{if .Modules}}{{range .Modules}}<div><code>{{.Path}}</code>{{if .Kind}} <span class="gr-src">{{.Kind}}</span>{{end}} <span class="gr-evidence__links">{{if .Report}}<a href="{{$.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}}<a href="{{.APIHTML}}">api.html</a>{{end}}</span></div>{{end}}{{else}}<div class="gr-evidence__links">{{if .Report}}<a href="{{.RawDirLink}}/{{.Report}}">routes.json</a>{{end}}{{if .APIHTML}}<a href="{{.APIHTML}}">api.html</a>{{end}}</div>{{end}}{{if .Error}}<div class="gr-error">{{.Error}}</div>{{end}}</div></details></td>
 </tr>{{end}}
 {{if .Delta}}
@@ -370,6 +370,15 @@ type fleetHTMLDocumentation struct {
 	OperationCoverage string
 	IncompleteScope   bool
 	Specifications    []model.SpecificationRecord
+	// APIHTML is this module's own rendered api.html link (relative to the
+	// fleet HTML root), the same path fleet.ModuleResult.APIHTML already
+	// carries. Set only when this module's own --format included openapi.
+	// Per-specification detail (title/version/dialect/authorship, plus
+	// the source-catalog issues and code/documentation-only operation
+	// lists api.html's own "Source specifications" section renders) lives
+	// there instead of being duplicated into a second, inert copy here —
+	// fleet.html only needs to say how many were found and point at it.
+	APIHTML string
 }
 
 // FleetHTML renders agg (and, when given, delta/scope) as the browsable
@@ -498,9 +507,13 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 
 func decorateFleetDocumentation(view *fleetHTMLTarget) {
 	view.Framework = "go"
+	moduleAPIHTML := make(map[string]string, len(view.Modules))
 	for _, module := range view.Modules {
 		if module.Kind == fleet.ModuleGinApplication || module.Kind == fleet.ModuleGinNoRoutes {
 			view.Framework = "gin"
+		}
+		if module.APIHTML != "" {
+			moduleAPIHTML[module.ID] = module.APIHTML
 		}
 	}
 	if view.Routes > 0 {
@@ -515,7 +528,7 @@ func decorateFleetDocumentation(view *fleetHTMLTarget) {
 		if scoped.Catalog.Status != "complete" {
 			unavailable = true
 		}
-		entry := fleetHTMLDocumentation{ModulePath: scoped.ModulePath, SourceCoverage: metricText(scoped.Catalog.Metrics.SourceFiles), OperationCoverage: metricText(scoped.Catalog.Metrics.ObservedOperations), IncompleteScope: scoped.Catalog.Metrics.IncompleteScope, Specifications: scoped.Catalog.Specifications}
+		entry := fleetHTMLDocumentation{ModulePath: scoped.ModulePath, SourceCoverage: metricText(scoped.Catalog.Metrics.SourceFiles), OperationCoverage: metricText(scoped.Catalog.Metrics.ObservedOperations), IncompleteScope: scoped.Catalog.Metrics.IncompleteScope, Specifications: scoped.Catalog.Specifications, APIHTML: moduleAPIHTML[scoped.ModuleID]}
 		if entry.ModulePath == "" {
 			entry.ModulePath = scoped.ModuleID
 		}

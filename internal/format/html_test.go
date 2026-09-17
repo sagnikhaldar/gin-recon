@@ -420,3 +420,76 @@ func TestEscapeScriptCloseNeutralizesClosingSequence(t *testing.T) {
 		t.Errorf("expected the escaped form <\\/script>, got: %s", got)
 	}
 }
+
+// TestHTMLRendersSourceSpecificationsSection guards the fleet.html→api.html
+// migration: per-specification detail (title/version/dialect/authorship)
+// that used to live only inside fleet.html's inert per-repository <select>
+// dropdown — nothing in fleet.html ever read the chooser's selection — now
+// has a dedicated "Source specifications" section inside api.html itself,
+// built from the same x-gin-recon-source-specifications catalog OpenAPI
+// already embeds. It also surfaces catalog issues and the
+// code-only/documentation-only/ambiguous-ownership operation-mismatch
+// lists, none of which were rendered anywhere in either page before this
+// change.
+func TestHTMLRendersSourceSpecificationsSection(t *testing.T) {
+	rep := inventoryWithRoutes(routeAt("GET", "/users/:id"))
+	rep.Specifications = &model.SpecificationCatalog{
+		Status: "complete",
+		Specifications: []model.SpecificationRecord{{
+			ID: "one", Path: "api/openapi.yaml", Dialect: "openapi3", Version: "3.1.0",
+			Title: "Payments", APIVersion: "v2", Authorship: "authored",
+			Operations: []model.SpecificationOperation{{Method: "GET", Path: "/users/{id}"}},
+		}},
+		Issues: []model.SpecificationIssue{{Code: "duplicate-operation-id", Path: "api/openapi.yaml", Message: "operationId reused"}},
+		Metrics: model.DocumentationMetrics{
+			SourceFiles:        model.DocumentationMetric{Numerator: 1, Denominator: 1, Status: "complete"},
+			ObservedOperations: model.DocumentationMetric{Numerator: 1, Denominator: 2, Status: "complete"},
+			CodeOnly:           []model.SpecificationOperation{{Method: "POST", Path: "/users"}},
+			DocumentationOnly:  []model.SpecificationOperation{{Method: "DELETE", Path: "/users/{id}"}},
+			AmbiguousOwnership: []model.SpecificationOperation{{Method: "PATCH", Path: "/users/{id}"}},
+		},
+	}
+
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`id: "specifications"`,
+		`if (specSection) app.appendChild(specSection)`,
+		`"x-gin-recon-source-specifications"`,
+		`"Payments"`,
+		`"duplicate-operation-id"`,
+		"Code-only operations",
+		"Documentation-only operations",
+		"Ambiguous ownership",
+		`class: "gr-spec-card"`,
+		`row.appendChild(methodChip(op.method))`,
+		`class: "gr-mismatch-filter"`,
+		`filterInput.addEventListener("input", function ()`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "<select>") {
+		t.Errorf("source specification detail must not be rendered as a dropdown\n%s", out)
+	}
+}
+
+// TestHTMLOmitsSourceSpecificationsExtensionWhenAbsent is the companion
+// guard: a report with no specification catalog at all (the common case —
+// most audits never discover an OpenAPI/Swagger source document) must not
+// carry the extension key, so specificationsSection's own null check has
+// something real to distinguish "not discovered" from "discovered, empty".
+func TestHTMLOmitsSourceSpecificationsExtensionWhenAbsent(t *testing.T) {
+	rep := inventoryWithRoutes(routeAt("GET", "/users/:id"))
+	data, _, err := HTML(rep, nil)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	if strings.Contains(string(data), "x-gin-recon-source-specifications\":") {
+		t.Errorf("must not emit the source-specifications extension key when no catalog was discovered:\n%s", data)
+	}
+}

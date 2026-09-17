@@ -483,18 +483,42 @@ func TestFleetHTMLIncludesFilterControls(t *testing.T) {
 	}
 }
 
-func TestFleetHTMLRendersSavedSpecificationChooserAndSeparateMetrics(t *testing.T) {
+// TestFleetHTMLShowsSpecificationCountAndLinksToAPIHTML guards the
+// dropdown-to-link migration: fleet.html's per-repository "API
+// documentation" column used to embed an inert <select> listing each
+// discovered specification's title/version/dialect/path/authorship inline
+// — dead weight, since nothing in fleet.html ever read the chooser's
+// selection. That per-specification detail (plus catalog issues and
+// code-only/documentation-only/ambiguous-ownership operation lists, which
+// were never surfaced anywhere at all) now lives in a dedicated "Source
+// specifications" section inside that module's own api.html; fleet.html
+// keeps only the document count and a deep link to it.
+func TestFleetHTMLShowsSpecificationCountAndLinksToAPIHTML(t *testing.T) {
 	catalog := &model.SpecificationCatalog{Status: "complete", Specifications: []model.SpecificationRecord{{ID: "one", Path: "api/openapi.yaml", Dialect: "openapi3", Version: "3.1.0", Title: "Payments", APIVersion: "v2", Authorship: "authored", SHA256: strings.Repeat("a", 64)}}, Metrics: model.DocumentationMetrics{SourceFiles: model.DocumentationMetric{Numerator: 205, Denominator: 205, Status: "complete"}, ObservedOperations: model.DocumentationMetric{Numerator: 66, Denominator: 287, Status: "complete"}, IncompleteScope: true}}
-	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{Name: "svc", Status: fleet.StatusOK, Complete: false, Routes: 287, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/svc", Catalog: catalog}}}}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{{
+		Name: "svc", Status: fleet.StatusOK, Complete: false, Routes: 287,
+		Modules:        []fleet.ModuleResult{{ID: "root", Path: ".", ModulePath: "example.com/svc", APIHTML: "targets/svc/api.html"}},
+		Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/svc", Catalog: catalog}},
+	}}}
 	out, err := FleetHTML(agg, nil, nil, "../out")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(out)
-	for _, want := range []string{"data-gr-docs=\"openapi3\"", "Payments v2 · openapi3 3.1.0", "source files 100.0% (205/205)", "observed API operations documented 23.0% (66/287)", "incomplete scope"} {
+	for _, want := range []string{
+		"data-gr-docs=\"openapi3\"",
+		"1 specification found",
+		`<a href="targets/svc/api.html#specifications">api.html</a>`,
+		"source files 100.0% (205/205)",
+		"observed API operations documented 23.0% (66/287)",
+		"incomplete scope",
+	} {
 		if !strings.Contains(html, want) {
-			t.Errorf("missing %q", want)
+			t.Errorf("missing %q\n%s", want, html)
 		}
+	}
+	if strings.Contains(html, "<select>") || strings.Contains(html, "Payments v2 · openapi3 3.1.0") {
+		t.Errorf("per-specification detail should have moved to api.html, not stayed inline as a dropdown\n%s", html)
 	}
 }
 
@@ -534,8 +558,8 @@ func TestFleetHTMLRendersAggregateSpecificationCoverage(t *testing.T) {
 // the per-repository row itself (not the fleet-wide rollup tested above):
 // the "API documentation" column already showed source-file/observed-
 // operation coverage percentages per repository, but never an explicit
-// document count — a reader had to count <option> entries in the
-// specification chooser by hand. Only shown when that repository actually
+// document count — a reader had to open api.html and count entries by
+// hand. Only shown when that repository actually
 // has at least one specification; TestFleetHTMLMissingDenominatorsAreNA
 // below covers the none-discovered case remaining unaffected.
 func TestFleetHTMLPerRepositoryRowShowsSpecificationCount(t *testing.T) {
@@ -552,6 +576,65 @@ func TestFleetHTMLPerRepositoryRowShowsSpecificationCount(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "2 specifications found") {
 		t.Errorf("missing explicit per-repository specification count\n%s", out)
+	}
+}
+
+// TestFleetHTMLShowsCoveragePercentageInCollapsedSummary guards the real
+// gap this closes: a reader previously had to expand the "API
+// documentation" column's <details> to see any coverage percentage at all
+// — for the common single-module repository, the observed-operation
+// coverage now appears directly in the collapsed <summary> line itself,
+// without affecting the existing expanded detail body (still asserted
+// present, unchanged, alongside it).
+func TestFleetHTMLShowsCoveragePercentageInCollapsedSummary(t *testing.T) {
+	catalog := &model.SpecificationCatalog{
+		Status:         "complete",
+		Specifications: []model.SpecificationRecord{{ID: "one", Path: "openapi.yaml", Dialect: "openapi3", Version: "3.1.0"}},
+		Metrics: model.DocumentationMetrics{
+			SourceFiles:        model.DocumentationMetric{Numerator: 10, Denominator: 10, Status: "complete"},
+			ObservedOperations: model.DocumentationMetric{Numerator: 3, Denominator: 12, Status: "complete"},
+		},
+	}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc", Status: fleet.StatusOK, Complete: true, Routes: 12, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/svc", Catalog: catalog}}},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	if !strings.Contains(html, `<summary>OpenAPI3 · 25.0% (3/12) documented</summary>`) {
+		t.Errorf("collapsed summary missing the coverage percentage\n%s", html)
+	}
+	// The existing expanded detail body must still carry the full text,
+	// unchanged by this addition.
+	if !strings.Contains(html, "observed API operations documented 25.0% (3/12)") {
+		t.Errorf("expanded detail body regressed\n%s", html)
+	}
+}
+
+// TestFleetHTMLOmitsSummaryPercentageForMultiModuleRepository confirms the
+// safe fallback for the ambiguous multi-module case: showing one module's
+// own percentage in the collapsed summary would misrepresent the others, so
+// the summary stays exactly as it was before this change (each module's own
+// figure remains available, unambiguously, in the expanded body).
+func TestFleetHTMLOmitsSummaryPercentageForMultiModuleRepository(t *testing.T) {
+	catalog := &model.SpecificationCatalog{Metrics: model.DocumentationMetrics{
+		SourceFiles:        model.DocumentationMetric{Numerator: 1, Denominator: 1, Status: "complete"},
+		ObservedOperations: model.DocumentationMetric{Numerator: 1, Denominator: 1, Status: "complete"},
+	}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc", Status: fleet.StatusOK, Complete: true, Routes: 2, Specifications: []fleet.ModuleSpecificationSummary{
+			{ModuleID: "a", ModulePath: "example.com/svc/a", Catalog: catalog},
+			{ModuleID: "b", ModulePath: "example.com/svc/b", Catalog: catalog},
+		}},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "documented</summary>") {
+		t.Errorf("multi-module repository must not show a single module's percentage in the collapsed summary\n%s", out)
 	}
 }
 
