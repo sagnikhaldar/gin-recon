@@ -30,9 +30,10 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 .gr-jump { display:flex; gap:6px; flex-wrap:wrap; padding:10px 0 0; }
 .gr-jump a { border:1px solid var(--gr-border); border-radius:999px; padding:5px 10px; color:var(--gr-muted); background:var(--gr-panel); font-size:12px; font-weight:650; text-decoration:none; }
 .gr-jump a:hover { border-color:var(--gr-accent); color:var(--gr-link); }
-.gr-overview { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:14px; align-items:center; margin:12px 0 0; padding:11px 14px; border:1px solid var(--gr-border); border-radius:10px; background:var(--gr-panel); }
+.gr-overview { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:14px; align-items:center; margin:8px 0 0; padding:11px 14px; border:1px solid var(--gr-border); border-radius:10px; background:var(--gr-panel); }
 .gr-overview__label { color:var(--gr-muted); font-size:12px; }
 .gr-evidence-rollup { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+.gr-overview-heading { margin:18px 0 0; color:var(--gr-muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
 .gr-notice { margin:14px 0 0; padding:11px 14px; border:1px solid var(--gr-border); border-left:4px solid var(--gr-accent); border-radius:8px; background:var(--gr-accent-soft); color:var(--gr-muted); font-size:13px; }
 .gr-notice--warn { border-left-color:var(--gr-warn); background:var(--gr-warn-soft); color:var(--gr-ink); }
 .gr-notice--bad { border-left-color:var(--gr-bad); background:var(--gr-bad-soft); color:var(--gr-ink); }
@@ -101,7 +102,9 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <div class="gr-metric"><span class="gr-metric__value">{{.Agg.Totals.Routes}}</span><span class="gr-metric__label">Routes</span></div>
 <div class="gr-metric"><span class="gr-metric__value">{{.SpecificationDocumentCount}}</span><span class="gr-metric__label">OpenAPI/Swagger docs found</span></div>
 </div>
+<p class="gr-overview-heading">Authentication evidence</p>
 <div class="gr-overview"><span class="gr-overview__label">Route authentication evidence across observed routes</span><div class="gr-evidence-rollup"><span class="gr-badge gr-badge--good">{{.Agg.Totals.Proven}} proven</span><span class="gr-badge gr-badge--warn">{{.Agg.Totals.Public}} public</span><span class="gr-badge gr-badge--warn">{{.Agg.Totals.Unknown}} unknown</span></div></div>
+<p class="gr-overview-heading">Documentation evidence</p>
 <div class="gr-overview"><span class="gr-overview__label">OpenAPI/Swagger documentation coverage</span><div class="gr-evidence-rollup"><span class="gr-badge {{if .SpecificationRepositoriesCount}}gr-badge--good{{else}}gr-badge--warn{{end}}">{{.SpecificationCoverageText}} of successfully-scanned repositories carry at least one specification</span></div></div>
 <div class="gr-overview"><span class="gr-overview__label">Observed API operations documented</span><div class="gr-evidence-rollup"><span class="gr-badge {{if .ObservedOperationDocumented}}gr-badge--good{{else}}gr-badge--warn{{end}}">{{.ObservedOperationCoverageText}} of every observed route across the fleet is matched to a discovered specification</span></div></div>
 {{if and (not .Agg.AuthConfig.MiddlewareCount) (not .TargetConfigCount) (not .TargetConfigDirCount) (not .Agg.Totals.Proven)}}<div class="gr-notice"><strong>No <code>authMiddleware</code> configured.</strong> Every route below defaults to <strong>public</strong> or <strong>unknown</strong>; Proven can only ever be non-zero once <code>--config</code> names the actual auth-middleware symbols these targets call.</div>{{end}}

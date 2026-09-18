@@ -444,6 +444,11 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 //     sort control (routes, unknown count, proven count, or name),
 //     reordering rows within their existing completion group rather than
 //     flattening it away.
+//   - fleet.html's overview rows are now grouped under two small headings,
+//     "Authentication evidence" and "Documentation evidence" — a real
+//     segregation gap found reviewing express-recon's own combined-site
+//     output side by side with fleet.html, where the two concerns used to
+//     sit in one undifferentiated stack.
 //
 // All of this is additive — schema major versions for both report and
 // fleet stay at 1.0.

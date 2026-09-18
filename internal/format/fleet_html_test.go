@@ -562,6 +562,35 @@ func TestFleetHTMLRendersAggregateSpecificationCoverage(t *testing.T) {
 // observed route across the whole fleet is actually matched to a
 // specification, summed straight from each module's own already-computed
 // ObservedOperations metric.
+// TestFleetHTMLGroupsOverviewRowsUnderClearHeadings guards a real
+// segregation gap found reviewing express-recon's own combined-site
+// output side by side with fleet.html: the authentication-evidence row and
+// the two documentation-coverage rows used to sit in one undifferentiated
+// stack with no label distinguishing which concern each belonged to. Two
+// small heading captions now separate them, at zero risk to the rows'
+// own already-tested content (unchanged) or the metric tile grid above
+// them (untouched).
+func TestFleetHTMLGroupsOverviewRowsUnderClearHeadings(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc", Status: fleet.StatusOK, Complete: true, Routes: 1},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	authIdx := strings.Index(html, `<p class="gr-overview-heading">Authentication evidence</p>`)
+	docsIdx := strings.Index(html, `<p class="gr-overview-heading">Documentation evidence</p>`)
+	authRowIdx := strings.Index(html, "Route authentication evidence across observed routes")
+	docsRowIdx := strings.Index(html, "OpenAPI/Swagger documentation coverage")
+	if authIdx < 0 || docsIdx < 0 {
+		t.Fatalf("missing one or both overview group headings\n%s", html)
+	}
+	if !(authIdx < authRowIdx && authRowIdx < docsIdx && docsIdx < docsRowIdx) {
+		t.Errorf("overview headings are not correctly ordered immediately before their own rows: authIdx=%d authRowIdx=%d docsIdx=%d docsRowIdx=%d", authIdx, authRowIdx, docsIdx, docsRowIdx)
+	}
+}
+
 func TestFleetHTMLRendersFleetWideObservedOperationCoverage(t *testing.T) {
 	catalogA := &model.SpecificationCatalog{Status: "complete", Metrics: model.DocumentationMetrics{
 		ObservedOperations: model.DocumentationMetric{Numerator: 3, Denominator: 12, Status: "complete"},
