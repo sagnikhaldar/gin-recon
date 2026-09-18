@@ -103,6 +103,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 </div>
 <div class="gr-overview"><span class="gr-overview__label">Route authentication evidence across observed routes</span><div class="gr-evidence-rollup"><span class="gr-badge gr-badge--good">{{.Agg.Totals.Proven}} proven</span><span class="gr-badge gr-badge--warn">{{.Agg.Totals.Public}} public</span><span class="gr-badge gr-badge--warn">{{.Agg.Totals.Unknown}} unknown</span></div></div>
 <div class="gr-overview"><span class="gr-overview__label">OpenAPI/Swagger documentation coverage</span><div class="gr-evidence-rollup"><span class="gr-badge {{if .SpecificationRepositoriesCount}}gr-badge--good{{else}}gr-badge--warn{{end}}">{{.SpecificationCoverageText}} of successfully-scanned repositories carry at least one specification</span></div></div>
+<div class="gr-overview"><span class="gr-overview__label">Observed API operations documented</span><div class="gr-evidence-rollup"><span class="gr-badge {{if .ObservedOperationDocumented}}gr-badge--good{{else}}gr-badge--warn{{end}}">{{.ObservedOperationCoverageText}} of every observed route across the fleet is matched to a discovered specification</span></div></div>
 {{if and (not .Agg.AuthConfig.MiddlewareCount) (not .TargetConfigCount) (not .TargetConfigDirCount) (not .Agg.Totals.Proven)}}<div class="gr-notice"><strong>No <code>authMiddleware</code> configured.</strong> Every route below defaults to <strong>public</strong> or <strong>unknown</strong>; Proven can only ever be non-zero once <code>--config</code> names the actual auth-middleware symbols these targets call.</div>{{end}}
 <section class="gr-panel gr-section-spacer" id="repositories">
 <h2 class="gr-panel__title">Repositories with observed routes <span class="gr-count">({{.WithRoutesCount}})</span></h2>
@@ -114,6 +115,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 <div><label for="gr-route-target-framework">Framework</label><select id="gr-route-target-framework" data-gr-filter-framework><option value="">All frameworks</option><option value="gin">Gin</option><option value="go">Go / non-Gin</option></select></div>
 <div><label for="gr-route-target-docs">API docs</label><select id="gr-route-target-docs" data-gr-filter-docs><option value="">All</option><option value="openapi3">OpenAPI3</option><option value="swagger2">Swagger2</option><option value="both">Both</option><option value="none">None</option><option value="unavailable">Unavailable</option></select></div>
 <div><label for="gr-route-target-evidence">Auth evidence</label><select id="gr-route-target-evidence" data-gr-filter-evidence><option value="">Any evidence</option><option value="proven">Has proven</option><option value="public">Has public</option><option value="unknown">Has unknown</option></select></div>
+<div><label for="gr-route-target-sort">Sort</label><select id="gr-route-target-sort" data-gr-filter-sort><option value="">Default order</option><option value="routes-desc">Routes: high to low</option><option value="routes-asc">Routes: low to high</option><option value="unknown-desc">Unknown: high to low</option><option value="proven-desc">Proven: high to low</option><option value="name-asc">Name: A–Z</option></select></div>
 <span class="gr-result-count" data-gr-result-count aria-live="polite"></span>
 </div>
 <div class="gr-table-wrap">
@@ -155,7 +157,7 @@ var fleetHTMLTemplate = template.Must(template.New("fleet").Parse(`<!doctype htm
 </div>
 <p class="gr-empty" data-gr-filter-empty hidden>No reference results match these filters.</p>
 </details>
-{{define "route-target"}}<tr data-gr-search="{{.Name}} {{.Status}} {{.Error}} {{.Framework}} {{.DocsClass}}" data-gr-status="{{.Status}}" data-gr-completion="{{.AuditGroup}}" data-gr-framework="{{.Framework}}" data-gr-docs="{{.DocsClass}}" data-gr-proven="{{if .Proven}}yes{{end}}" data-gr-public="{{if .Public}}yes{{end}}" data-gr-unknown="{{if .Unknown}}yes{{end}}">
+{{define "route-target"}}<tr data-gr-search="{{.Name}} {{.Status}} {{.Error}} {{.Framework}} {{.DocsClass}}" data-gr-status="{{.Status}}" data-gr-completion="{{.AuditGroup}}" data-gr-framework="{{.Framework}}" data-gr-docs="{{.DocsClass}}" data-gr-proven="{{if .Proven}}yes{{end}}" data-gr-public="{{if .Public}}yes{{end}}" data-gr-unknown="{{if .Unknown}}yes{{end}}" data-gr-name="{{.Name}}" data-gr-routes-count="{{.Routes}}" data-gr-proven-count="{{.Proven}}" data-gr-unknown-count="{{.Unknown}}">
 <td class="gr-target"><code>{{.Name}}</code>{{if .TargetConfigDir}} <span class="gr-badge gr-badge--good" title="Used an operator-owned config from --target-config-dir, never sourced from this repository">own config (dir)</span>{{else if .TargetConfig}} <span class="gr-badge gr-badge--neutral" title="Used this target's own committed config instead of the fleet-wide --config">own config (repo)</span>{{end}}<br>{{if .GitURL}}<span class="gr-src">{{$.GitMark}} {{.GitURL}}</span>{{else}}<span class="gr-src">{{.Src}}</span>{{end}}{{if .Inventory.Kind}} <span class="gr-src">&middot; {{.Inventory.Kind}}</span>{{end}}</td>
 <td>{{if eq .Status "ok"}}<span class="gr-badge gr-badge--good">{{.Status}}</span>{{else if eq .Status "failed"}}<span class="gr-badge gr-badge--bad">{{.Status}}</span>{{else}}<span class="gr-badge gr-badge--neutral">{{.Status}}</span>{{end}} {{if eq .AuditGroup "complete"}}<span class="gr-badge gr-badge--good">complete</span>{{else}}<span class="gr-badge gr-badge--warn">incomplete</span>{{end}}</td>
 <td class="gr-num">{{.Routes}}</td>
@@ -259,6 +261,7 @@ const fleetFilterJS = `
     var evidence = controls.querySelector("[data-gr-filter-evidence]");
     var framework = controls.querySelector("[data-gr-filter-framework]");
     var docs = controls.querySelector("[data-gr-filter-docs]");
+    var sortSelect = controls.querySelector("[data-gr-filter-sort]");
     var clearSearch = controls.querySelector("[data-gr-filter-clear]");
     var count = controls.querySelector("[data-gr-result-count]");
     var panel = controls.closest(".gr-panel");
@@ -300,6 +303,38 @@ const fleetFilterJS = `
       search.focus();
     }
 
+    // applySort reorders rows within each existing status group (complete/
+    // incomplete) rather than across them — that grouping is itself real
+    // evidence (audit process/coverage quality), not a display accident,
+    // so a triage sort must not flatten it away. Hidden rows (from the
+    // filters above) are reordered along with visible ones; order alone
+    // never affects which rows are shown. Sorting and filtering are
+    // otherwise fully independent — each has its own listener below.
+    function numericAttr(row, key) {
+      return parseInt(row.dataset[key], 10) || 0;
+    }
+    function applySort() {
+      if (!sortSelect || !sortSelect.value) return;
+      var key = sortSelect.value;
+      var comparator;
+      if (key === "routes-desc") comparator = function (a, b) { return numericAttr(b, "grRoutesCount") - numericAttr(a, "grRoutesCount"); };
+      else if (key === "routes-asc") comparator = function (a, b) { return numericAttr(a, "grRoutesCount") - numericAttr(b, "grRoutesCount"); };
+      else if (key === "unknown-desc") comparator = function (a, b) { return numericAttr(b, "grUnknownCount") - numericAttr(a, "grUnknownCount"); };
+      else if (key === "proven-desc") comparator = function (a, b) { return numericAttr(b, "grProvenCount") - numericAttr(a, "grProvenCount"); };
+      else if (key === "name-asc") comparator = function (a, b) { return (a.dataset.grName || "").localeCompare(b.dataset.grName || ""); };
+      else return;
+      var body = table.querySelector("tbody");
+      Array.prototype.slice.call(table.querySelectorAll("tbody tr.gr-status-group")).forEach(function (header) {
+        var groupRows = [];
+        var boundary = header.nextElementSibling;
+        while (boundary && !boundary.classList.contains("gr-status-group")) {
+          groupRows.push(boundary);
+          boundary = boundary.nextElementSibling;
+        }
+        groupRows.sort(comparator).forEach(function (row) { body.insertBefore(row, boundary); });
+      });
+    }
+
     if (search) search.addEventListener("input", update);
     if (status) status.addEventListener("change", update);
     if (category) category.addEventListener("change", update);
@@ -307,6 +342,7 @@ const fleetFilterJS = `
     if (evidence) evidence.addEventListener("change", update);
     if (framework) framework.addEventListener("change", update);
     if (docs) docs.addEventListener("change", update);
+    if (sortSelect) sortSelect.addEventListener("change", applySort);
     if (clearSearch) clearSearch.addEventListener("click", clearQuery);
     update();
   });
@@ -349,6 +385,18 @@ type fleetHTMLData struct {
 	SpecificationRepositoriesCount int
 	SpecificationDocumentCount     int
 	SpecificationCoverageText      string
+	// ObservedOperationDocumented/Total and their formatted ratio answer a
+	// different question than SpecificationCoverageText above: not "how
+	// many repositories carry at least one specification" (a repository
+	// with one specification covering 2% of its routes still counts there)
+	// but "what fraction of every observed route across the fleet is
+	// actually matched to one." Summed straight from each module's own
+	// already-computed ObservedOperations metric (internal/spec/catalog.go
+	// runs this reconciliation unconditionally on every scan, regardless of
+	// --format), so this stays correct without re-deriving anything.
+	ObservedOperationDocumented   int
+	ObservedOperationTotal        int
+	ObservedOperationCoverageText string
 }
 
 type fleetHTMLTarget struct {
@@ -440,6 +488,8 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 				data.SpecificationDocumentCount += n
 				hasSpecifications = true
 			}
+			data.ObservedOperationDocumented += module.Catalog.Metrics.ObservedOperations.Numerator
+			data.ObservedOperationTotal += module.Catalog.Metrics.ObservedOperations.Denominator
 		}
 		if hasSpecifications {
 			data.SpecificationRepositoriesCount++
@@ -488,6 +538,11 @@ func FleetHTML(agg *fleet.Aggregate, delta *fleet.FleetDelta, scope *fleet.Scope
 	data.SpecificationCoverageText = metricText(model.DocumentationMetric{
 		Numerator:   data.SpecificationRepositoriesCount,
 		Denominator: data.OKCount,
+		Status:      "complete",
+	})
+	data.ObservedOperationCoverageText = metricText(model.DocumentationMetric{
+		Numerator:   data.ObservedOperationDocumented,
+		Denominator: data.ObservedOperationTotal,
 		Status:      "complete",
 	})
 	if scope != nil && scope.Discovery != nil {

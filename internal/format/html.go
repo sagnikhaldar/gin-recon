@@ -558,6 +558,17 @@ const htmlViewerJS = `
   // same visual language as the Operations panel above it, rather than
   // introducing a second, plainer convention for what is still "a method
   // and a path".
+  // formatBytes is a small, purely mechanical unit conversion — no claim
+  // about the file beyond its own already-recorded size.
+  function formatBytes(bytes) {
+    if (!bytes) return "0 B";
+    var units = ["B", "KB", "MB", "GB"];
+    var value = bytes;
+    var i = 0;
+    while (value >= 1024 && i < units.length - 1) { value /= 1024; i++; }
+    return (i === 0 ? value : value.toFixed(1)) + " " + units[i];
+  }
+
   function methodChip(method) {
     var lower = (method || "").toLowerCase();
     return el("span", { class: "method " + (["get", "post", "put", "patch", "delete"].indexOf(lower) >= 0 ? lower : "other") }, (method || "").toUpperCase());
@@ -648,6 +659,15 @@ const htmlViewerJS = `
         card.appendChild(head);
         card.appendChild(el("div", { class: "gr-src" }, s.path));
         card.appendChild(el("div", { class: "gr-src" }, s.authorship + " · " + (s.operations || []).length + " operation(s)"));
+        // gin-recon doesn't embed or render the discovered file itself
+        // (no bundled spec viewer, no copy of third-party file content in
+        // its own output — the same offline, no-vendoring posture that
+        // already rules out a CDN-loaded Redoc/Swagger UI for api.html
+        // itself). The hash and size it already computed while cataloging
+        // the file are shown instead, so a reviewer with access to the
+        // scanned repository can verify they're looking at the exact same
+        // file without gin-recon needing to carry a copy of it.
+        if (s.sha256) card.appendChild(el("div", { class: "gr-src" }, "sha256:" + s.sha256.slice(0, 12) + (s.bytes ? " · " + formatBytes(s.bytes) : "")));
         grid.appendChild(card);
       });
       panel.appendChild(grid);

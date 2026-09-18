@@ -429,7 +429,21 @@ func (r *Report) UnmarshalJSON(data []byte) error {
 //     per-repository dropdown into a dedicated "Source specifications"
 //     section inside that module's own api.html, rendered as cards with
 //     method-colored chips, collapsible groups, and a live filter for
-//     large lists.
+//     large lists. Each specification card also shows a truncated
+//     SHA-256/byte-size line, so a reviewer with access to the scanned
+//     repository can verify the exact file without gin-recon embedding or
+//     rendering a copy of it.
+//   - fleet.html gained a second, route-level documentation-coverage
+//     overview line: what fraction of every observed route across the
+//     whole fleet is matched to a discovered specification, summed from
+//     every module's own already-computed observedOperations metric — a
+//     materially different, more direct question than "how many
+//     repositories carry at least one specification" (a repository whose
+//     one specification covers a sliver of its routes still counts
+//     toward that first metric). The route-bearing table also gained a
+//     sort control (routes, unknown count, proven count, or name),
+//     reordering rows within their existing completion group rather than
+//     flattening it away.
 //
 // All of this is additive — schema major versions for both report and
 // fleet stay at 1.0.

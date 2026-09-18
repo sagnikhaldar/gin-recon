@@ -439,6 +439,8 @@ func TestHTMLRendersSourceSpecificationsSection(t *testing.T) {
 			ID: "one", Path: "api/openapi.yaml", Dialect: "openapi3", Version: "3.1.0",
 			Title: "Payments", APIVersion: "v2", Authorship: "authored",
 			Operations: []model.SpecificationOperation{{Method: "GET", Path: "/users/{id}"}},
+			SHA256:     strings.Repeat("ab", 32),
+			Bytes:      2048,
 		}},
 		Issues: []model.SpecificationIssue{{Code: "duplicate-operation-id", Path: "api/openapi.yaml", Message: "operationId reused"}},
 		Metrics: model.DocumentationMetrics{
@@ -468,6 +470,8 @@ func TestHTMLRendersSourceSpecificationsSection(t *testing.T) {
 		`row.appendChild(methodChip(op.method))`,
 		`class: "gr-mismatch-filter"`,
 		`filterInput.addEventListener("input", function ()`,
+		`"sha256:" + s.sha256.slice(0, 12)`,
+		`s.bytes ? " · " + formatBytes(s.bytes)`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n%s", want, out)

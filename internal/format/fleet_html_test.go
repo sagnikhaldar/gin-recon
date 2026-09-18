@@ -554,6 +554,69 @@ func TestFleetHTMLRendersAggregateSpecificationCoverage(t *testing.T) {
 	}
 }
 
+// TestFleetHTMLRendersFleetWideObservedOperationCoverage guards a real gap
+// SpecificationCoverageText (above) leaves open: that metric only answers
+// "how many repositories carry at least one specification" — a repository
+// whose one specification covers 2% of its routes still counts there. This
+// is the fleet-wide route-level answer instead: what fraction of every
+// observed route across the whole fleet is actually matched to a
+// specification, summed straight from each module's own already-computed
+// ObservedOperations metric.
+func TestFleetHTMLRendersFleetWideObservedOperationCoverage(t *testing.T) {
+	catalogA := &model.SpecificationCatalog{Status: "complete", Metrics: model.DocumentationMetrics{
+		ObservedOperations: model.DocumentationMetric{Numerator: 3, Denominator: 12, Status: "complete"},
+	}}
+	catalogB := &model.SpecificationCatalog{Status: "complete", Metrics: model.DocumentationMetrics{
+		ObservedOperations: model.DocumentationMetric{Numerator: 7, Denominator: 8, Status: "complete"},
+	}}
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc-a", Status: fleet.StatusOK, Complete: true, Routes: 12, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/svc-a", Catalog: catalogA}}},
+		{Name: "svc-b", Status: fleet.StatusOK, Complete: true, Routes: 8, Specifications: []fleet.ModuleSpecificationSummary{{ModuleID: "root", ModulePath: "example.com/svc-b", Catalog: catalogB}}},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	want := "50.0% (10/20) of every observed route across the fleet is matched to a discovered specification"
+	if !strings.Contains(html, want) {
+		t.Errorf("missing fleet-wide observed-operation coverage line %q\n%s", want, html)
+	}
+}
+
+// TestFleetHTMLIncludesSortControlAndPerRowSortAttributes guards the new
+// triage sort: the route-bearing table's filter bar gains a "Sort" control
+// (routes/unknown/proven/name), and each row carries the numeric data
+// attributes fleetFilterJS's applySort actually reads — sortSelect alone
+// existing without the row attributes it depends on would be a silent,
+// untestable-at-runtime no-op, so both are asserted together.
+func TestFleetHTMLIncludesSortControlAndPerRowSortAttributes(t *testing.T) {
+	agg := &fleet.Aggregate{Targets: []fleet.TargetResult{
+		{Name: "svc", Status: fleet.StatusOK, Complete: true, Routes: 12, Proven: 3, Unknown: 5},
+	}}
+	out, err := FleetHTML(agg, nil, nil, "../out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(out)
+	for _, want := range []string{
+		"data-gr-filter-sort",
+		`value="routes-desc"`,
+		`value="routes-asc"`,
+		`value="unknown-desc"`,
+		`value="proven-desc"`,
+		`value="name-asc"`,
+		`data-gr-name="svc"`,
+		`data-gr-routes-count="12"`,
+		`data-gr-proven-count="3"`,
+		`data-gr-unknown-count="5"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("missing %q\n%s", want, html)
+		}
+	}
+}
+
 // TestFleetHTMLPerRepositoryRowShowsSpecificationCount guards a real gap in
 // the per-repository row itself (not the fleet-wide rollup tested above):
 // the "API documentation" column already showed source-file/observed-
